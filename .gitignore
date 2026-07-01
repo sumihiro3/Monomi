@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.monomi/
+*.log
+.DS_Store
