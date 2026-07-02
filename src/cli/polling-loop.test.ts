@@ -77,7 +77,7 @@ describe('PollingLoop.refresh — 再解決フォールバック（#1 / FR-05）
     }
 
     // 初回クライアントは不達の LAN に張られている。
-    const loop = new PollingLoop(client(LAN, fetchImpl), 3000, reresolve)
+    const loop = new PollingLoop((c) => c.listInstances(), client(LAN, fetchImpl), 3000, reresolve)
     const updates: InstanceStatusRow[][] = []
     const errors: unknown[] = []
     loop.onUpdate((r) => updates.push(r))
@@ -107,7 +107,7 @@ describe('PollingLoop.refresh — 再解決フォールバック（#1 / FR-05）
       return client(endpoint, fetchImpl)
     })
 
-    const loop = new PollingLoop(client(LAN, fetchImpl), 3000, reresolve)
+    const loop = new PollingLoop((c) => c.listInstances(), client(LAN, fetchImpl), 3000, reresolve)
     const errors: unknown[] = []
     loop.onError((e) => errors.push(e))
 
@@ -125,7 +125,7 @@ describe('PollingLoop.refresh — 再解決フォールバック（#1 / FR-05）
   it('回帰: reresolve 未注入なら初回のみ解決フローを維持する（失敗しても差し替えない）', async () => {
     // 常に不達。reresolve を渡さない = 初回に解決したクライアントを使い続ける従来挙動。
     const fetchImpl = mockFetch(async () => connectionRefused())
-    const loop = new PollingLoop(client(LAN, fetchImpl))
+    const loop = new PollingLoop((c) => c.listInstances(), client(LAN, fetchImpl))
     const updates: InstanceStatusRow[][] = []
     const errors: unknown[] = []
     loop.onUpdate((r) => updates.push(r))
@@ -148,7 +148,7 @@ describe('PollingLoop.refresh — 再解決フォールバック（#1 / FR-05）
     const fetchImpl = mockFetch(async () => instancesResponse(rows))
     const reresolve = vi.fn<ReresolveClient>(async () => client(TAILSCALE, fetchImpl))
 
-    const loop = new PollingLoop(client(LAN, fetchImpl), 3000, reresolve)
+    const loop = new PollingLoop((c) => c.listInstances(), client(LAN, fetchImpl), 3000, reresolve)
     const updates: InstanceStatusRow[][] = []
     loop.onUpdate((r) => updates.push(r))
 
@@ -156,5 +156,28 @@ describe('PollingLoop.refresh — 再解決フォールバック（#1 / FR-05）
 
     expect(updates).toEqual([rows])
     expect(reresolve).not.toHaveBeenCalled()
+  })
+})
+
+describe('PollingLoop — 汎用 fetchFn（AC-5: listInstances 固有でない取得でも動作する）', () => {
+  it('任意型を返す fetchFn の結果を配り、fetchFn には現行 client が渡る', async () => {
+    // listInstances に一切依存せず、渡された client を記録して任意型（string）を返す fetchFn。
+    // 汎用化の要（詳細ビュー再利用の土台 / AC-5）を、client 差し替え機構ごと最小に検証する。
+    const fetchImpl = mockFetch(async () => connectionRefused())
+    const lanClient = client(LAN, fetchImpl)
+    const seen: HubApiClient[] = []
+    const loop = new PollingLoop<string>((c) => {
+      seen.push(c)
+      return Promise.resolve('ok')
+    }, lanClient)
+    const updates: string[] = []
+    loop.onUpdate((v) => updates.push(v))
+
+    await loop.refresh()
+
+    // 取得結果 T（= string）がそのまま update リスナーへ配られる。
+    expect(updates).toEqual(['ok'])
+    // fetchFn には現行 client が渡る（reresolve 差し替えの土台であり、一覧・詳細で共有される機構）。
+    expect(seen).toEqual([lanClient])
   })
 })

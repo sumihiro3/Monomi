@@ -1,11 +1,19 @@
-import type { InstanceStatusRow } from '../hub/dto.js'
 import type { HubApiClient } from './hub-api-client.js'
 
 /** watch モードの既定ポーリング間隔（§8.2 / 非機能要件: 既定 3s、config で上書き可）。 */
 export const DEFAULT_POLL_INTERVAL_MS = 3000
 
-/** 取得成功時の通知リスナー。 */
-export type InstancesListener = (rows: InstanceStatusRow[]) => void
+/**
+ * ポーリング 1 tick で実行する非同期取得（AC-5: 一覧固有ではなく任意の取得を委譲）。
+ *
+ * 現行の {@link HubApiClient} を引数で受け取る形にすることで、再解決フォールバックで
+ * `this.client` が差し替わっても常に最新のクライアントで取得できる（一覧は
+ * `(c) => c.listInstances()`、詳細は `(c) => c.getInstanceDetail(id)` のように渡す）。
+ */
+export type FetchFn<T> = (client: HubApiClient) => Promise<T>
+
+/** 取得成功時の通知リスナー（取得結果 `T` を受け取る）。 */
+export type UpdateListener<T> = (value: T) => void
 
 /** 取得失敗時の通知リスナー。 */
 export type ErrorListener = (error: unknown) => void
@@ -23,13 +31,17 @@ export type ReresolveClient = () => Promise<HubApiClient>
 /**
  * watch モードのポーリング制御（class-diagram §4 / §8.2）。
  *
- * SSE/WebSocket は使わず、`GET /api/v1/instances` を数秒おきに叩き直す単純ポーリング
- * （個人利用規模のため、§8.2）。1 回だけの取得（初期表示）と、間隔ポーリング（watch ON）の
- * 両方を担う。取得結果は登録済みリスナーへ配る（View への反映は AppView の関心事）。
+ * SSE/WebSocket は使わず、取得関数（{@link FetchFn}）を数秒おきに呼び直す単純ポーリング
+ * （個人利用規模のため、§8.2）。取得対象は一覧固有ではなく `fetchFn` に委ねる汎用形（AC-5）で、
+ * 一覧（`listInstances`）にも詳細（`getInstanceDetail`）にも同じ機構を再利用できる。1 回だけの
+ * 取得（初期表示）と、間隔ポーリング（watch ON）の両方を担う。取得結果 `T` は登録済みリスナーへ
+ * 配る（View への反映は AppView の関心事）。
+ *
+ * @typeParam T `fetchFn` が返す取得結果の型（一覧なら `InstanceStatusRow[]`、詳細なら `InstanceDetail`）。
  */
-export class PollingLoop {
+export class PollingLoop<T> {
   private timer: ReturnType<typeof setInterval> | null = null
-  private readonly updateListeners = new Set<InstancesListener>()
+  private readonly updateListeners = new Set<UpdateListener<T>>()
   private readonly errorListeners = new Set<ErrorListener>()
   /** 進行中の取得があるかどうか。多重取得（前回未完了のまま次 tick）を抑止する。 */
   private inFlight = false
@@ -38,11 +50,13 @@ export class PollingLoop {
   private client: HubApiClient
 
   /**
+   * @param fetchFn 1 tick で実行する取得関数。現行 client を受け取り取得結果 `T` を返す（AC-5）。
    * @param client hub への読み取りクライアント。
    * @param intervalMs 既定のポーリング間隔（省略時 {@link DEFAULT_POLL_INTERVAL_MS}）。
    * @param reresolve 取得失敗時に到達先を選び直すファクトリ（省略時は再解決しない / #1）。
    */
   constructor(
+    private readonly fetchFn: FetchFn<T>,
     client: HubApiClient,
     private readonly intervalMs: number = DEFAULT_POLL_INTERVAL_MS,
     private readonly reresolve?: ReresolveClient
@@ -53,9 +67,9 @@ export class PollingLoop {
   /**
    * 取得成功リスナーを登録する。
    *
-   * @param listener instance 行を受け取るコールバック。
+   * @param listener 取得結果 `T` を受け取るコールバック。
    */
-  onUpdate(listener: InstancesListener): void {
+  onUpdate(listener: UpdateListener<T>): void {
     this.updateListeners.add(listener)
   }
 
@@ -84,9 +98,9 @@ export class PollingLoop {
     }
     this.inFlight = true
     try {
-      const rows = await this.client.listInstances()
+      const value = await this.fetchFn(this.client)
       for (const listener of this.updateListeners) {
-        listener(rows)
+        listener(value)
       }
     } catch (error) {
       for (const listener of this.errorListeners) {
