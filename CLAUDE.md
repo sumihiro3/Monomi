@@ -2,8 +2,11 @@
 
 複数デバイス・複数プロジェクトで Claude Code を並行運用する際に、各プロジェクトの状態（稼働中／権限待ち／次の指示待ち／PRレビュー待ち／放置）を横断確認できる CLI ダッシュボード。
 
-- 設計の権威仕様: `monomi-handoff.md`（§0 が実装前レビューで確定した最新仕様。以降の節と食い違う場合は §0 優先）
+- 設計の権威仕様: `ARCHITECTURE.md`（`monomi-handoff.md` は設計経緯を記録した凍結資料であり、現行仕様の参照先ではない）
+- 機能要件サマリー: `REQUIREMENTS.md`（機能軸での現状要約。詳細は各 `docs/releases/release-N/requirements.md`）
 - クラス設計: `docs/design/class-diagram.md`
+- 開発ワークフロー: `docs/development-workflow.md`
+- 既知の課題（バックログ）: `docs/known-issues.md`
 - パッケージマネージャ: pnpm
 - 構成: hub（素の Node.js + SQLite）／ CLI（Ink）／ レポーター（bash、macOS/Linux/WSL2 のみ）
 

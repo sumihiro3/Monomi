@@ -36,9 +36,9 @@ const target = reqPath
   : `タスク: ${taskDesc}`
 
 // {PLACEHOLDER}: プロジェクトの規約ドキュメントに置き換えること。
-// monomi-handoff.md は単一ファイルでも、複数層構成なら「docs/architecture/backend.md と
+// ARCHITECTURE.md は単一ファイルでも、複数層構成なら「docs/architecture/backend.md と
 // docs/architecture/frontend.md」のように複数パスを列挙してもよい。
-const RULES = 'リポジトリは /opt/dev/Monomi。CLAUDE.md と monomi-handoff.md の規約に従うこと。'
+const RULES = 'リポジトリは /opt/dev/Monomi。CLAUDE.md と ARCHITECTURE.md の規約に従うこと。'
 
 phase('探索')
 const [reqSummary, codeMap] = await parallel([
