@@ -10,7 +10,8 @@
 #   - project_key の正規化は hub 側の一手（§0.1）。reporter は
 #     `git remote get-url origin` の **生出力** をそのまま `instance.remote_url` に載せる。
 #   - 時刻は ISO8601(Z)（§0.5）。hub が受信時に epoch ms へ変換する。
-#   - hub 応答不能時はイベントを `$MONOMI_HOME/outbox/*.json` へ退避（AC-3）。
+#   - hub 到達先は複数候補（config `hub_endpoints`）を優先順に試し、到達できた先へ POST（FR-04）。
+#   - 全候補が応答不能なときのみイベントを `$MONOMI_HOME/outbox/*.json` へ退避（AC-3 / FR-04 AC-2）。
 #   - 次回発火時、outbox 内の未送信分を occurred_at 昇順で先に再送してから
 #     当該イベントを送る（AC-4）。
 #
@@ -20,8 +21,9 @@
 #
 # 環境変数:
 #   MONOMI_HOME       ~/.monomi 相当のルート（token / outbox の場所）。既定 $HOME/.monomi
-#   MONOMI_HUB_URL    hub のベース URL を丸ごと上書き（例 http://127.0.0.1:47632）。最優先
-#   MONOMI_PORT       待受ポートの上書き（MONOMI_HUB_URL 未指定時）
+#   MONOMI_HUB_URL    hub のベース URL を丸ごと上書き（例 http://127.0.0.1:47632）。最優先・単一
+#   MONOMI_PORT       待受ポートの上書き（MONOMI_HUB_URL 未指定時。単一の loopback 宛）
+#     ※ 上記いずれも未指定なら config.yml の `hub_endpoints`（複数候補）を順試行する（FR-04）
 #   MONOMI_DISABLE_JQ 空でなければ jq を使わず bash フォールバック経路を使う（テスト用）
 #   MONOMI_DEBUG      空でなければ診断ログを stderr に出す
 #
@@ -33,6 +35,31 @@
 
 MONOMI_DEFAULT_PORT=47632
 TOOL_SUMMARY_MAX=200
+# rejected/（4xx 永久エラーの隔離先）に貯める最大件数。超過分は最古から掃除する。
+# MONOMI_REJECTED_MAX で上書き可（無限蓄積を防ぐ FR-07 の掃除ポリシー）。
+MONOMI_REJECTED_MAX_DEFAULT=200
+
+# 制御文字（U+0001〜U+001F、\n\r\t を除く）を \u00XX へ写す置換表を一度だけ構築する。
+# jq 不在フォールバック時に生の制御文字が JSON 文字列へ紛れ込むと hub の JSON パースが
+# 落ちて 400（poison-pill）になるため、ここで確実にエスケープする（FR-07 AC-2）。
+# U+0000 は bash 変数に保持できず（コマンド置換で除去される）、そもそも到達しないため扱わない。
+declare -a MONOMI_CTRL_FROM
+declare -a MONOMI_CTRL_TO
+_monomi_init_ctrl_escapes() {
+  local i oct c hex
+  for ((i = 1; i < 32; i++)); do
+    # \n(10) \r(13) \t(9) は json_escape の名前付きエスケープで既に処理する。
+    case "$i" in
+      9 | 10 | 13) continue ;;
+    esac
+    printf -v oct '%o' "$i"
+    printf -v c '%b' "\\0$oct"
+    printf -v hex '%02x' "$i"
+    MONOMI_CTRL_FROM[${#MONOMI_CTRL_FROM[@]}]=$c
+    MONOMI_CTRL_TO[${#MONOMI_CTRL_TO[@]}]="\\u00$hex"
+  done
+}
+_monomi_init_ctrl_escapes
 
 log_debug() {
   if [ -n "${MONOMI_DEBUG:-}" ]; then
@@ -48,6 +75,9 @@ have_jq() {
 }
 
 # JSON 文字列値としての最小エスケープ（bash フォールバック用）。
+# バックスラッシュ → クォート → 名前付き制御文字（\n\r\t）→ 残る制御文字 U+0001〜U+001F
+# を \u00XX の順で処理する。バックスラッシュを最初に二重化してから残りを足すことで、
+# 後段が挿入する `\uXXXX` の先頭バックスラッシュを再エスケープしないようにする。
 json_escape() {
   local s=$1
   s=${s//\\/\\\\}
@@ -55,6 +85,12 @@ json_escape() {
   s=${s//$'\n'/\\n}
   s=${s//$'\r'/\\r}
   s=${s//$'\t'/\\t}
+  # 残る制御文字（U+0000〜U+001F のうち \n\r\t 以外）を \u00XX に置換（FR-07 AC-2）。
+  local i n
+  n=${#MONOMI_CTRL_FROM[@]}
+  for ((i = 0; i < n; i++)); do
+    s=${s//"${MONOMI_CTRL_FROM[$i]}"/${MONOMI_CTRL_TO[$i]}}
+  done
   printf '%s' "$s"
 }
 
@@ -117,24 +153,67 @@ read_config_device_id() {
     "$config_file" | head -n 1
 }
 
-# hub のベース URL を解決する。
+# config.yml の `hub_endpoints` ブロックシーケンスを 1 行 1 URL で読む（jq 不使用・sed のみ）。
+# 対象記法（config.ts のスキーマ注釈・config-writer が生成する形。フロー記法 `[a,b]` は非対応）:
+#   hub_endpoints:
+#     - http://192.168.1.100:47632
+#     - http://100.64.0.1:47632
+# 手順: `hub_endpoints:` 行から「次のトップレベルキー行（先頭が空白でも '-' でも '#' でもない行）」
+# の手前までを範囲抽出し、その中の `- URL` 項目だけを取り出す（引用符の有無どちらも許容）。
+read_config_endpoints() {
+  local config_file=$1
+  [ -f "$config_file" ] || return 0
+  sed -n '/^[[:space:]]*hub_endpoints[[:space:]]*:/,/^[^[:space:]#-]/p' "$config_file" |
+    sed -n 's/^[[:space:]]*-[[:space:]]*"\{0,1\}\([^"[:space:]]*\)"\{0,1\}.*/\1/p'
+}
+
+# hub のベース URL 候補を優先順に 1 行 1 URL で出力する（FR-04）。
+# 解決順:
+#   1. MONOMI_HUB_URL         — 最優先・単一（AC-3）。フル URL を丸ごと上書き。
+#   2. MONOMI_PORT            — 単一 loopback（env 上書き。テスト／単一ポート運用）。
+#   3. config の hub_endpoints — 複数候補（child。§0.2 / AC-1）。存在すれば順に試す。
+#   4. config.yml の port     — 単一 loopback（hub 自身が自 localhost 宛に送る通常経路）。
+#   5. 既定ポート             — 単一 loopback（最後の砦）。
+# 3 を 4 の前に置くのは、`hub_endpoints` の存在が「このデバイスは child」という明確な信号であり、
+# 万一 child config に古い `port:` 行が残っていてもマルチエンドポイントを無効化しないため。
+# hub config は `hub_endpoints` を持たないので 4（loopback）にそのまま落ちる。
+# いずれも末尾スラッシュを剥がして返す（POST 時に /api/v1/events を足すため）。
 resolve_hub_url() {
   local config_file=$1
   if [ -n "${MONOMI_HUB_URL:-}" ]; then
-    printf '%s' "${MONOMI_HUB_URL%/}"
+    printf '%s\n' "${MONOMI_HUB_URL%/}"
     return 0
   fi
-  local port=${MONOMI_PORT:-}
-  if [ -z "$port" ]; then
-    port=$(read_config_port "$config_file")
+  if [ -n "${MONOMI_PORT:-}" ]; then
+    printf 'http://127.0.0.1:%s\n' "$MONOMI_PORT"
+    return 0
   fi
-  if [ -z "$port" ]; then
-    port=$MONOMI_DEFAULT_PORT
+  local endpoints
+  endpoints=$(read_config_endpoints "$config_file")
+  if [ -n "$endpoints" ]; then
+    local ep
+    while IFS= read -r ep; do
+      [ -n "$ep" ] || continue
+      printf '%s\n' "${ep%/}"
+    done <<EOF
+$endpoints
+EOF
+    return 0
   fi
-  printf 'http://127.0.0.1:%s' "$port"
+  local port
+  port=$(read_config_port "$config_file")
+  if [ -n "$port" ]; then
+    printf 'http://127.0.0.1:%s\n' "$port"
+    return 0
+  fi
+  printf 'http://127.0.0.1:%s\n' "$MONOMI_DEFAULT_PORT"
 }
 
-# ファイルの中身を POST する。2xx かつ curl 成功なら 0、それ以外は 1。
+# ファイルの中身を POST する。戻り値で結果種別を返す（FR-07）:
+#   0 = 2xx 成功
+#   2 = 4xx 永久エラー（クライアント側の不正。再送しても直らない → rejected へ隔離）
+#   1 = 5xx / 接続失敗 / タイムアウト等の一時エラー（後で再試行する）
+# 4xx を 2xx/5xx と分けることで、壊れた 1 件（poison-pill）が outbox 全体を閉塞させない。
 #
 # セキュリティ上の注意: Authorization ヘッダは `-H` の引数として渡さない。curl の
 # コマンドライン引数はプロセス一覧（`ps aux` 等）から同一マシンの他ユーザーにも見える
@@ -160,18 +239,51 @@ post_json() {
   local curl_exit=$?
   rm -f "$curlrc"
   if [ "$curl_exit" -ne 0 ]; then
+    # 接続拒否・タイムアウト・DNS 失敗など。hub 側の一時的不達とみなし再試行させる。
     log_debug "curl failed (exit=$curl_exit) for $url"
     return 1
   fi
   if [ "$code" -ge 200 ] 2>/dev/null && [ "$code" -lt 300 ] 2>/dev/null; then
     return 0
   fi
-  log_debug "hub returned HTTP $code for $url"
+  if [ "$code" -ge 400 ] 2>/dev/null && [ "$code" -lt 500 ] 2>/dev/null; then
+    # 400（不正 JSON / スキーマ不適合）・401（無効/失効トークン）など。再送しても直らない。
+    log_debug "hub returned HTTP $code (client error, permanent) for $url"
+    return 2
+  fi
+  # 5xx・3xx・その他 / code が数値でない（curl 成功だが応答異常）は一時エラー扱い。
+  log_debug "hub returned HTTP $code (retryable) for $url"
   return 1
 }
 
-# outbox 内の全ファイルを occurred_at 昇順で再送する。
-# 送れたものは削除。1 件でも送信失敗したらそこで中断し 1 を返す（残りは次回に持ち越す）。
+# 候補 URL 群に対して 1 ファイルを優先順に送る（FR-04 マルチエンドポイント順試行）。
+# 最初に「到達」した候補の結果で確定し、戻り値を post_json と同じ意味論に集約する:
+#   0 = いずれかの候補で 2xx 配信成功（そこで確定）
+#   2 = いずれかの候補で 4xx（到達したが永久エラー → 隔離。他候補は試さない）
+#   1 = 全候補が 5xx / 接続失敗（全滅。退避 or 次回再送）
+# 5xx / 接続失敗はその候補が「不達」なので次候補へ回す。4xx は「hub には届いたがペイロードが
+# 不正」であり、候補群は同一 hub への別経路（LAN / Tailscale 等）を指す前提のため、他候補でも
+# 同じ結果になる。ゆえに 4xx は即隔離扱いとして候補ループを継続しない（FR-07 の post_json 戻り値と整合）。
+post_json_multi() {
+  local token=$1 file=$2
+  shift 2
+  local url rc
+  for url in "$@"; do
+    post_json "$url" "$token" "$file"
+    rc=$?
+    case "$rc" in
+      0) return 0 ;;
+      2) return 2 ;;
+      *) ;; # 5xx / 接続失敗: この候補は不達。次候補へ。
+    esac
+  done
+  return 1
+}
+
+# outbox 内の全ファイルを occurred_at 昇順で再送する（FR-07 で 4xx 隔離に対応）。
+#   - 2xx 成功 → 削除して次へ。
+#   - 4xx 永久エラー → rejected/ へ隔離して次へ（先頭の壊れた 1 件でキュー全体を止めない）。
+#   - 5xx / 接続失敗 → そこで中断し 1 を返す（hub 不達。残りは次回へ持ち越す）。
 #
 # 排他制御: 複数セッションが並行稼働すると、フック発火のたびに reporter プロセスが
 # 独立に起動し同一 outbox を共有する。ロック無しだと「ファイル存在確認 → POST → rm」の
@@ -180,7 +292,10 @@ post_json() {
 # 使える排他ロックとして widely 使われる手法。ロックを取れなければ「他プロセスが処理中」
 # とみなし、待たずに今回は flush をスキップする（フックを絶対にブロックしないため）。
 flush_outbox() {
-  local outbox=$1 url=$2 token=$3
+  local outbox=$1 token=$2
+  shift 2
+  # 残余引数は hub 到達先候補（優先順）。各ファイルを post_json_multi で順試行する（FR-04）。
+  local -a flush_urls=("$@")
   local lockdir="$outbox/.flush.lock"
   mkdir -p "$outbox" 2>/dev/null
   if ! mkdir "$lockdir" 2>/dev/null; then
@@ -202,19 +317,31 @@ flush_outbox() {
   )
   [ -n "$sorted" ] || return 0
 
-  local line file
-  # tab 区切りの 2 列目（パス）を取り出して順に送る。
-  while IFS=$'\t' read -r _ file; do
+  local oc file rc
+  # tab 区切り: 1 列目 = occurred_at（隔離時のファイル名生成に流用）, 2 列目 = パス。
+  while IFS=$'\t' read -r oc file; do
     [ -n "$file" ] || continue
     [ -e "$file" ] || continue
     any=1
-    if post_json "$url" "$token" "$file"; then
-      rm -f "$file"
-      log_debug "flushed outbox file: $file"
-    else
-      log_debug "flush stopped at: $file (hub unreachable)"
-      return 1
-    fi
+    post_json_multi "$token" "$file" "${flush_urls[@]}"
+    rc=$?
+    case "$rc" in
+      0)
+        rm -f "$file"
+        log_debug "flushed outbox file: $file"
+        ;;
+      2)
+        # 4xx 永久エラー: rejected/ へ隔離して先へ進む（キューを閉塞させない）。
+        save_to_rejected "$outbox" "$file" "$oc"
+        rm -f "$file"
+        log_debug "quarantined 4xx outbox file: $file"
+        ;;
+      *)
+        # 全候補が 5xx / 接続失敗: hub 不達。ここで中断し残りは次回に持ち越す。
+        log_debug "flush stopped at: $file (all hub endpoints unreachable / 5xx)"
+        return 1
+        ;;
+    esac
   done <<EOF
 $sorted
 EOF
@@ -232,6 +359,40 @@ save_to_outbox() {
   name="${safe}-${stamp}-$$-${RANDOM}.json"
   cp "$body_file" "$outbox/$name"
   log_debug "saved to outbox: $outbox/$name"
+}
+
+# 4xx 永久エラーの本文を rejected/ へ隔離退避する（save_to_outbox と対になる、FR-07）。
+# outbox 本体（*.json）とは別ディレクトリに置くので再送対象にはならない。退避後は上限を
+# 超えないよう prune_rejected で掃除する。
+save_to_rejected() {
+  local outbox=$1 body_file=$2 occurred_at=$3
+  local rejected="$outbox/rejected"
+  mkdir -p "$rejected"
+  local safe stamp name
+  safe=$(printf '%s' "$occurred_at" | tr -c 'A-Za-z0-9' '-')
+  stamp=$(date -u +%s 2>/dev/null)
+  name="${safe}-${stamp}-$$-${RANDOM}.json"
+  cp "$body_file" "$rejected/$name"
+  log_debug "quarantined to rejected: $rejected/$name"
+  prune_rejected "$rejected"
+}
+
+# rejected/ の無限蓄積を防ぐ: 件数が上限を超えたら mtime 最古から超過分を削除する。
+# 上限は MONOMI_REJECTED_MAX（未設定/非数値なら MONOMI_REJECTED_MAX_DEFAULT）。
+prune_rejected() {
+  local rejected=$1
+  local max=${MONOMI_REJECTED_MAX:-$MONOMI_REJECTED_MAX_DEFAULT}
+  case "$max" in
+    '' | *[!0-9]*) max=$MONOMI_REJECTED_MAX_DEFAULT ;;
+  esac
+  local count remove f
+  count=$(ls -1 "$rejected"/*.json 2>/dev/null | wc -l | tr -d ' ')
+  [ "$count" -gt "$max" ] 2>/dev/null || return 0
+  remove=$((count - max))
+  # -tr = mtime 昇順（最古が先頭）。超過分だけ先頭から削除する。
+  ls -1tr "$rejected"/*.json 2>/dev/null | head -n "$remove" | while IFS= read -r f; do
+    rm -f "$f"
+  done
 }
 
 main() {
@@ -434,18 +595,36 @@ main() {
     token=$(tr -d '\n\r' <"$token_file")
   fi
 
-  local hub_url
-  hub_url=$(resolve_hub_url "$config_file")
+  # hub のベース URL 候補を優先順（1 行 1 URL）に取得して配列へ（FR-04）。
+  local -a hub_urls=()
+  local _u
+  while IFS= read -r _u; do
+    [ -n "$_u" ] || continue
+    hub_urls[${#hub_urls[@]}]=$_u
+  done <<EOF
+$(resolve_hub_url "$config_file")
+EOF
 
   # --- 送信フロー: 先に outbox を流し切り、次に当該イベントを送る ----------
   mkdir -p "$outbox" 2>/dev/null
-  flush_outbox "$outbox" "$hub_url" "$token"
+  flush_outbox "$outbox" "$token" "${hub_urls[@]}"
 
-  if post_json "$hub_url" "$token" "$body_file"; then
-    log_debug 'event delivered'
-  else
-    save_to_outbox "$outbox" "$body_file" "$occurred_at"
-  fi
+  local send_rc
+  post_json_multi "$token" "$body_file" "${hub_urls[@]}"
+  send_rc=$?
+  case "$send_rc" in
+    0)
+      log_debug 'event delivered'
+      ;;
+    2)
+      # 4xx 永久エラー: outbox に入れても毎回失敗して閉塞するだけなので直接隔離する。
+      save_to_rejected "$outbox" "$body_file" "$occurred_at"
+      ;;
+    *)
+      # 5xx / 接続失敗: 次回フックで再送するため outbox へ退避。
+      save_to_outbox "$outbox" "$body_file" "$occurred_at"
+      ;;
+  esac
 
   rm -f "$body_file"
   return 0
