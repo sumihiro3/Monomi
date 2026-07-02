@@ -7,12 +7,10 @@ import type { Database } from '../db/database.js'
 import { loadConfig } from '../config/config.js'
 import type { MonomiPaths } from '../config/paths.js'
 import { resolvePaths } from '../config/paths.js'
+import { deriveDeviceId } from '../domain/device-id.js'
 import type { Device } from '../domain/entities.js'
 import { epochMsNow, type EpochMs } from '../domain/time.js'
 import { TokenService } from './token-service.js'
-
-/** device_id の自動生成に失敗（hostname が空など）したときのフォールバック。 */
-const FALLBACK_DEVICE_ID = 'monomi-hub'
 
 /** {@link bootstrap} の任意依存（テスト時の決定性のために hostname / 時刻を注入できる）。 */
 export interface BootstrapOptions {
@@ -34,24 +32,6 @@ export interface BootstrapResult {
   deviceIdGenerated: boolean
   /** 今回の起動でトークンを新規発行したか（false なら既存を再利用）。 */
   tokenIssued: boolean
-}
-
-/**
- * hostname からダッシュ区切りの device_id を導出する。
- *
- * 先頭の DNS ラベル（最初の `.` まで）を小文字化し、英数字以外を `-` に畳んで両端の `-` を
- * 除去する。結果が空になる場合は {@link FALLBACK_DEVICE_ID} を使う。
- *
- * @param hostname `os.hostname()` 相当の文字列。
- * @returns 安全な device_id 文字列。
- */
-function deriveDeviceId(hostname: string): string {
-  const firstLabel = hostname.split('.')[0] ?? ''
-  const slug = firstLabel
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug.length > 0 ? slug : FALLBACK_DEVICE_ID
 }
 
 /**

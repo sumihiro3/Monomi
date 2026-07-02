@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { EVENT_TYPES } from '../domain/enums.js'
-import { toEpochMs, type EpochMs } from '../domain/time.js'
+import { type EpochMs, toEpochMs } from '../domain/time.js'
 
 /**
  * `POST /api/v1/events` の受信ペイロード（§8.1 リクエスト。§0.1/§0.5 反映）。
@@ -115,6 +115,8 @@ export interface InstanceStatusRow {
 
 /** 直近イベント 1 件（§10.4 Agent View Lv.1 の生ログ）。 */
 export interface RecentEventDto {
+  /** イベント行の id（`events.id`、autoincrement）。CLI 側の React key 安定化に使う。 */
+  id: number
   event_type: string
   event_subtype: string | null
   tool_name: string | null
@@ -131,6 +133,101 @@ export interface RecentEventDto {
 export interface InstanceDetail extends InstanceStatusRow {
   /** 直近イベント（新しい順、Agent View Lv.1）。 */
   recent_events: RecentEventDto[]
+}
+
+/**
+ * device 一覧の 1 行（§9 `GET /api/v1/devices` の `devices[]` 要素、FR-03 AC-1）。
+ *
+ * wire は snake_case・小文字 role（config/DDL の `hub`/`child` 語彙に合わせる）。時刻は §7.2 の
+ * 通り内部 epoch ms を API 応答時に ISO8601(Z) へ変換して返す。`has_active_token` は当該 device に
+ * 未 revoke のトークンが1つ以上あるか（`devices revoke` 済みかを一覧で判別するための表示用フラグ）。
+ */
+export interface DeviceDto {
+  /** device_id（§7.3 devices.id）。 */
+  id: string
+  /** 表示名（§7.3 devices.name）。 */
+  name: string
+  /** 役割（wire は小文字 `hub`/`child`）。 */
+  role: string
+  /** 初回登録時刻（ISO8601）。 */
+  first_seen_at: string
+  /** 最終観測時刻（ISO8601）。 */
+  last_seen_at: string
+  /** 有効トークンを1つ以上持つか（false なら revoke 済み or 未発行）。 */
+  has_active_token: boolean
+}
+
+/** `GET /api/v1/devices` のレスポンスエンベロープ（§9 / FR-03 AC-1）。 */
+export interface DevicesEnvelope {
+  devices: DeviceDto[]
+}
+
+/** `POST /api/v1/devices/:id/revoke` のレスポンス（§9 / FR-03 AC-2）。 */
+export interface DeviceRevokeResult {
+  ok: boolean
+  /** 失効対象の device_id。 */
+  device_id: string
+  /** 実際に失効させたトークン数（既に全失効済みなら 0）。 */
+  revoked: number
+}
+
+/**
+ * `POST /api/v1/pair/claim` の受信ペイロード（§9 / FR-02 AC-3）。
+ *
+ * ペアリングは**トークン発行前**の未認証経路なので、child は自身の `device_id` と
+ * `name`（hostname）を body で申告する。§0.3 の「body の `device_id` を無視して Bearer 由来値で
+ * 上書き」は認証済みの書き込み経路（`/events`）の話であり、まだトークンを持たないペアリングには
+ * 当てはまらない（このペイロードの `device_id` こそが登録される child の id になる）。role は
+ * hub 側で常に `CHILD` 固定にする（hub 同士のペアリングは v1 スコープ外）。
+ */
+export const pairClaimPayloadSchema = z.object({
+  /** hub が発行した 6 桁コード（照合対象）。 */
+  code: z.string().min(1),
+  /**
+   * 登録する child の device_id（child が自機の値を申告）。
+   *
+   * 申告値はクライアントがそのまま送るため {@link ../domain/device-id.js deriveDeviceId} の
+   * ような正規化はせず、文字種（英数字・`_`・`.`・`-`）と最大長のみを制約する（#9）。
+   */
+  device_id: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9_.-]+$/),
+  /** child の表示名（hostname 相当）。 */
+  name: z.string().min(1).max(128),
+})
+
+/** {@link pairClaimPayloadSchema} の検証済み形状（wire そのままの snake_case）。 */
+export type PairClaimPayload = z.infer<typeof pairClaimPayloadSchema>
+
+/**
+ * `POST /api/v1/pair/start` の応答（loopback 限定、§9 / FR-02 AC-1/AC-2）。
+ *
+ * `code` は hub CLI がユーザーへ表示する平文の 6 桁コード。時刻は §7.2 の通り内部 epoch ms を
+ * ISO8601(Z) へ変換して返す。`ttl_seconds` は失効までの残り秒数（表示補助）。
+ */
+export interface PairStartResponse {
+  /** 発行した 6 桁コード（平文）。 */
+  code: string
+  /** コード失効時刻（ISO8601）。 */
+  expires_at: string
+  /** 失効までの秒数（表示補助、既定 300 = 5 分）。 */
+  ttl_seconds: number
+}
+
+/**
+ * `POST /api/v1/pair/claim` 成功時の応答（token + 設定、§9 / FR-02 AC-3）。
+ *
+ * child はこの `token` を `config.yml` に保存して以降の Bearer 認証に使う（生値は一度だけ返す）。
+ */
+export interface PairClaimResponse {
+  /** child が保存する device_token（生値）。 */
+  token: string
+  /** 登録された device_id（申告値）。 */
+  device_id: string
+  /** 割り当てられた役割（wire は小文字。常に `child`）。 */
+  role: string
 }
 
 /**

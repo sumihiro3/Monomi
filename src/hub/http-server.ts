@@ -8,18 +8,25 @@ import { ProjectRepository } from '../db/repositories/project-repository.js'
 import { SessionRepository } from '../db/repositories/session-repository.js'
 import { TokenRepository } from '../db/repositories/token-repository.js'
 import type { Database } from '../db/database.js'
+import type { Device } from '../domain/entities.js'
 import { epochMsNow, type EpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
 import { AuthResolver } from './auth-resolver.js'
+import { DevicesController } from './controllers/devices-controller.js'
 import { EventsController } from './controllers/events-controller.js'
 import { InstancesController } from './controllers/instances-controller.js'
+import { PairController } from './controllers/pair-controller.js'
 import { EventIngestionService } from './event-ingestion-service.js'
 import { InstanceStatusService } from './instance-status-service.js'
+import { PairingService } from './pairing-service.js'
 import { Router } from './router.js'
 import { TokenService } from './token-service.js'
 
-/** release-1 は同一マシン通信のみ（§3.1）。既定で loopback にのみバインドする。 */
-const DEFAULT_HOST = '127.0.0.1'
+/**
+ * 既定の待受バインドアドレス（FR-06 AC-1）。他デバイスからの到達を既定で許可するため
+ * `0.0.0.0` とし、config `bind:`（{@link ../config/config.js MonomiConfig.bind}）で上書き可能にする。
+ */
+const DEFAULT_HOST = '0.0.0.0'
 
 /** リクエストボディの最大許容サイズ（byte）。個人利用の hook ペイロードには十分な上限。 */
 const MAX_BODY_BYTES = 1_000_000
@@ -64,6 +71,8 @@ export function createHubServer(db: Database, options: HubServerOptions = {}): H
 
   const tokenService = new TokenService(tokens, devices)
   const authResolver = new AuthResolver(tokenService)
+  // ペアリングコードは §9 によりメモリ Map 保持。TTL 判定は他ルートと同じ権威時刻を使う。
+  const pairingService = new PairingService(tokenService, devices, { now })
 
   const ingestion = new EventIngestionService(devices, projects, instances, sessions, events, now)
   const statusService = new InstanceStatusService(
@@ -78,11 +87,19 @@ export function createHubServer(db: Database, options: HubServerOptions = {}): H
 
   const eventsController = new EventsController(ingestion)
   const instancesController = new InstancesController(statusService, now)
+  const devicesController = new DevicesController(devices, tokenService)
+  const pairController = new PairController(pairingService)
 
   const router = new Router()
     .add('POST', '/api/v1/events', (req) => eventsController.handlePost(req))
     .add('GET', '/api/v1/instances', (req) => instancesController.handleList(req))
     .add('GET', '/api/v1/instances/:id', (req) => instancesController.handleDetail(req))
+    .add('GET', '/api/v1/devices', (req) => devicesController.handleList(req))
+    .add('POST', '/api/v1/devices/:id/revoke', (req) => devicesController.handleRevoke(req))
+    // ペアリングは §9 の 2 エンドポイント。認証をスキップし（public）、start は Controller が
+    // remoteAddress で loopback 判定する（§0.3 / FR-02 AC-2）。
+    .add('POST', '/api/v1/pair/start', (req) => pairController.handleStart(req), { public: true })
+    .add('POST', '/api/v1/pair/claim', (req) => pairController.handleClaim(req), { public: true })
 
   return new HttpServer(router, authResolver)
 }
@@ -90,11 +107,15 @@ export function createHubServer(db: Database, options: HubServerOptions = {}): H
 /**
  * node:http による hub API サーバ（class-diagram §3 `HttpServer`）。
  *
- * リクエストパイプライン: ルート照合 → 認証（全ルートに {@link AuthResolver} を適用、
- * トークン無し/無効は 401、FR-03 AC-5）→ ボディ JSON パース（POST 系のみ）→ ハンドラ実行
- * → JSON 応答。境界での時刻変換（wire は ISO8601、内部は epoch ms、§0.5）は Controller/DTO
- * 側が担い、本クラスは HTTP の入出力にのみ責任を持つ。release-1 は同一マシン通信のみのため
- * 既定で loopback にバインドする。
+ * リクエストパイプライン: ルート照合 → 認証（認証必須ルートに {@link AuthResolver} を適用、
+ * トークン無し/無効は 401、FR-03 AC-5。public ルートは認証をスキップし device: null で通す、
+ * §0.3 / FR-02）→ ボディ JSON パース（POST 系のみ）→ ハンドラ実行 → JSON 応答。ハンドラへは
+ * 生 TCP 接続の `remoteAddress`（`socket.remoteAddress`、X-Forwarded-For は無視）も渡す。
+ * 境界での時刻変換（wire は ISO8601、内部は epoch ms、§0.5）は Controller/DTO
+ * 側が担い、本クラスは HTTP の入出力にのみ責任を持つ。既定で全インターフェース（`0.0.0.0`）に
+ * バインドし他デバイスからの到達を許可する（FR-06 AC-1）。読み取り API（instances/events）は
+ * 有効な device token であれば発行元デバイスを問わず全デバイスの instance/イベントを返す
+ * （所有権チェックは行わない、FR-06 AC-2・§0 既知課題 S2）。無効/失効トークンは引き続き 401。
  */
 export class HttpServer {
   private readonly server: http.Server
@@ -116,7 +137,7 @@ export class HttpServer {
    * サーバを起動する。
    *
    * @param port 待受ポート（`0` で OS 割当のエフェメラルポート＝テスト用）。
-   * @param host バインド先ホスト。省略時は loopback（`127.0.0.1`）。
+   * @param host バインド先ホスト。省略時は全インターフェース（`0.0.0.0`、FR-06 AC-1）。
    * @returns 実際に待ち受けているポート番号。
    */
   listen(port: number, host: string = DEFAULT_HOST): Promise<number> {
@@ -129,6 +150,15 @@ export class HttpServer {
         resolve(address ? address.port : port)
       })
     })
+  }
+
+  /**
+   * 実際にバインドされているアドレス情報を返す（FR-06 AC-1 の固定テスト・診断用）。
+   *
+   * @returns 待受中なら {@link AddressInfo}、未待受なら `null`。
+   */
+  address(): AddressInfo | null {
+    return this.server.address() as AddressInfo | null
   }
 
   /**
@@ -168,13 +198,21 @@ export class HttpServer {
         return
       }
 
-      // 全ルートに認証を適用（§0.3 / FR-03 AC-5）。
-      const device = this.authResolver.resolveDevice({
-        headers: { authorization: req.headers.authorization },
-      })
-      if (device === null) {
-        this.send(res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' })
-        return
+      // 生 TCP 接続の送信元アドレス（§0.3）。X-Forwarded-For は信用せず一切参照しない。
+      const remoteAddress = req.socket.remoteAddress ?? null
+
+      // public ルート以外は認証を適用（§0.3 / FR-03 AC-5）。public ルート（pair/start・
+      // pair/claim）は認証をスキップし device: null で通す（loopback 判定等は Controller が
+      // remoteAddress で行う、FR-02）。
+      let device: Device | null = null
+      if (!routeMatch.public) {
+        device = this.authResolver.resolveDevice({
+          headers: { authorization: req.headers.authorization },
+        })
+        if (device === null) {
+          this.send(res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' })
+          return
+        }
       }
 
       let body: unknown
@@ -191,7 +229,29 @@ export class HttpServer {
         }
       }
 
-      const response = await routeMatch.handler({ params: routeMatch.params, body, device })
+      // 判別ユニオンでハンドラ型が分岐する。public は device: null をそのまま渡す。
+      if (routeMatch.public) {
+        const response = await routeMatch.handler({
+          params: routeMatch.params,
+          body,
+          device: null,
+          remoteAddress,
+        })
+        this.send(res, response.status, response.body, response.headers)
+        return
+      }
+      // 非 public はここに到達する時点で device が非 null（上で 401 済み）。型を Device へ
+      // 絞るためのガード（到達不能だが不変条件を明示する）。
+      if (device === null) {
+        this.send(res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' })
+        return
+      }
+      const response = await routeMatch.handler({
+        params: routeMatch.params,
+        body,
+        device,
+        remoteAddress,
+      })
       this.send(res, response.status, response.body, response.headers)
     } catch {
       // Controller が写し損ねた想定外例外はすべて 500 に畳む（詳細は漏らさない）。

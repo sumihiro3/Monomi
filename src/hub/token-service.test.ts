@@ -108,6 +108,29 @@ describe('TokenService.verify', () => {
   })
 })
 
+describe('TokenService.activeDeviceIds (review #3)', () => {
+  it('returns the set of device ids with at least one active token, 1 query for all devices', () => {
+    const other = devices.upsert({
+      id: 'macmini-2',
+      name: 'Mac mini 2',
+      role: 'HUB',
+      firstSeenAt: toEpochMs(1000),
+      lastSeenAt: toEpochMs(1000),
+    })
+    const raw = service.issue(device.id)
+    service.issue(other.id)
+    service.revoke(tokens.findByHash(sha256Hex(raw))!.id) // device now has no active token
+
+    const activeIds = service.activeDeviceIds()
+    expect(activeIds).toEqual(new Set([other.id]))
+    expect(activeIds.has(device.id)).toBe(false)
+  })
+
+  it('returns an empty set when no device has an active token', () => {
+    expect(service.activeDeviceIds()).toEqual(new Set())
+  })
+})
+
 describe('AuthResolver', () => {
   let auth: AuthResolver
 

@@ -66,6 +66,39 @@ export class TokenService {
   }
 
   /**
+   * device に有効な（未 revoke の）トークンが1つ以上あるかを返す（`devices list` の表示用、
+   * FR-03 AC-1）。
+   *
+   * @param deviceId 判定対象 device の id。
+   * @returns 有効トークンが1つでもあれば true。
+   */
+  hasActiveToken(deviceId: string): boolean {
+    return this.tokens.findByDeviceId(deviceId).some((token) => token.revokedAt === null)
+  }
+
+  /**
+   * 有効な（未 revoke の）トークンを持つ device_id 集合を返す（`devices list` の表示用、
+   * review #3）。一覧表示のたびに device ごと {@link hasActiveToken} を呼ぶ N+1 を避けるため、
+   * 呼び出し側は本メソッドを 1 回だけ呼んで `Set.has` で判定する。
+   *
+   * @returns 有効トークンを1つ以上持つ device_id の {@link Set}。
+   */
+  activeDeviceIds(): Set<string> {
+    return new Set(this.tokens.listDeviceIdsWithActiveToken())
+  }
+
+  /**
+   * device に紐づく全ての有効トークンを一括失効させる（`devices revoke`、FR-03 AC-2）。
+   * 失効後は {@link verify} が当該トークンで `null` を返し、後段が 401 化する。
+   *
+   * @param deviceId 失効対象 device の id。
+   * @returns 実際に失効させたトークン数。
+   */
+  revokeAllForDevice(deviceId: string): number {
+    return this.tokens.revokeByDeviceId(deviceId)
+  }
+
+  /**
    * 生トークンを SHA-256 の 16 進表現へハッシュ化する。保存・照合の双方でこの関数を通す。
    *
    * @param rawToken 生トークン。
