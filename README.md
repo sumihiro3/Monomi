@@ -74,11 +74,13 @@ monomi --help, -h       このヘルプを表示
 ## 開発
 
 ```sh
-pnpm lint          # eslint
-pnpm format:check  # prettier --check
+pnpm lint          # biome lint .
+pnpm format:check  # biome format . && prettier --check（Markdown のみ）
 pnpm test          # vitest run
 pnpm build         # tsc + dist/cli.js の実行権限付与
 ```
+
+Lint・フォーマットチェックは [Biome](https://biomejs.dev/) に統一した（設定は `biome.jsonc`）。Markdown（`.md`/`.mdx`）のみ Prettier（`.prettierrc`）でチェックする。
 
 reporter（bash）のテストは別途 `bash reporter/monomi-report.test.sh` で実行する（詳細は `reporter/README.md`）。
 

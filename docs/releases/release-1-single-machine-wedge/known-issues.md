@@ -85,6 +85,19 @@ high/medium の3件（全履歴フルロード・outbox 排他制御なし・tok
 - 不正なパーセントエンコーディングの path（例: `/api/v1/instances/%ZZ`）で認証前に例外が発生し 500 になる（本来は 404/401 が妥当）。情報漏えいや認証バイパスには至らない。
 - 対応方針: `decodeURIComponent` を try/catch し、不正 path は `not_found` 扱いにする。
 
+## lint（release-2-biome-migration で Biome が新規検出。biome.jsonc で warn に緩和中）
+
+### L1. `AppView` の `useEffect` 依存配列に `bump` が欠落（`useExhaustiveDependencies`）
+
+- 場所: `src/cli/components/app-view.tsx:70` 付近
+- Biome の `correctness/useExhaustiveDependencies` が検出。typescript-eslint recommended では未強制だったため release-1 では気づかれなかった。stale closure の温床になりうる。
+- 対応方針: 依存配列に `bump` を追加するか、`useCallback` で安定化する。修正後は `biome.jsonc` の warn 緩和を外して error に戻す。
+
+### L2. リストのキーに配列インデックスを使用（`noArrayIndexKey`）
+
+- 場所: `src/cli/components/detail-view.tsx:90` 付近
+- イベントタイムラインの再描画で並び替え・挿入時に React の reconciliation が崩れる可能性。event の `id` など安定キーに変更する。修正後は warn 緩和を外す。
+
 ## 優先度の目安（release-2 着手時の参考）
 
 1. **B1 + B2**（同根、outbox の可用性劣化）— 直すなら同時に
