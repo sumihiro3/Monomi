@@ -99,8 +99,8 @@ CLI（hub APIをポーリングしてターミナルに表示）
 ### 3.1 hub / child の役割分担
 
 - 各マシンの `~/.monomi/config.yml` で `role: hub | child` を指定。
-- `role: child` の場合は `hub_url` を指定し、レポートをそこにPOSTする。
-- `role: hub` の場合は `localhost` 宛でよく、`hub_url` は不要。
+- `role: child` の場合は `hub_endpoints`（到達先URLのリスト。§0.2）を指定し、reporterは先頭から順に試して到達できた先へPOSTする。
+- `role: hub` の場合は `localhost` 宛でよく、`hub_endpoints` は不要。
 - **1台体制はhub単体で自然に成立する**（child不要）。2台目を足す時は設定ファイルを1つ足すだけ。
 - どのマシンもhubになれる。Mac mini固定ではない。
 
@@ -385,8 +385,8 @@ POST /api/v1/pair/start   -- コード発行。localhostからのみ受け付け
 POST /api/v1/pair/claim   -- コード照合してtoken発行。外部から叩いてOK
 ```
 
-- **hub側**: `monomi hub pair` は新しいサーバーを起動するのではなく、既に起動しているhub APIにlocalhost宛でリクエストを1回投げるクライアント。6桁コードを5分間TTLでメモリ上（Map）に保持するだけで、SQLite永続化は不要。
-- **child側**: `monomi pair --code XXXXXX` でmDNS（`_monomi._tcp`）を優先探索、届かない場合は`--hub`でIP/ホスト名を手動指定（Tailscale越し等）。
+- **hub側**: `monomi hub pair` は新しいサーバーを起動するのではなく、既に起動しているhub APIにlocalhost宛でリクエストを1回投げるクライアント。6桁コードを5分間TTLでメモリ上（Map）に保持するだけで、SQLite永続化は不要。あわせてLAN/Tailscale（100.64.0.0/10）の到達先候補URLを検出して表示する（`os.networkInterfaces`＋`tailscale ip -4`フォールバック）。
+- **child側**: `monomi pair --code XXXXXX --hub <url> [--hub <url2>...]` で到達先URLを手動指定する（複数指定可、指定順が到達優先順）。hub側が表示した候補URLをそのまま渡す運用を想定し、mDNS自動探索は見送り（§0.4「v1延期」・§12）。
 - 成功したらdevice_tokenを発行し、childの`config.yml`に保存。
 - 1台体制（hubのみ）はペアリング不要。hub起動時にhostnameベースでdevice_idを自動生成し、ローカル用tokenも自動発行。
 - デバイス管理コマンドも用意: `monomi hub devices list` / `monomi hub devices revoke <id>`
