@@ -369,6 +369,89 @@ describe('TokenRepository (§0.3)', () => {
 
     expect(repo.findByHash('sha256-hash-2')?.revokedAt).toBe(5000)
   })
+
+  it('findByDeviceId returns every token for the device (id ascending, revoked included)', () => {
+    const { device, devices } = seedInstance()
+    devices.upsert({
+      id: 'macbook',
+      name: 'macbook.local',
+      role: 'CHILD',
+      firstSeenAt: toEpochMs(1000),
+      lastSeenAt: toEpochMs(1000),
+    })
+    const repo = new TokenRepository(db)
+    const t1 = repo.create(device.id, 'hash-a')
+    const t2 = repo.create(device.id, 'hash-b')
+    repo.create('macbook', 'hash-other') // different device, must not leak in
+    repo.revoke(t1.id, toEpochMs(5000))
+
+    const tokens = repo.findByDeviceId(device.id)
+    expect(tokens.map((t) => t.id)).toEqual([t1.id, t2.id])
+    expect(tokens[0].revokedAt).toBe(5000)
+    expect(tokens[1].revokedAt).toBeNull()
+    expect(repo.findByDeviceId('unknown-device')).toEqual([])
+  })
+
+  it('revokeByDeviceId revokes only the active tokens of that device and returns the count (FR-03 AC-2)', () => {
+    const { device, devices } = seedInstance()
+    devices.upsert({
+      id: 'macbook',
+      name: 'macbook.local',
+      role: 'CHILD',
+      firstSeenAt: toEpochMs(1000),
+      lastSeenAt: toEpochMs(1000),
+    })
+    const repo = new TokenRepository(db)
+    const a1 = repo.create(device.id, 'hash-1')
+    repo.create(device.id, 'hash-2')
+    const other = repo.create('macbook', 'hash-3')
+    repo.revoke(a1.id, toEpochMs(1000)) // already revoked → not counted/updated again
+
+    const revoked = repo.revokeByDeviceId(device.id, toEpochMs(9000))
+    expect(revoked).toBe(1) // only the single active token of macmini-1
+
+    // Already-revoked token keeps its original revoked_at (not overwritten).
+    expect(repo.findByHash('hash-1')?.revokedAt).toBe(1000)
+    expect(repo.findByHash('hash-2')?.revokedAt).toBe(9000)
+    // Other device untouched.
+    expect(repo.findByHash('hash-3')?.revokedAt).toBeNull()
+    expect(other.revokedAt).toBeNull()
+
+    // Idempotent: a second sweep finds nothing active.
+    expect(repo.revokeByDeviceId(device.id, toEpochMs(9999))).toBe(0)
+  })
+
+  it('listDeviceIdsWithActiveToken returns distinct device_ids with at least one active token (review #3)', () => {
+    const { device, devices } = seedInstance()
+    devices.upsert({
+      id: 'macbook',
+      name: 'macbook.local',
+      role: 'CHILD',
+      firstSeenAt: toEpochMs(1000),
+      lastSeenAt: toEpochMs(1000),
+    })
+    devices.upsert({
+      id: 'ipad',
+      name: 'ipad.local',
+      role: 'CHILD',
+      firstSeenAt: toEpochMs(1000),
+      lastSeenAt: toEpochMs(1000),
+    })
+    const repo = new TokenRepository(db)
+    // macmini-1: two tokens, one revoked → still active overall.
+    const a1 = repo.create(device.id, 'hash-a1')
+    repo.create(device.id, 'hash-a2')
+    repo.revoke(a1.id, toEpochMs(2000))
+    // macbook: only token revoked → not active.
+    const b1 = repo.create('macbook', 'hash-b1')
+    repo.revoke(b1.id, toEpochMs(2000))
+    // ipad: never had a token.
+
+    const activeIds = repo.listDeviceIdsWithActiveToken()
+    expect(new Set(activeIds)).toEqual(new Set([device.id]))
+    expect(activeIds).not.toContain('macbook')
+    expect(activeIds).not.toContain('ipad')
+  })
 })
 
 describe('PrStatusRepository', () => {

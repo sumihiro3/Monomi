@@ -20,6 +20,14 @@ const { DatabaseSync: DatabaseSyncCtor } = createRequire(import.meta.url)(
 export type Database = DatabaseSync
 
 /**
+ * `Database.prepare()` が返す prepared statement の型。
+ *
+ * Repository 層はコンストラクタでこの型のフィールドをキャッシュし、呼び出しごとの
+ * `prepare()`（パース＋プランニングのコスト）をホットパスから排除する（FR-08 AC-2）。
+ */
+export type PreparedStatement = ReturnType<Database['prepare']>
+
+/**
  * SQLite データベースを開き、電源断耐性の PRAGMA を設定し、§7.3 DDL を冪等適用する。
  *
  * - `journal_mode=WAL` + `synchronous=NORMAL`（§0.5 / FR-03 AC-6: 電源断耐性）。

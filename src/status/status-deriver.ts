@@ -1,7 +1,7 @@
 import type { Event } from '../domain/entities.js'
 import { toDurationMs, type EpochMs } from '../domain/time.js'
 import { EscalationPolicy, type EscalationThresholds } from './escalation.js'
-import { RawStateResolver, rawStateOf } from './raw-state-resolver.js'
+import { collectStateBearingDescending, RawStateResolver } from './raw-state-resolver.js'
 import { StateTransitionFinder } from './state-transition-finder.js'
 import { createStatusResult, type StatusResult } from './status-result.js'
 
@@ -32,14 +32,17 @@ export class StatusDeriver {
     thresholds: EscalationThresholds,
     hasPrWaiting: boolean
   ): StatusResult {
+    // 状態を持つイベントだけを received_at 降順で 1 度だけ抽出し、resolver / finder で共有する
+    // （FR-08 P1: 各サービスが個別に filter/sort していた同一配列の重複フルスキャンを集約）。
+    const relevant = collectStateBearingDescending(events)
+
     // 状態を持つイベントが 1 つも無い縮退ケース（補助イベントのみ／空）は稼働中 0 経過扱い。
-    const hasRelevant = events.some((e) => rawStateOf(e) !== null)
-    if (!hasRelevant) {
+    if (relevant.length === 0) {
       return createStatusResult('ACTIVE', 'ACTIVE', toDurationMs(0), false)
     }
 
-    const rawState = this.resolver.resolve(events)
-    const transition = this.finder.find(events, rawState)
+    const rawState = this.resolver.resolve(relevant)
+    const transition = this.finder.find(relevant, rawState)
     const display = this.policy.classify(transition, now, thresholds, hasPrWaiting)
     const elapsedMs = toDurationMs(now - transition.transitionedAt)
     return createStatusResult(rawState, display, elapsedMs, display === 'STALE')

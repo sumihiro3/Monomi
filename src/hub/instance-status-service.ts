@@ -1,23 +1,24 @@
-import type { EventPageCursor, EventRepository } from '../db/repositories/event-repository.js'
 import type { DeviceRepository } from '../db/repositories/device-repository.js'
+import type { EventPageCursor, EventRepository } from '../db/repositories/event-repository.js'
 import type { InstanceRepository } from '../db/repositories/instance-repository.js'
 import type { PrStatusRepository } from '../db/repositories/pr-status-repository.js'
 import type { ProjectRepository } from '../db/repositories/project-repository.js'
 import type { SessionRepository } from '../db/repositories/session-repository.js'
 import type { Event, Instance, Session } from '../domain/entities.js'
+import type { RawState } from '../domain/enums.js'
 import type { EpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
 import { InstanceStatusRollup } from '../status/instance-status-rollup.js'
-import { rawStateOf } from '../status/raw-state-resolver.js'
+import { scanForRunBoundary } from '../status/run-boundary-scanner.js'
 import { StatusDeriver } from '../status/status-deriver.js'
 import type { StatusResult } from '../status/status-result.js'
 import {
   deriveProjectName,
   epochMsToIso8601,
-  toWireStatus,
   type InstanceDetail,
   type InstanceStatusRow,
   type RecentEventDto,
+  toWireStatus,
 } from './dto.js'
 
 /**
@@ -112,6 +113,7 @@ export class InstanceStatusService {
     const recentEvents: RecentEventDto[] = this.events
       .recentForInstance(id, RECENT_EVENTS_LIMIT)
       .map((e) => ({
+        id: e.id,
         event_type: e.eventType,
         event_subtype: e.eventSubtype,
         tool_name: e.toolName,
@@ -184,10 +186,14 @@ export class InstanceStatusService {
    * （received_at）の新しい順にページングしながら取得する。
    *
    * 全履歴を毎回読む（`EventRepository.allForSession`）代わりに、直近ページ内で状態変化
-   * （区間の境界）が見つかった時点で打ち切る。`StateTransitionFinder` は「末尾から同じ
-   * raw_state が続く限り遡る」ため、境界を跨いだ先の古いイベントは判定に不要——境界より
-   * 前を読まなくても `deriveForSession` の結果は変わらない。同一状態が長時間続く稀な
-   * ケースだけ追加ページを読み、必要な分だけコストが伸びる（真の履歴サイズを超えない）。
+   * （区間の境界）が見つかった時点で打ち切る。境界検出そのものは status レイヤーの
+   * {@link scanForRunBoundary} に委譲し、hub 側は raw_state の写像規則を直接 import しない
+   * （layer 境界の維持）。`StateTransitionFinder` は「最新（降順の先頭）から同じ raw_state
+   * が続く区間だけ」を見るため、境界を跨いだ先の古いイベントは判定に不要——境界より前を
+   * 読まなくても `deriveForSession` の結果は変わらない。返す配列は received_at 降順のままで、
+   * `deriveForSession` がそれを状態イベントのみに絞って resolver / finder へ共有する
+   * （FR-08 P1: 再ソートなしの単一パス消費）。同一状態が長時間続く稀なケースだけ追加ページを
+   * 読み、必要な分だけコストが伸びる（真の履歴サイズを超えない）。
    *
    * @param sessionId 対象 session の id。
    * @returns 現在の raw_state 連続区間を判定するのに十分な、新しい順の {@link Event} 配列。
@@ -195,21 +201,17 @@ export class InstanceStatusService {
   private loadEventsForCurrentRun(sessionId: string): Event[] {
     const collected: Event[] = []
     let cursor: EventPageCursor | undefined
-    let currentState: string | null = null
+    let currentState: RawState | null = null
 
     for (;;) {
       const page = this.events.recentPageForSession(sessionId, STATUS_EVENT_PAGE_SIZE, cursor)
       if (page.length === 0) break
       collected.push(...page)
 
-      for (const event of page) {
-        const state = rawStateOf(event)
-        if (state === null) continue
-        if (currentState === null) {
-          currentState = state
-        } else if (state !== currentState) {
-          return collected
-        }
+      const scan = scanForRunBoundary(page, currentState)
+      currentState = scan.state
+      if (scan.boundaryFound) {
+        return collected
       }
 
       if (page.length < STATUS_EVENT_PAGE_SIZE) break

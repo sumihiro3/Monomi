@@ -1,6 +1,6 @@
 import type { Session } from '../../domain/entities.js'
 import { toEpochMs, type EpochMs } from '../../domain/time.js'
-import type { Database } from '../database.js'
+import type { Database, PreparedStatement } from '../database.js'
 
 /** `sessions` テーブルの生行。 */
 interface SessionRow {
@@ -36,7 +36,27 @@ function toSession(row: SessionRow): Session {
  * そのため `touchHeartbeat` は本 Repository に実装しない。
  */
 export class SessionRepository {
-  constructor(private readonly db: Database) {}
+  /** {@link upsertStarted} 用の INSERT（FR-08 AC-2: 呼び出しごとの prepare() を避ける）。 */
+  private readonly upsertStartedStmt: PreparedStatement
+  /** {@link markEnded} 用の UPDATE。 */
+  private readonly markEndedStmt: PreparedStatement
+  /** {@link findById} 用の SELECT。 */
+  private readonly findByIdStmt: PreparedStatement
+  /** {@link listByInstance} 用の SELECT。 */
+  private readonly listByInstanceStmt: PreparedStatement
+
+  constructor(db: Database) {
+    this.upsertStartedStmt = db.prepare(
+      `INSERT INTO sessions (id, instance_id, agent_type, started_at)
+       VALUES (?, ?, 'claude_code', ?)
+       ON CONFLICT(id) DO NOTHING`
+    )
+    this.markEndedStmt = db.prepare('UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?')
+    this.findByIdStmt = db.prepare('SELECT * FROM sessions WHERE id = ?')
+    this.listByInstanceStmt = db.prepare(
+      'SELECT * FROM sessions WHERE instance_id = ? ORDER BY started_at DESC, id DESC'
+    )
+  }
 
   /**
    * `SessionStart` 相当のイベントで session を冪等に登録する。
@@ -50,13 +70,7 @@ export class SessionRepository {
    * @returns 既存または新規の {@link Session}。
    */
   upsertStarted(instanceId: string, sessionId: string, startedAt: EpochMs): Session {
-    this.db
-      .prepare(
-        `INSERT INTO sessions (id, instance_id, agent_type, started_at)
-         VALUES (?, ?, 'claude_code', ?)
-         ON CONFLICT(id) DO NOTHING`
-      )
-      .run(sessionId, instanceId, startedAt)
+    this.upsertStartedStmt.run(sessionId, instanceId, startedAt)
     return this.findById(sessionId)!
   }
 
@@ -68,9 +82,7 @@ export class SessionRepository {
    * @param at 終了時刻。
    */
   markEnded(sessionId: string, reason: string, at: EpochMs): void {
-    this.db
-      .prepare('UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?')
-      .run(at, reason, sessionId)
+    this.markEndedStmt.run(at, reason, sessionId)
   }
 
   /**
@@ -80,9 +92,7 @@ export class SessionRepository {
    * @returns 見つかれば {@link Session}、無ければ null。
    */
   findById(id: string): Session | null {
-    const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as
-      | SessionRow
-      | undefined
+    const row = this.findByIdStmt.get(id) as SessionRow | undefined
     return row ? toSession(row) : null
   }
 
@@ -93,9 +103,7 @@ export class SessionRepository {
    * @returns {@link Session} の配列。
    */
   listByInstance(instanceId: string): Session[] {
-    const rows = this.db
-      .prepare('SELECT * FROM sessions WHERE instance_id = ? ORDER BY started_at DESC, id DESC')
-      .all(instanceId) as unknown as SessionRow[]
+    const rows = this.listByInstanceStmt.all(instanceId) as unknown as SessionRow[]
     return rows.map(toSession)
   }
 }

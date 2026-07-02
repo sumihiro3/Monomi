@@ -1,7 +1,7 @@
 import type { Project, ProjectKey } from '../../domain/entities.js'
 import { inferProjectKeyKind } from '../../domain/project-key.js'
 import { epochMsNow, toEpochMs } from '../../domain/time.js'
-import type { Database } from '../database.js'
+import type { Database, PreparedStatement } from '../database.js'
 import { newId } from '../id.js'
 
 /** `projects` テーブルの生行。`project_key` は正規化済み value のみで kind 列は無い。 */
@@ -29,7 +29,22 @@ function toProject(row: ProjectRow): Project {
  * 構造的保証になる（正規化自体は hub 側の {@link ../../domain/project-key-normalizer.js} が担う）。
  */
 export class ProjectRepository {
-  constructor(private readonly db: Database) {}
+  /** {@link findOrCreateByKey} 用の INSERT（FR-08 AC-2: 呼び出しごとの prepare() を避ける）。 */
+  private readonly findOrCreateByKeyStmt: PreparedStatement
+  /** {@link findById} 用の SELECT。 */
+  private readonly findByIdStmt: PreparedStatement
+  /** {@link findByKey} 用の SELECT。 */
+  private readonly findByKeyStmt: PreparedStatement
+
+  constructor(db: Database) {
+    this.findOrCreateByKeyStmt = db.prepare(
+      `INSERT INTO projects (id, project_key, display_name, created_at)
+       VALUES (?, ?, NULL, ?)
+       ON CONFLICT(project_key) DO NOTHING`
+    )
+    this.findByIdStmt = db.prepare('SELECT * FROM projects WHERE id = ?')
+    this.findByKeyStmt = db.prepare('SELECT * FROM projects WHERE project_key = ?')
+  }
 
   /**
    * `project_key` で既存 project を探し、無ければ作成する（§8.1 初出自動登録の冪等性）。
@@ -41,13 +56,7 @@ export class ProjectRepository {
    * @returns 既存または新規作成された {@link Project}。
    */
   findOrCreateByKey(key: ProjectKey): Project {
-    this.db
-      .prepare(
-        `INSERT INTO projects (id, project_key, display_name, created_at)
-         VALUES (?, ?, NULL, ?)
-         ON CONFLICT(project_key) DO NOTHING`
-      )
-      .run(newId('proj'), key.value, epochMsNow())
+    this.findOrCreateByKeyStmt.run(newId('proj'), key.value, epochMsNow())
     return this.findByKey(key.value)!
   }
 
@@ -58,9 +67,7 @@ export class ProjectRepository {
    * @returns 見つかれば {@link Project}、無ければ null。
    */
   findById(id: string): Project | null {
-    const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as
-      | ProjectRow
-      | undefined
+    const row = this.findByIdStmt.get(id) as ProjectRow | undefined
     return row ? toProject(row) : null
   }
 
@@ -71,9 +78,7 @@ export class ProjectRepository {
    * @returns 見つかれば {@link Project}、無ければ null。
    */
   findByKey(key: string): Project | null {
-    const row = this.db.prepare('SELECT * FROM projects WHERE project_key = ?').get(key) as
-      | ProjectRow
-      | undefined
+    const row = this.findByKeyStmt.get(key) as ProjectRow | undefined
     return row ? toProject(row) : null
   }
 }

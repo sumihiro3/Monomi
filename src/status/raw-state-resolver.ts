@@ -61,33 +61,44 @@ export function compareByReceivedThenId(a: Event, b: Event): number {
 }
 
 /**
+ * 状態を持つイベントだけを抽出し、hub 権威時刻（received_at）降順（新しい順）に整列した
+ * 新しい配列を返す（§0.5 / FR-08 P1）。
+ *
+ * status 導出の hot path では、この「関連イベントのみ・降順」配列を 1 度だけ生成し、
+ * {@link RawStateResolver.resolve}（最新状態）と `StateTransitionFinder.find`（遷移時刻）の
+ * 双方で共有する。以前は両者が各自 `filter`（＋finder は `sort`）していたため同一配列を
+ * 複数回フルスキャンしていたが、この関数に集約することで抽出・整列を 1 回に減らす。降順に
+ * 揃えるのは、finder が再ソートなしで先頭（最新）から単一パスで連続区間を辿れるようにするため。
+ *
+ * @param events 対象 session のイベント列（順不同で可。状態に無関係な補助イベントを含んでよい）。
+ * @returns received_at 降順（同値は `id` 降順）の、状態を持つイベントだけの新しい配列。
+ */
+export function collectStateBearingDescending(events: Event[]): Event[] {
+  return events.filter((e) => rawStateOf(e) !== null).sort((a, b) => compareByReceivedThenId(b, a))
+}
+
+/**
  * session のイベント列から現在の raw_state を判定するドメインサービス（§4 / §0.5）。
  *
  * 判定は「received_at 基準で最も新しい、状態を持つイベント」の写像に等しい。
- * イベントの配列順には依存せず、内部で received_at → id 順に並べ替えて最新を選ぶ。
+ * 呼び出し規約として整列済み・関連イベントのみの配列（{@link collectStateBearingDescending}
+ * の出力）を受け取り、その先頭要素（＝最新の状態イベント）の写像を返すだけにすることで、
+ * 内部での再フィルタ・再ソートを排除する（FR-08 P1）。
  */
 export class RawStateResolver {
   /**
-   * イベント列から raw_state を導出する。
+   * 整列済みの状態イベント配列から現在の raw_state を導出する。
    *
-   * @param events 対象 session の全イベント（順不同で可）。
-   * @returns 現在の raw_state。状態を持つイベントが 1 つも無い場合は既定で `ACTIVE`
-   *   （SessionStart 前などの縮退ケース。呼び出し側は経過時間 0 として扱う）。
+   * 呼び出し規約（FR-08 P1）: `events` は {@link collectStateBearingDescending} が返す
+   * 「状態を持つイベントのみ・received_at 降順（新しい順）」の配列であること。先頭が最新の
+   * 状態イベントなので、内部で並べ替えず先頭要素の写像をそのまま返す。
+   *
+   * @param events 降順・状態イベントのみの配列（{@link collectStateBearingDescending} 出力）。
+   * @returns 現在の raw_state。空配列（状態を持つイベントが 1 つも無い縮退ケース）は既定で
+   *   `ACTIVE`（SessionStart 前などの縮退ケース。呼び出し側は経過時間 0 として扱う）。
    */
   resolve(events: Event[]): RawState {
-    const latest = this.latestRelevantEvent(events)
-    return latest ? (rawStateOf(latest) as RawState) : 'ACTIVE'
-  }
-
-  /**
-   * 状態を持つイベントのうち received_at 基準で最新のものを返す。
-   *
-   * @param events 対象イベント列。
-   * @returns 最新の状態イベント。存在しなければ null。
-   */
-  private latestRelevantEvent(events: Event[]): Event | null {
-    const relevant = events.filter((e) => rawStateOf(e) !== null)
-    if (relevant.length === 0) return null
-    return relevant.reduce((latest, e) => (compareByReceivedThenId(e, latest) >= 0 ? e : latest))
+    if (events.length === 0) return 'ACTIVE'
+    return rawStateOf(events[0]) as RawState
   }
 }

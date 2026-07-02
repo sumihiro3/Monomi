@@ -1,7 +1,7 @@
 import type { Event } from '../../domain/entities.js'
 import type { EventType } from '../../domain/enums.js'
 import { toEpochMs, type EpochMs } from '../../domain/time.js'
-import type { Database } from '../database.js'
+import type { Database, PreparedStatement } from '../database.js'
 
 /** {@link EventRepository.recentPageForSession} の keyset カーソル（ページ境界）。 */
 export interface EventPageCursor {
@@ -50,7 +50,41 @@ function toEvent(row: EventRow): Event {
  * 用いるため、`append` の入力には呼び出し側が算出した `received_at` を必ず含める。
  */
 export class EventRepository {
-  constructor(private readonly db: Database) {}
+  /** {@link append} 用の INSERT（FR-08 AC-2: 呼び出しごとの prepare() を避ける）。 */
+  private readonly appendStmt: PreparedStatement
+  /** {@link allForSession} 用の SELECT。 */
+  private readonly allForSessionStmt: PreparedStatement
+  /** {@link recentForInstance} 用の SELECT。 */
+  private readonly recentForInstanceStmt: PreparedStatement
+  /** {@link recentPageForSession} の cursor 無し（最新ページ）用 SELECT。 */
+  private readonly recentPageFirstStmt: PreparedStatement
+  /** {@link recentPageForSession} の cursor 有り（keyset 継続）用 SELECT。 */
+  private readonly recentPageAfterCursorStmt: PreparedStatement
+
+  constructor(db: Database) {
+    this.appendStmt = db.prepare(
+      `INSERT INTO events
+         (session_id, instance_id, event_type, event_subtype, tool_name, tool_summary,
+          occurred_at, received_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    this.allForSessionStmt = db.prepare(
+      'SELECT * FROM events WHERE session_id = ? ORDER BY received_at ASC, id ASC'
+    )
+    this.recentForInstanceStmt = db.prepare(
+      'SELECT * FROM events WHERE instance_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?'
+    )
+    this.recentPageFirstStmt = db.prepare(
+      'SELECT * FROM events WHERE session_id = ? ORDER BY received_at DESC, id DESC LIMIT ?'
+    )
+    this.recentPageAfterCursorStmt = db.prepare(
+      `SELECT * FROM events
+       WHERE session_id = ?
+         AND (received_at < ? OR (received_at = ? AND id < ?))
+       ORDER BY received_at DESC, id DESC
+       LIMIT ?`
+    )
+  }
 
   /**
    * イベントを 1 件追記し、採番された `id` を含む {@link Event} を返す。
@@ -62,23 +96,16 @@ export class EventRepository {
    * @returns 採番済み `id` を持つ永続化後の {@link Event}。
    */
   append(event: NewEvent): Event {
-    const result = this.db
-      .prepare(
-        `INSERT INTO events
-           (session_id, instance_id, event_type, event_subtype, tool_name, tool_summary,
-            occurred_at, received_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        event.sessionId,
-        event.instanceId,
-        event.eventType,
-        event.eventSubtype,
-        event.toolName,
-        event.toolSummary,
-        event.occurredAt,
-        event.receivedAt
-      )
+    const result = this.appendStmt.run(
+      event.sessionId,
+      event.instanceId,
+      event.eventType,
+      event.eventSubtype,
+      event.toolName,
+      event.toolSummary,
+      event.occurredAt,
+      event.receivedAt
+    )
     return { ...event, id: Number(result.lastInsertRowid) }
   }
 
@@ -92,9 +119,7 @@ export class EventRepository {
    * @returns 時系列順の {@link Event} 配列。
    */
   allForSession(sessionId: string): Event[] {
-    const rows = this.db
-      .prepare('SELECT * FROM events WHERE session_id = ? ORDER BY received_at ASC, id ASC')
-      .all(sessionId) as unknown as EventRow[]
+    const rows = this.allForSessionStmt.all(sessionId) as unknown as EventRow[]
     return rows.map(toEvent)
   }
 
@@ -109,11 +134,7 @@ export class EventRepository {
    * @returns 新しい順の {@link Event} 配列。
    */
   recentForInstance(instanceId: string, limit: number): Event[] {
-    const rows = this.db
-      .prepare(
-        'SELECT * FROM events WHERE instance_id = ? ORDER BY occurred_at DESC, id DESC LIMIT ?'
-      )
-      .all(instanceId, limit) as unknown as EventRow[]
+    const rows = this.recentForInstanceStmt.all(instanceId, limit) as unknown as EventRow[]
     return rows.map(toEvent)
   }
 
@@ -124,6 +145,9 @@ export class EventRepository {
    * コストを避ける（perf review 是正: 一覧/詳細 API が session の全イベントを毎回
    * フルロードしていた問題）。
    *
+   * cursor の有無で SQL 文の形が変わる（WHERE 句の keyset 条件の有無）ため、意味を変えずに
+   * 2本の prepared statement をそれぞれキャッシュしてブランチする（FR-08 AC-2）。
+   *
    * @param sessionId session_id。
    * @param limit 1 ページの件数。
    * @param cursor 前ページ最後の行の `(received_at, id)`。省略時は最新から開始。
@@ -131,26 +155,14 @@ export class EventRepository {
    */
   recentPageForSession(sessionId: string, limit: number, cursor?: EventPageCursor): Event[] {
     const rows = cursor
-      ? (this.db
-          .prepare(
-            `SELECT * FROM events
-             WHERE session_id = ?
-               AND (received_at < ? OR (received_at = ? AND id < ?))
-             ORDER BY received_at DESC, id DESC
-             LIMIT ?`
-          )
-          .all(
-            sessionId,
-            cursor.receivedAt,
-            cursor.receivedAt,
-            cursor.id,
-            limit
-          ) as unknown as EventRow[])
-      : (this.db
-          .prepare(
-            'SELECT * FROM events WHERE session_id = ? ORDER BY received_at DESC, id DESC LIMIT ?'
-          )
-          .all(sessionId, limit) as unknown as EventRow[])
+      ? (this.recentPageAfterCursorStmt.all(
+          sessionId,
+          cursor.receivedAt,
+          cursor.receivedAt,
+          cursor.id,
+          limit
+        ) as unknown as EventRow[])
+      : (this.recentPageFirstStmt.all(sessionId, limit) as unknown as EventRow[])
     return rows.map(toEvent)
   }
 }

@@ -1,6 +1,6 @@
 import type { Instance } from '../../domain/entities.js'
 import { epochMsNow, toEpochMs, type EpochMs } from '../../domain/time.js'
-import type { Database } from '../database.js'
+import type { Database, PreparedStatement } from '../database.js'
 import { newId } from '../id.js'
 
 /** `instances` テーブルの生行。 */
@@ -34,7 +34,35 @@ function toInstance(row: InstanceRow): Instance {
  * （worktree の有無で特別扱いしない）。
  */
 export class InstanceRepository {
-  constructor(private readonly db: Database) {}
+  /** {@link upsert} 用の INSERT（FR-08 AC-2: 呼び出しごとの prepare() を避ける）。 */
+  private readonly upsertStmt: PreparedStatement
+  /** {@link findById} 用の SELECT。 */
+  private readonly findByIdStmt: PreparedStatement
+  /** {@link findByDeviceAndPath} 用の SELECT。 */
+  private readonly findByDeviceAndPathStmt: PreparedStatement
+  /** {@link listActive} 用の SELECT。 */
+  private readonly listActiveStmt: PreparedStatement
+  /** {@link markRemoved} 用の UPDATE。 */
+  private readonly markRemovedStmt: PreparedStatement
+
+  constructor(db: Database) {
+    this.upsertStmt = db.prepare(
+      `INSERT INTO instances (id, project_id, device_id, path, branch, created_at, removed_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL)
+       ON CONFLICT(device_id, path) DO UPDATE SET
+         project_id = excluded.project_id,
+         branch = excluded.branch,
+         removed_at = NULL`
+    )
+    this.findByIdStmt = db.prepare('SELECT * FROM instances WHERE id = ?')
+    this.findByDeviceAndPathStmt = db.prepare(
+      'SELECT * FROM instances WHERE device_id = ? AND path = ?'
+    )
+    this.listActiveStmt = db.prepare(
+      'SELECT * FROM instances WHERE removed_at IS NULL ORDER BY created_at ASC, id ASC'
+    )
+    this.markRemovedStmt = db.prepare('UPDATE instances SET removed_at = ? WHERE id = ?')
+  }
 
   /**
    * (device_id, path) をキーに instance を冪等に upsert する。
@@ -50,16 +78,7 @@ export class InstanceRepository {
    * @returns 永続化後の {@link Instance}。
    */
   upsert(projectId: string, deviceId: string, path: string, branch: string | null): Instance {
-    this.db
-      .prepare(
-        `INSERT INTO instances (id, project_id, device_id, path, branch, created_at, removed_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL)
-         ON CONFLICT(device_id, path) DO UPDATE SET
-           project_id = excluded.project_id,
-           branch = excluded.branch,
-           removed_at = NULL`
-      )
-      .run(newId('inst'), projectId, deviceId, path, branch, epochMsNow())
+    this.upsertStmt.run(newId('inst'), projectId, deviceId, path, branch, epochMsNow())
     return this.findByDeviceAndPath(deviceId, path)!
   }
 
@@ -70,9 +89,7 @@ export class InstanceRepository {
    * @returns 見つかれば {@link Instance}、無ければ null。
    */
   findById(id: string): Instance | null {
-    const row = this.db.prepare('SELECT * FROM instances WHERE id = ?').get(id) as
-      | InstanceRow
-      | undefined
+    const row = this.findByIdStmt.get(id) as InstanceRow | undefined
     return row ? toInstance(row) : null
   }
 
@@ -84,9 +101,7 @@ export class InstanceRepository {
    * @returns 見つかれば {@link Instance}、無ければ null。
    */
   findByDeviceAndPath(deviceId: string, path: string): Instance | null {
-    const row = this.db
-      .prepare('SELECT * FROM instances WHERE device_id = ? AND path = ?')
-      .get(deviceId, path) as InstanceRow | undefined
+    const row = this.findByDeviceAndPathStmt.get(deviceId, path) as InstanceRow | undefined
     return row ? toInstance(row) : null
   }
 
@@ -96,9 +111,7 @@ export class InstanceRepository {
    * @returns アクティブな {@link Instance} の配列。
    */
   listActive(): Instance[] {
-    const rows = this.db
-      .prepare('SELECT * FROM instances WHERE removed_at IS NULL ORDER BY created_at ASC, id ASC')
-      .all() as unknown as InstanceRow[]
+    const rows = this.listActiveStmt.all() as unknown as InstanceRow[]
     return rows.map(toInstance)
   }
 
@@ -111,6 +124,6 @@ export class InstanceRepository {
    * @param at 削除時刻。省略時は現在時刻。
    */
   markRemoved(id: string, at: EpochMs = epochMsNow()): void {
-    this.db.prepare('UPDATE instances SET removed_at = ? WHERE id = ?').run(at, id)
+    this.markRemovedStmt.run(at, id)
   }
 }

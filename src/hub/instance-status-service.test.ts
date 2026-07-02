@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { openDatabase, type Database } from '../db/database.js'
+import { type Database, openDatabase } from '../db/database.js'
 import { DeviceRepository } from '../db/repositories/device-repository.js'
 import { EventRepository } from '../db/repositories/event-repository.js'
 import { InstanceRepository } from '../db/repositories/instance-repository.js'
 import { PrStatusRepository } from '../db/repositories/pr-status-repository.js'
 import { ProjectRepository } from '../db/repositories/project-repository.js'
 import { SessionRepository } from '../db/repositories/session-repository.js'
-import { toDurationMs, toEpochMs, type EpochMs } from '../domain/time.js'
+import { type EpochMs, toDurationMs, toEpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
 import type { RawEventPayload } from './dto.js'
 import { EventIngestionService } from './event-ingestion-service.js'
@@ -183,6 +183,13 @@ describe('InstanceStatusService.getInstanceDetail — Agent View Lv.1 (§8.2 / �
     expect(detail!.recent_events[2].event_type).toBe('SessionStart')
     // received_at is emitted as ISO8601 (§0.5 wire format).
     expect(detail!.recent_events[0].received_at).toBe(new Date(3_000_000).toISOString())
+    // FR-09 L2: each event carries a stable, distinct id (events.id) for CLI React keys.
+    const ids = detail!.recent_events.map((e) => e.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    // Insertion order was SessionStart, PostToolUse, Notification, so ids increase in that
+    // order; newest-first output must therefore be strictly descending.
+    expect(ids[0]).toBeGreaterThan(ids[1])
+    expect(ids[1]).toBeGreaterThan(ids[2])
   })
 
   it('returns null for an unknown instance id', () => {
