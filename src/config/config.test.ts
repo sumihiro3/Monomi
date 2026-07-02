@@ -34,6 +34,7 @@ describe('resolvePaths', () => {
       configFile: '/custom/root/config.yml',
       dbFile: '/custom/root/monomi.db',
       outboxDir: '/custom/root/outbox',
+      rejectedDir: '/custom/root/outbox/rejected',
       tokenFile: '/custom/root/token',
     })
   })
@@ -131,11 +132,38 @@ describe('parseConfig overrides', () => {
     expect(c.port).toBe(DEFAULT_PORT)
     expect(c).not.toHaveProperty('hub_url')
   })
+
+  it('parses a role: child config with hub_endpoints and bind (FR-01 AC-1)', () => {
+    const c = parseConfig({
+      role: 'child',
+      hub_endpoints: ['http://192.168.1.100:47632', 'http://100.64.0.1:47632'],
+      bind: '127.0.0.1',
+    })
+    expect(c.role).toBe('child')
+    expect(c.hubEndpoints).toEqual(['http://192.168.1.100:47632', 'http://100.64.0.1:47632'])
+    expect(c.bind).toBe('127.0.0.1')
+  })
+
+  it('leaves hub_endpoints and bind undefined when omitted', () => {
+    const c = parseConfig({})
+    expect(c.hubEndpoints).toBeUndefined()
+    expect(c.bind).toBeUndefined()
+  })
+
+  it('rejects a non-array hub_endpoints and non-string bind', () => {
+    expect(() => parseConfig({ hub_endpoints: 'http://x' })).toThrow(ZodError)
+    expect(() => parseConfig({ bind: 8080 })).toThrow(ZodError)
+  })
 })
 
 describe('parseConfig validation', () => {
-  it('rejects a non-hub role', () => {
-    expect(() => parseConfig({ role: 'child' })).toThrow(ZodError)
+  it('accepts role: child (FR-01 AC-1)', () => {
+    const c = parseConfig({ role: 'child' })
+    expect(c.role).toBe('child')
+  })
+
+  it('rejects an unknown role', () => {
+    expect(() => parseConfig({ role: 'satellite' })).toThrow(ZodError)
   })
 
   it('rejects an out-of-range port', () => {
@@ -176,6 +204,20 @@ describe('loadConfigFromYaml', () => {
 
   it('treats an empty yaml document as all defaults', () => {
     expect(loadConfigFromYaml('').port).toBe(DEFAULT_PORT)
+  })
+
+  it('parses a child config.yml with a hub_endpoints block sequence (FR-01 AC-1)', () => {
+    const yamlText = [
+      'role: child',
+      'bind: 0.0.0.0',
+      'hub_endpoints:',
+      '  - http://192.168.1.100:47632',
+      '  - http://100.64.0.1:47632',
+    ].join('\n')
+    const c = loadConfigFromYaml(yamlText)
+    expect(c.role).toBe('child')
+    expect(c.bind).toBe('0.0.0.0')
+    expect(c.hubEndpoints).toEqual(['http://192.168.1.100:47632', 'http://100.64.0.1:47632'])
   })
 })
 

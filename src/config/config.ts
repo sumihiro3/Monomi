@@ -9,6 +9,14 @@ export type { DurationMs }
 /** 待受ポートの既定値。未解決事項として本項目で確定（§非機能要件: localhost バインド）。 */
 export const DEFAULT_PORT = 47632
 
+/**
+ * config.yml のファイルパーミッション（`chmod 600` 相当 / §0.3・FR-01 AC-3）。
+ *
+ * child の config には device_token を書き込むため、所有者のみ読み書き可能にする。
+ * 規約を config レイヤーに一元化し、実際の書き込み（`monomi pair` = FR-02b）が参照する。
+ */
+export const CONFIG_FILE_MODE = 0o600
+
 /** 期間文字列の書式: 整数 + 単位（`ms`/`s`/`m`/`h`/`d`）。例 `500ms` `3s` `30m` `2h` `1d`。 */
 const DURATION_RE = /^(\d+)(ms|s|m|h|d)$/
 
@@ -57,14 +65,24 @@ export interface EscalationThresholdsConfig {
   prWait: DurationMs
 }
 
+/** hub / child の役割。`hub` は API サーバを起動する側、`child` はそこへ接続する側（§3.1）。 */
+export type MonomiRole = 'hub' | 'child'
+
 /** ロード・検証済みの Monomi 設定。 */
 export interface MonomiConfig {
-  /** v1 は `hub` 固定（child 解決ロジックは release-2）。 */
-  role: 'hub'
+  /** 役割。既定 `hub`。`child` の場合は {@link hubEndpoints} で到達先を指定する（FR-01）。 */
+  role: MonomiRole
   /** hub API の待受ポート。 */
   port: number
   /** device_id。未指定なら hub 起動時に hostname ベースで自動生成する（§9）。 */
   deviceId?: string
+  /**
+   * child が試行する hub 到達先候補（優先順）。`role: child` のとき必須（§0.2 / FR-04）。
+   * 各要素は `http://host:port` 形式の URL 文字列（例 LAN と Tailscale の2併記）。
+   */
+  hubEndpoints?: string[]
+  /** hub の待受バインドアドレスの上書き。既定 `0.0.0.0`（FR-06）。 */
+  bind?: string
   /** watch モードのポーリング間隔（ミリ秒）。既定 3s。 */
   watchIntervalMs: DurationMs
   /** 放置昇格閾値。 */
@@ -77,9 +95,17 @@ export interface MonomiConfig {
  * 未知キーは既定で除去され、release-2 で増えるフィールドと前方互換になる。
  */
 const rawConfigSchema = z.object({
-  role: z.literal('hub').default('hub'),
+  role: z.enum(['hub', 'child']).default('hub'),
   port: z.number().int().min(1).max(65535).default(DEFAULT_PORT),
   device_id: z.string().min(1).optional(),
+  // reporter（bash）は sed で行単位に読むため、YAML のブロックシーケンス記法
+  //   hub_endpoints:
+  //     - http://192.168.1.100:47632
+  //     - http://100.64.0.1:47632
+  // を採用する（`- ` プレフィックス + 1 行 1 URL）。フロー記法 `[a, b]` は使わない。
+  hub_endpoints: z.array(z.string()).optional(),
+  // hub の待受アドレス上書き。既定は serve 側の 0.0.0.0（FR-06）。
+  bind: z.string().optional(),
   watch_interval: durationSchema.prefault('3s'),
   escalation_thresholds: z
     .object({
@@ -100,6 +126,8 @@ function toMonomiConfig(raw: z.infer<typeof rawConfigSchema>): MonomiConfig {
     role: raw.role,
     port: raw.port,
     deviceId: raw.device_id,
+    hubEndpoints: raw.hub_endpoints,
+    bind: raw.bind,
     watchIntervalMs: raw.watch_interval,
     escalationThresholds: {
       active: raw.escalation_thresholds.active,

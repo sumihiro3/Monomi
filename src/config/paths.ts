@@ -16,6 +16,8 @@ export interface MonomiPaths {
   dbFile: string
   /** 送信失敗イベントの退避先ディレクトリ (`~/.monomi/outbox`, §0.2)。 */
   outboxDir: string
+  /** 4xx で恒久的に拒否されたイベントの隔離先 (`~/.monomi/outbox/rejected`, FR-07)。 */
+  rejectedDir: string
   /** ローカル用 device token の保存ファイル (`~/.monomi/token`, §0.3/§9)。 */
   tokenFile: string
 }
@@ -43,6 +45,7 @@ export function resolvePaths(home?: string): MonomiPaths {
     configFile: path.join(base, 'config.yml'),
     dbFile: path.join(base, 'monomi.db'),
     outboxDir: path.join(base, 'outbox'),
+    rejectedDir: path.join(base, 'outbox', 'rejected'),
     tokenFile: path.join(base, 'token'),
   }
 }
