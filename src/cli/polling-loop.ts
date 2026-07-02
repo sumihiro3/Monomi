@@ -11,6 +11,16 @@ export type InstancesListener = (rows: InstanceStatusRow[]) => void
 export type ErrorListener = (error: unknown) => void
 
 /**
+ * 到達先を再解決して新しい {@link HubApiClient} を返すファクトリ（watch 中フォールバック用 / #1・FR-05）。
+ *
+ * watch 中に接続先 hub が落ちて別エンドポイント（LAN → Tailscale 等）へ移った場合でも、
+ * 取得失敗を検知して到達先を選び直せるようにする。中身は {@link ../cli/hub-api-client.js} の
+ * `createHubConnection` が {@link HubEndpointResolver} 経由で組み立てる（層分離: {@link HubApiClient}
+ * 自体は baseUrl 非依存のまま保つ）。
+ */
+export type ReresolveClient = () => Promise<HubApiClient>
+
+/**
  * watch モードのポーリング制御（class-diagram §4 / §8.2）。
  *
  * SSE/WebSocket は使わず、`GET /api/v1/instances` を数秒おきに叩き直す単純ポーリング
@@ -24,14 +34,21 @@ export class PollingLoop {
   /** 進行中の取得があるかどうか。多重取得（前回未完了のまま次 tick）を抑止する。 */
   private inFlight = false
 
+  /** hub への読み取りクライアント。再解決フォールバックで差し替わり得るため readonly にしない。 */
+  private client: HubApiClient
+
   /**
    * @param client hub への読み取りクライアント。
    * @param intervalMs 既定のポーリング間隔（省略時 {@link DEFAULT_POLL_INTERVAL_MS}）。
+   * @param reresolve 取得失敗時に到達先を選び直すファクトリ（省略時は再解決しない / #1）。
    */
   constructor(
-    private readonly client: HubApiClient,
-    private readonly intervalMs: number = DEFAULT_POLL_INTERVAL_MS
-  ) {}
+    client: HubApiClient,
+    private readonly intervalMs: number = DEFAULT_POLL_INTERVAL_MS,
+    private readonly reresolve?: ReresolveClient
+  ) {
+    this.client = client
+  }
 
   /**
    * 取得成功リスナーを登録する。
@@ -55,7 +72,9 @@ export class PollingLoop {
    * 1 回だけ取得してリスナーへ配る（初期表示・手動更新用）。
    *
    * 進行中の取得がある場合は何もしない（多重取得の抑止）。失敗は例外を投げず
-   * error リスナーへ配る（ポーリングが 1 回の失敗で止まらないようにする）。
+   * error リスナーへ配る（ポーリングが 1 回の失敗で止まらないようにする）。失敗時に
+   * {@link ReresolveClient} が注入されていれば到達先を選び直して次 tick 以降のクライアントを
+   * 差し替える（watch 中に hub が別エンドポイントへ移っても追従する / #1）。
    *
    * @returns 取得と通知の完了を表す Promise。
    */
@@ -73,8 +92,29 @@ export class PollingLoop {
       for (const listener of this.errorListeners) {
         listener(error)
       }
+      await this.tryReresolve()
     } finally {
       this.inFlight = false
+    }
+  }
+
+  /**
+   * 取得失敗後に到達先を再解決し、成功したら内部クライアントを差し替える（#1・FR-05）。
+   *
+   * 再解決自体の失敗（全エンドポイント不達など）は握りつぶす。既存クライアントをそのまま保ち、
+   * 次 tick で通常の取得→error 通知フローへ戻す（ポーリングを止めない）。今 tick では差し替えた
+   * クライアントで再取得はせず、次 tick に委ねる（多重取得を避け、挙動を単純に保つ）。
+   *
+   * @returns 再解決の試行完了を表す Promise（失敗しても resolve する）。
+   */
+  private async tryReresolve(): Promise<void> {
+    if (this.reresolve === undefined) {
+      return
+    }
+    try {
+      this.client = await this.reresolve()
+    } catch {
+      // 再解決に失敗しても既存クライアントを維持して次 tick へ（フォールバックは best-effort）。
     }
   }
 

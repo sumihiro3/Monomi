@@ -86,8 +86,8 @@ export function DetailView({ client, row }: DetailViewProps): ReactElement {
         ) : events.length === 0 ? (
           <Text dimColor>(イベントがありません)</Text>
         ) : (
-          events.map((event, index) => (
-            <Text key={index} wrap="truncate-end">
+          events.map((event) => (
+            <Text key={event.id} wrap="truncate-end">
               <Text dimColor>{event.occurred_at} </Text>
               {event.event_type}
               {event.event_subtype !== null ? <Text dimColor> ({event.event_subtype})</Text> : null}

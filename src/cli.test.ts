@@ -20,6 +20,15 @@ function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
       })
     ),
     runHub: vi.fn(async () => {}),
+    loadRole: vi.fn(() => 'hub' as const),
+    listDevices: vi.fn(async () => []),
+    revokeDevice: vi.fn(async (deviceId: string) => ({
+      ok: true,
+      device_id: deviceId,
+      revoked: 0,
+    })),
+    hubPair: vi.fn(async () => {}),
+    childPair: vi.fn(async () => {}),
     runDashboard: vi.fn(async () => {}),
     log: vi.fn(),
     error: vi.fn(),
@@ -42,6 +51,148 @@ describe('run (CLI dispatch)', () => {
     expect(code).toBe(0)
     expect(deps.runHub).toHaveBeenCalledTimes(1)
     expect(deps.runDashboard).not.toHaveBeenCalled()
+  })
+
+  it('errors out when "hub" runs on a role:child device without starting the hub (FR-01 AC-2)', async () => {
+    const deps = makeDeps({ loadRole: vi.fn(() => 'child' as const) })
+    const code = await run(['hub'], deps)
+    expect(code).toBe(1)
+    expect(deps.runHub).not.toHaveBeenCalled()
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('role:child'))
+  })
+
+  it('routes "hub devices list" to listDevices and prints a table without starting the hub (FR-03 AC-1)', async () => {
+    const deps = makeDeps({
+      listDevices: vi.fn(async () => [
+        {
+          id: 'macmini',
+          name: 'macmini.local',
+          role: 'hub',
+          first_seen_at: '2026-07-02T00:00:00.000Z',
+          last_seen_at: '2026-07-02T06:13:20.000Z',
+          has_active_token: true,
+        },
+        {
+          id: 'macbook',
+          name: 'macbook.local',
+          role: 'child',
+          first_seen_at: '2026-07-02T01:00:00.000Z',
+          last_seen_at: '2026-07-02T05:00:00.000Z',
+          has_active_token: false,
+        },
+      ]),
+    })
+    const code = await run(['hub', 'devices', 'list'], deps)
+    expect(code).toBe(0)
+    expect(deps.listDevices).toHaveBeenCalledTimes(1)
+    expect(deps.runHub).not.toHaveBeenCalled()
+    const table = (deps.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+    expect(table).toContain('macmini')
+    expect(table).toContain('active')
+    expect(table).toContain('macbook')
+    expect(table).toContain('revoked')
+  })
+
+  it('does not apply the child guard to "hub devices list" (management client, not a server)', async () => {
+    const deps = makeDeps({ loadRole: vi.fn(() => 'child' as const) })
+    const code = await run(['hub', 'devices', 'list'], deps)
+    expect(code).toBe(0)
+    expect(deps.listDevices).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes "hub devices revoke <id>" to revokeDevice and logs the count (FR-03 AC-2)', async () => {
+    const deps = makeDeps({
+      revokeDevice: vi.fn(async (id: string) => ({ ok: true, device_id: id, revoked: 2 })),
+    })
+    const code = await run(['hub', 'devices', 'revoke', 'macbook'], deps)
+    expect(code).toBe(0)
+    expect(deps.revokeDevice).toHaveBeenCalledWith('macbook')
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('Revoked 2 token(s)'))
+  })
+
+  it('errors when "hub devices revoke" is missing the device_id (exit 1)', async () => {
+    const deps = makeDeps()
+    const code = await run(['hub', 'devices', 'revoke'], deps)
+    expect(code).toBe(1)
+    expect(deps.revokeDevice).not.toHaveBeenCalled()
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('device_id'))
+  })
+
+  it('routes "hub pair" to hubPair without starting the hub server (FR-02b)', async () => {
+    const deps = makeDeps()
+    const code = await run(['hub', 'pair'], deps)
+    expect(code).toBe(0)
+    expect(deps.hubPair).toHaveBeenCalledTimes(1)
+    expect(deps.runHub).not.toHaveBeenCalled()
+  })
+
+  it('does not apply the child guard to "hub pair" (client, not a server)', async () => {
+    const deps = makeDeps({ loadRole: vi.fn(() => 'child' as const) })
+    const code = await run(['hub', 'pair'], deps)
+    expect(code).toBe(0)
+    expect(deps.hubPair).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes "pair --code X" to childPair with the parsed code (FR-02b)', async () => {
+    const deps = makeDeps()
+    const code = await run(['pair', '--code', '482913'], deps)
+    expect(code).toBe(0)
+    expect(deps.childPair).toHaveBeenCalledWith({ code: '482913', hub: [] })
+  })
+
+  it('passes --hub through to childPair as a single-element array, supporting --flag=value form', async () => {
+    const deps = makeDeps()
+    const code = await run(['pair', '--code=482913', '--hub=http://100.64.1.2:47632'], deps)
+    expect(code).toBe(0)
+    expect(deps.childPair).toHaveBeenCalledWith({
+      code: '482913',
+      hub: ['http://100.64.1.2:47632'],
+    })
+  })
+
+  it('collects repeated --hub flags into an array, preserving CLI order as priority (#4)', async () => {
+    const deps = makeDeps()
+    const code = await run(
+      [
+        'pair',
+        '--code',
+        '482913',
+        '--hub',
+        'http://100.64.1.2:47632',
+        '--hub',
+        'http://192.168.1.100:47632',
+      ],
+      deps
+    )
+    expect(code).toBe(0)
+    expect(deps.childPair).toHaveBeenCalledWith({
+      code: '482913',
+      hub: ['http://100.64.1.2:47632', 'http://192.168.1.100:47632'],
+    })
+  })
+
+  it('errors when "pair" is missing --code (exit 1, childPair not called)', async () => {
+    const deps = makeDeps()
+    const code = await run(['pair'], deps)
+    expect(code).toBe(1)
+    expect(deps.childPair).not.toHaveBeenCalled()
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('--code'))
+  })
+
+  it('errors on an unknown pair option (exit 1)', async () => {
+    const deps = makeDeps()
+    const code = await run(['pair', '--code', 'x', '--frob', 'y'], deps)
+    expect(code).toBe(1)
+    expect(deps.childPair).not.toHaveBeenCalled()
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('--frob'))
+  })
+
+  it('errors on an unknown "hub" subcommand (exit 1)', async () => {
+    const deps = makeDeps()
+    const code = await run(['hub', 'frobnicate'], deps)
+    expect(code).toBe(1)
+    expect(deps.runHub).not.toHaveBeenCalled()
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('frobnicate'))
   })
 
   it('routes "install-hooks" to installHooks and logs a summary (FR-01)', async () => {

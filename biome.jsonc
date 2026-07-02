@@ -36,17 +36,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "preset": "recommended",
-      // 以下 2 ルールは Biome recommended では error だが、移行前の
-      // typescript-eslint recommended では未強制だった既存コードのパターン。
-      // 本 chore はロジック非変更のため error では lint ゲートが落ちる。
-      // 情報は残しつつゲートを通すため warn に緩和する（後日コード側で解消可）。
-      "correctness": {
-        "useExhaustiveDependencies": "warn"
-      },
-      "suspicious": {
-        "noArrayIndexKey": "warn"
-      }
+      "preset": "recommended"
     }
   }
 }

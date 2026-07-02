@@ -36,6 +36,7 @@ function makeDetail(row: InstanceStatusRow): InstanceDetail {
     ...row,
     recent_events: [
       {
+        id: 2,
         event_type: 'Notification',
         event_subtype: 'permission_prompt',
         tool_name: null,
@@ -44,6 +45,7 @@ function makeDetail(row: InstanceStatusRow): InstanceDetail {
         received_at: '2026-07-01T05:12:03.100Z',
       },
       {
+        id: 1,
         event_type: 'PostToolUse',
         event_subtype: null,
         tool_name: 'Bash',

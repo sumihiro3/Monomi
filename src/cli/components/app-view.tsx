@@ -1,10 +1,10 @@
 import { Box, Text, useApp, useInput } from 'ink'
-import { type ReactElement, useEffect, useRef, useState } from 'react'
+import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { InstanceStatusRow } from '../../hub/dto.js'
 import type { HubApiClient } from '../hub-api-client.js'
 import { InstanceListStore } from '../instance-list-store.js'
 import { KeyBindingController, type KeyBindingHost } from '../key-binding-controller.js'
-import { DEFAULT_POLL_INTERVAL_MS, PollingLoop } from '../polling-loop.js'
+import { DEFAULT_POLL_INTERVAL_MS, PollingLoop, type ReresolveClient } from '../polling-loop.js'
 import { FILTER_ORDER, type StatusFilter } from '../status-display.js'
 import { DetailView } from './detail-view.js'
 import { HelpOverlay } from './help-overlay.js'
@@ -17,6 +17,11 @@ export interface AppViewProps {
   client: HubApiClient
   /** watch モードのポーリング間隔（省略時 {@link DEFAULT_POLL_INTERVAL_MS}）。 */
   pollIntervalMs?: number
+  /**
+   * watch 中の取得失敗時に到達先を選び直す再解決ファクトリ（省略時は再解決しない / #1）。
+   * bin 実行では {@link ../hub-api-client.js} の `createHubConnection` が供給する。
+   */
+  reresolve?: ReresolveClient
 }
 
 /** 表示中のビュー。 */
@@ -42,6 +47,7 @@ type ViewMode = 'list' | 'detail'
 export function AppView({
   client,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
+  reresolve,
 }: AppViewProps): ReactElement {
   const { exit } = useApp()
 
@@ -53,13 +59,15 @@ export function AppView({
 
   const pollingRef = useRef<PollingLoop | null>(null)
   if (pollingRef.current === null) {
-    pollingRef.current = new PollingLoop(client, pollIntervalMs)
+    pollingRef.current = new PollingLoop(client, pollIntervalMs, reresolve)
   }
   const polling = pollingRef.current
 
   // 外部ミュータブル状態（store / polling）の変更を React へ伝えるための再描画トリガ。
+  // setVersion の setter 参照は不変なので useCallback で安定させ、useEffect の依存配列に
+  // 正しく載せられるようにする（FR-09 L1: useExhaustiveDependencies）。
   const [, setVersion] = useState(0)
-  const bump = (): void => setVersion((v) => v + 1)
+  const bump = useCallback((): void => setVersion((v) => v + 1), [])
 
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -79,8 +87,8 @@ export function AppView({
     })
     void polling.refresh()
     return () => polling.stop()
-    // store / polling は ref で安定。マウント時 1 回だけ配線する。
-  }, [store, polling])
+    // store / polling は ref で安定。bump は useCallback で安定。マウント時 1 回だけ配線する。
+  }, [store, polling, bump])
 
   const filteredRows = store.filtered()
   const lastIndex = Math.max(filteredRows.length - 1, 0)
