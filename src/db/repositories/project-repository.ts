@@ -59,7 +59,8 @@ export class ProjectRepository {
    */
   findById(id: string): Project | null {
     const row = this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as
-      ProjectRow | undefined
+      | ProjectRow
+      | undefined
     return row ? toProject(row) : null
   }
 
@@ -71,7 +72,8 @@ export class ProjectRepository {
    */
   findByKey(key: string): Project | null {
     const row = this.db.prepare('SELECT * FROM projects WHERE project_key = ?').get(key) as
-      ProjectRow | undefined
+      | ProjectRow
+      | undefined
     return row ? toProject(row) : null
   }
 }

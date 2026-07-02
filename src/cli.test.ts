@@ -5,16 +5,20 @@ import type { InstallHooksResult } from './install-hooks/install-hooks.js'
 /** テスト用の {@link CliDeps}。全ハンドラをモックにし、呼び出しの検証だけに専念する。 */
 function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
   return {
-    installHooks: vi.fn((): InstallHooksResult => ({
-      settingsPath: '/fake/settings.json',
-      added: 8,
-      removed: 0,
-    })),
-    uninstallHooks: vi.fn((): InstallHooksResult => ({
-      settingsPath: '/fake/settings.json',
-      added: 0,
-      removed: 8,
-    })),
+    installHooks: vi.fn(
+      (): InstallHooksResult => ({
+        settingsPath: '/fake/settings.json',
+        added: 8,
+        removed: 0,
+      })
+    ),
+    uninstallHooks: vi.fn(
+      (): InstallHooksResult => ({
+        settingsPath: '/fake/settings.json',
+        added: 0,
+        removed: 8,
+      })
+    ),
     runHub: vi.fn(async () => {}),
     runDashboard: vi.fn(async () => {}),
     log: vi.fn(),

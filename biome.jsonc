@@ -1,0 +1,52 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.2/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "src/**/*.ts",
+      "src/**/*.tsx",
+      "*.ts",
+      "*.js",
+      "!dist",
+      "!node_modules",
+      // .claude は Workflow tool 専用スクリプト（通常の JS/TS ソースではない）。
+      // .gitignore に .claude/ が無く useIgnoreFile では除外されないため、ここで明示除外する。
+      // Biome 2.2.0 以降、フォルダ除外は末尾 /** を付けない形式が正しい。
+      "!.claude",
+      "!pnpm-lock.yaml"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "semicolons": "asNeeded",
+      "quoteStyle": "single",
+      "trailingCommas": "es5"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      // 以下 2 ルールは Biome recommended では error だが、移行前の
+      // typescript-eslint recommended では未強制だった既存コードのパターン。
+      // 本 chore はロジック非変更のため error では lint ゲートが落ちる。
+      // 情報は残しつつゲートを通すため warn に緩和する（後日コード側で解消可）。
+      "correctness": {
+        "useExhaustiveDependencies": "warn"
+      },
+      "suspicious": {
+        "noArrayIndexKey": "warn"
+      }
+    }
+  }
+}

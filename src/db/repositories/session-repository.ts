@@ -81,7 +81,8 @@ export class SessionRepository {
    */
   findById(id: string): Session | null {
     const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(id) as
-      SessionRow | undefined
+      | SessionRow
+      | undefined
     return row ? toSession(row) : null
   }
 

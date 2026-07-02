@@ -61,7 +61,8 @@ export class DeviceRepository {
    */
   findById(id: string): Device | null {
     const row = this.db.prepare('SELECT * FROM devices WHERE id = ?').get(id) as
-      DeviceRow | undefined
+      | DeviceRow
+      | undefined
     return row ? toDevice(row) : null
   }
 

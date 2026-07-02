@@ -71,7 +71,8 @@ export class InstanceRepository {
    */
   findById(id: string): Instance | null {
     const row = this.db.prepare('SELECT * FROM instances WHERE id = ?').get(id) as
-      InstanceRow | undefined
+      | InstanceRow
+      | undefined
     return row ? toInstance(row) : null
   }
 

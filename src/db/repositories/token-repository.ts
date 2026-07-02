@@ -40,7 +40,8 @@ export class TokenRepository {
    */
   findByHash(hash: string): DeviceToken | null {
     const row = this.db.prepare('SELECT * FROM tokens WHERE token_hash = ?').get(hash) as
-      TokenRow | undefined
+      | TokenRow
+      | undefined
     return row ? toDeviceToken(row) : null
   }
 

@@ -8,17 +8,15 @@
     "monomi": "dist/cli.js"
   },
   "scripts": {
-    "lint": "eslint .",
-    "format:check": "prettier --check .",
+    "lint": "biome lint .",
+    "format:check": "biome format . && prettier --check \"**/*.{md,mdx}\"",
     "test": "vitest run",
     "build": "tsc -p tsconfig.json && chmod +x dist/cli.js"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.2",
     "@types/node": "^26.1.0",
     "@types/react": "^19.2.17",
-    "@typescript-eslint/eslint-plugin": "^8.19.0",
-    "@typescript-eslint/parser": "^8.19.0",
-    "eslint": "^9.17.0",
     "ink-testing-library": "^4.0.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2",
