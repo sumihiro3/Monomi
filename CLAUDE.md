@@ -11,13 +11,13 @@
 
 このプロジェクトは Claude Code の Workflow tool (dynamic workflows) による 6 ステップのリリースサイクルを採用しています。
 
-| # | ステップ | 実体 |
-|---|---|---|
-| 1 | 要件壁打ち | `/refine-requirements` → `docs/releases/release-N/requirements.md` |
-| 2 | 実装 (探索→設計→実装→検証) | `Workflow({name: "implement-feature", args: {release: "release-N"}})` |
-| 3 | 差分レビュー | `Workflow({name: "review-changes"})` |
-| 4 | ドキュメント同期 | `Workflow({name: "sync-docs", args: {release: "release-N"}})` |
-| 5 | リリース前検査 | `Workflow({name: "release-check"})` |
-| 6 | 論理単位コミット | `/logical-commits` (あれば) |
+| #   | ステップ                   | 実体                                                                  |
+| --- | -------------------------- | --------------------------------------------------------------------- |
+| 1   | 要件壁打ち                 | `/refine-requirements` → `docs/releases/release-N/requirements.md`    |
+| 2   | 実装 (探索→設計→実装→検証) | `Workflow({name: "implement-feature", args: {release: "release-N"}})` |
+| 3   | 差分レビュー               | `Workflow({name: "review-changes"})`                                  |
+| 4   | ドキュメント同期           | `Workflow({name: "sync-docs", args: {release: "release-N"}})`         |
+| 5   | リリース前検査             | `Workflow({name: "release-check"})`                                   |
+| 6   | 論理単位コミット           | `/logical-commits` (あれば)                                           |
 
 ワークフローは `.claude/workflows/`、コマンドは `.claude/commands/` にある。要件は `docs/releases/release-N/requirements.md` に確定させてから実装に進むこと。
