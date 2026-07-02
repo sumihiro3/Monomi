@@ -6,7 +6,6 @@ const HELP_LINES: ReadonlyArray<readonly [string, string]> = [
   ['1-5', '状態フィルタのトグル（複数選択可）'],
   ['j / k, ↑ / ↓', 'カーソル移動'],
   ['Enter', '詳細（Agent View Lv.1）を開く'],
-  ['w', 'watch モード ON/OFF'],
   ['esc', '戻る / ヘルプを閉じる'],
   ['?', 'ヘルプの表示/非表示'],
   ['q', '終了'],

@@ -137,27 +137,27 @@ describe('AppView — 一覧・フィルタ・watch・詳細（FR-05 AC-1〜AC-4
     await vi.waitFor(() => expect(lastFrame()).toContain('Monban'))
   })
 
-  it('AC-3: w で watch モードに入り、間隔ポーリングで一覧が更新される', async () => {
+  it('AC-3: watch モードは起動直後から常時 ON で、間隔ポーリングで一覧が更新される（FR-03 AC-1・AC-3）', async () => {
     const fake = new FakeHubApiClient([
       makeRow({ id: '1', projectName: 'ProjectLens', display: 'active', priority: 1 }),
     ])
-    const { lastFrame, stdin } = renderApp(fake, 30)
-    await vi.waitFor(() => expect(lastFrame()).toContain('ProjectLens'))
-    expect(lastFrame()).not.toContain('watching')
+    const { lastFrame } = renderApp(fake, 30)
 
-    stdin.write('w')
-    await vi.waitFor(() => expect(lastFrame()).toContain('watching'))
+    // 起動直後から watch ON（FR-03 AC-1/AC-3）。初回全件表示（FR-05 AC-1）も維持される。
+    await vi.waitFor(() => {
+      expect(lastFrame()).toContain('ProjectLens')
+      expect(lastFrame()).toContain('watching')
+    })
 
-    // watch 有効化後にサーバ側データが増えると、次のポーリングで一覧へ反映される。
+    // 稼働中のポーリングでサーバ側データが増えると、次のポーリングで一覧へ反映される。
     fake.instances = [
       ...fake.instances,
       makeRow({ id: '2', projectName: 'Monban', display: 'approval_wait', priority: 4 }),
     ]
     await vi.waitFor(() => expect(lastFrame()).toContain('Monban'), { timeout: 2000 })
 
-    // 停止も冪等に効く（もう一度 w）。
-    stdin.write('w')
-    await vi.waitFor(() => expect(lastFrame()).not.toContain('watching'))
+    // 手動での OFF トグルは持たない（FR-03 AC-2 撤回）。フッターにも w watch は出ない。
+    expect(lastFrame()).not.toContain('w watch')
   })
 
   it('AC-4: Enter で選択 instance の直近イベントタイムラインを表示する', async () => {
@@ -185,5 +185,73 @@ describe('AppView — 一覧・フィルタ・watch・詳細（FR-05 AC-1〜AC-4
     // 詳細ヘッダにブランチと戻り方が出る。
     expect(lastFrame()).toContain('feature/ai-sidecar')
     expect(lastFrame()).toContain('[esc] back')
+  })
+})
+
+describe('AppView — 詳細ビュー中のショートカットヒント切替と無効化（FR-04）', () => {
+  it('一覧表示中と詳細表示中でフッターのヒントが切り替わる', async () => {
+    const target = makeRow({
+      id: '1',
+      projectName: 'ProjectLens',
+      display: 'approval_wait',
+      priority: 4,
+    })
+    const fake = new FakeHubApiClient([target])
+    fake.details.set(target.instance_id, makeDetail(target))
+
+    const { lastFrame, stdin } = renderApp(fake)
+    await vi.waitFor(() => expect(lastFrame()).toContain('ProjectLens'))
+
+    // 一覧表示中: フィルタ・移動・detail・watch(廃止済み)を含む一覧向けヒント。
+    expect(lastFrame()).toContain('1-5 filter')
+    expect(lastFrame()).toContain('j/k')
+    expect(lastFrame()).not.toContain('w watch')
+
+    stdin.write('\r') // Enter → 詳細
+    await vi.waitFor(() => expect(lastFrame()).toContain('recent events'))
+
+    // 詳細表示中: esc/help/quit のみのヒントに切り替わり、一覧向けヒントは出ない。
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).not.toContain('1-5 filter')
+      expect(frame).not.toContain('j/k')
+      expect(frame).toContain('esc back')
+      expect(frame).toContain('? help')
+      expect(frame).toContain('q quit')
+    })
+  })
+
+  it('詳細表示中はフィルタ・カーソル移動キーが無視される（誤操作防止）', async () => {
+    const rowA = makeRow({ id: '1', projectName: 'ProjectLens', display: 'active', priority: 1 })
+    const rowB = makeRow({
+      id: '2',
+      projectName: 'Monban',
+      display: 'approval_wait',
+      priority: 4,
+    })
+    const fake = new FakeHubApiClient([rowA, rowB])
+    fake.details.set(rowA.instance_id, makeDetail(rowA))
+
+    const { lastFrame, stdin } = renderApp(fake)
+    await vi.waitFor(() => expect(lastFrame()).toContain('ProjectLens'))
+
+    stdin.write('\r') // Enter → rowA（先頭選択）の詳細を開く
+    await vi.waitFor(() => expect(lastFrame()).toContain('recent events'))
+
+    // 詳細表示中に 1（フィルタ）・j（カーソル移動）を押しても無視される。
+    // 何も視覚的に変化しない操作なので vi.waitFor では待てず、実際に処理される時間を空ける。
+    stdin.write('1')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    stdin.write('j')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(lastFrame()).toContain('recent events') // 詳細表示のままで変化なし
+
+    stdin.write(String.fromCharCode(27)) // esc で一覧へ戻る
+    // 'ProjectLens' は詳細ビューの見出しにも出るため判定に使わない（一覧固有の 'recent events'
+    // 不在で判定する）。
+    await vi.waitFor(() => expect(lastFrame()).not.toContain('recent events'))
+
+    // フィルタが適用されていれば approval_wait の Monban は消えているはず。無視されたので両方残る。
+    expect(lastFrame()).toContain('Monban')
   })
 })

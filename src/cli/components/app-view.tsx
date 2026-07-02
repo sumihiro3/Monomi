@@ -3,7 +3,11 @@ import { type ReactElement, useCallback, useEffect, useRef, useState } from 'rea
 import type { InstanceStatusRow } from '../../hub/dto.js'
 import type { HubApiClient } from '../hub-api-client.js'
 import { InstanceListStore } from '../instance-list-store.js'
-import { KeyBindingController, type KeyBindingHost } from '../key-binding-controller.js'
+import {
+  KeyBindingController,
+  type KeyBindingHost,
+  type ViewMode,
+} from '../key-binding-controller.js'
 import { DEFAULT_POLL_INTERVAL_MS, PollingLoop, type ReresolveClient } from '../polling-loop.js'
 import { FILTER_ORDER, type StatusFilter } from '../status-display.js'
 import { DetailView } from './detail-view.js'
@@ -24,9 +28,6 @@ export interface AppViewProps {
   reresolve?: ReresolveClient
 }
 
-/** 表示中のビュー。 */
-type ViewMode = 'list' | 'detail'
-
 /**
  * CLI のルートコンテナ（class-diagram §4 / FR-05）。
  *
@@ -35,11 +36,14 @@ type ViewMode = 'list' | 'detail'
  * store と polling は再描画で作り直さないよう ref に保持し、外部ミュータブル状態の変更後は
  * version カウンタで再描画をトリガする。status 導出・優先順位は一切持たない（§0.5）。
  *
- * 挙動（FR-05 AC-1〜AC-4）:
- * - マウント時に 1 回だけ取得して全 instance を一覧表示（AC-1）
- * - `1`–`5` で状態フィルタをトグル（AC-2）
- * - `w` で watch モード（間隔ポーリング）ON/OFF（AC-3）
- * - `Enter` で選択 instance の直近イベントタイムラインを表示（AC-4）
+ * 挙動（FR-05 AC-1〜AC-4 / FR-03 AC-1・AC-3 / FR-04）:
+ * - マウント時に watch モード（間隔ポーリング）を常時 ON で開始し、その中の即時取得で
+ *   全 instance を一覧表示（FR-05 AC-1・FR-03 AC-1/AC-3）。手動での OFF トグルは持たない
+ *   （FR-03 AC-2 撤回）
+ * - `1`–`5` で状態フィルタをトグル（AC-2）。一覧表示中のみ有効（FR-04）
+ * - `Enter` で選択 instance の直近イベントタイムラインを表示（AC-4）。詳細表示中はフッターの
+ *   ショートカットヒントが専用の内容へ切り替わり、フィルタ・移動・詳細を開く操作は無視される
+ *   （FR-04）
  *
  * @param props {@link AppViewProps}。
  * @returns CLI ルートの要素。
@@ -57,9 +61,14 @@ export function AppView({
   }
   const store = storeRef.current
 
-  const pollingRef = useRef<PollingLoop | null>(null)
+  const pollingRef = useRef<PollingLoop<InstanceStatusRow[]> | null>(null)
   if (pollingRef.current === null) {
-    pollingRef.current = new PollingLoop(client, pollIntervalMs, reresolve)
+    pollingRef.current = new PollingLoop(
+      (c) => c.listInstances(),
+      client,
+      pollIntervalMs,
+      reresolve
+    )
   }
   const polling = pollingRef.current
 
@@ -85,7 +94,9 @@ export function AppView({
       setError(String(err))
       bump()
     })
-    void polling.refresh()
+    // watch モードを既定 ON にする（FR-03 AC-1/AC-3）。start() は内部で即時 refresh() を
+    // 実行するため、初回全件表示（AC-1）は維持したまま起動直後から isRunning()===true になる。
+    polling.start()
     return () => polling.stop()
     // store / polling は ref で安定。bump は useCallback で安定。マウント時 1 回だけ配線する。
   }, [store, polling, bump])
@@ -128,15 +139,19 @@ export function AppView({
       exit()
     },
   }
-  const controller = new KeyBindingController(store, polling, host)
+  const controller = new KeyBindingController(store, host)
 
   useInput((input, key) => {
-    controller.handleKey(input, {
-      upArrow: key.upArrow,
-      downArrow: key.downArrow,
-      return: key.return,
-      escape: key.escape,
-    })
+    controller.handleKey(
+      input,
+      {
+        upArrow: key.upArrow,
+        downArrow: key.downArrow,
+        return: key.return,
+        escape: key.escape,
+      },
+      viewMode
+    )
     bump()
   })
 
@@ -156,7 +171,7 @@ export function AppView({
 
       {viewMode === 'detail' && detailRow !== null ? (
         <Box marginTop={1}>
-          <DetailView client={client} row={detailRow} />
+          <DetailView client={client} row={detailRow} pollIntervalMs={pollIntervalMs} />
         </Box>
       ) : (
         <Box flexDirection="column" marginTop={1}>
@@ -175,10 +190,25 @@ export function AppView({
       ) : null}
 
       <Box marginTop={1}>
-        <Text dimColor>1-5 filter j/k ↑↓ move ↵ detail esc back w watch ? help q quit</Text>
+        <Text dimColor>{footerHint(viewMode)}</Text>
       </Box>
     </Box>
   )
+}
+
+/**
+ * フッターのショートカットヒントを表示中のビューに応じて切り替える（FR-04）。
+ *
+ * 詳細ビューではフィルタ・カーソル移動・詳細を開く操作を受け付けない（{@link KeyBindingController}
+ * 側でも無視される）ため、それらのヒントを出さない。
+ *
+ * @param viewMode 現在表示中のビュー。
+ * @returns フッターに表示するヒント文字列。
+ */
+function footerHint(viewMode: ViewMode): string {
+  return viewMode === 'detail'
+    ? 'esc back ? help q quit'
+    : '1-5 filter j/k ↑↓ move ↵ detail esc back ? help q quit'
 }
 
 /**

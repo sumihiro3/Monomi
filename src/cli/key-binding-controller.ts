@@ -1,6 +1,13 @@
 import type { InstanceListStore } from './instance-list-store.js'
-import type { PollingLoop } from './polling-loop.js'
 import { filterForKey } from './status-display.js'
+
+/**
+ * 表示中のビュー（AppView の React state と同じ語彙）。
+ *
+ * KeyBindingController はこれを state としては持たず、{@link KeyBindingController.handleKey}
+ * の引数として都度受け取るだけ（薄い写像を保つ）。
+ */
+export type ViewMode = 'list' | 'detail'
 
 /**
  * Ink の `Key` のうち本 CLI が参照するフラグだけを抜き出した最小形。
@@ -37,24 +44,27 @@ export interface KeyBindingHost {
 /**
  * キー入力をアクションへ写すコントローラ（class-diagram §4 / §10.3）。
  *
- * release-1 の対象キーのみを扱う（AC-5: ファジー検索 `/`・ソート `s`・デバイス循環 `d` は含めない）:
+ * release-1 の対象キーのみを扱う（AC-5: ファジー検索 `/`・ソート `s`・デバイス循環 `d` は含めない）。
+ * watch モードは release-4 で常時 ON に変更されたため、トグル用のキーは持たない。
+ *
+ * `viewMode` が `'list'` のときのみ、フィルタ・カーソル移動・詳細を開く操作を受け付ける
+ * （詳細表示中にこれらを裏で実行すると、一覧に戻った際の状態が誤操作で変わってしまうため）:
  * - `1`–`5`: 状態フィルタのトグル（{@link InstanceListStore.toggleFilter}、複数選択可）
- * - `w`: watch モードの ON/OFF（{@link PollingLoop} の start/stop）
  * - `j`/`k` と `↑`/`↓`: カーソル移動（vim 流・矢印両対応）
  * - `Enter`: 詳細（Agent View Lv.1）を開く
- * - `esc`: 戻る、`?`: ヘルプ、`q`: 終了
+ *
+ * `viewMode` によらず常に有効:
+ * - `esc`: 戻る（ヘルプを閉じる／詳細から一覧へ）、`?`: ヘルプ、`q`: 終了
  *
  * View 状態（選択位置・モード）を持たず、判断ロジックも持たない薄い写像に徹する。
  */
 export class KeyBindingController {
   /**
    * @param store フィルタ操作の対象。
-   * @param polling watch モードの制御対象。
    * @param host 画面遷移・選択移動の受け口。
    */
   constructor(
     private readonly store: InstanceListStore,
-    private readonly polling: PollingLoop,
     private readonly host: KeyBindingHost
   ) {}
 
@@ -63,32 +73,31 @@ export class KeyBindingController {
    *
    * @param input `useInput` が渡す入力文字（矢印・Enter・esc では空文字）。
    * @param key 参照するキーフラグ。
+   * @param viewMode 現在表示中のビュー。`'detail'` 中はフィルタ・移動・詳細操作を無視する。
    */
-  handleKey(input: string, key: KeyFlags): void {
-    const filter = filterForKey(input)
-    if (filter !== null) {
-      this.store.toggleFilter(filter)
-      return
+  handleKey(input: string, key: KeyFlags, viewMode: ViewMode): void {
+    if (viewMode === 'list') {
+      const filter = filterForKey(input)
+      if (filter !== null) {
+        this.store.toggleFilter(filter)
+        return
+      }
+
+      if (input === 'j' || key.downArrow) {
+        this.host.moveSelection(1)
+        return
+      }
+      if (input === 'k' || key.upArrow) {
+        this.host.moveSelection(-1)
+        return
+      }
+
+      if (key.return) {
+        this.host.openDetail()
+        return
+      }
     }
 
-    if (input === 'w') {
-      this.toggleWatch()
-      return
-    }
-
-    if (input === 'j' || key.downArrow) {
-      this.host.moveSelection(1)
-      return
-    }
-    if (input === 'k' || key.upArrow) {
-      this.host.moveSelection(-1)
-      return
-    }
-
-    if (key.return) {
-      this.host.openDetail()
-      return
-    }
     if (key.escape) {
       this.host.back()
       return
@@ -99,15 +108,6 @@ export class KeyBindingController {
     }
     if (input === 'q') {
       this.host.quit()
-    }
-  }
-
-  /** watch モードをトグルする（稼働中なら停止、停止中なら開始）。 */
-  private toggleWatch(): void {
-    if (this.polling.isRunning()) {
-      this.polling.stop()
-    } else {
-      this.polling.start()
     }
   }
 }
