@@ -11,7 +11,7 @@ description: リリース要件の壁打ち。対話で要件を固め、docs/re
 
 ## 進め方
 
-1. **現状把握**: プロジェクトの README / 要件書 (あれば) と、対象リリースの既存ドラフト (あれば `docs/releases/release-N/requirements.md`) を読む。関連する実装の現状は `ARCHITECTURE.md`(必要に応じて `docs/design/class-diagram.md`)から探索する
+1. **現状把握**: プロジェクトの README / 要件書 (あれば) と、対象リリースの既存ドラフト (あれば `docs/releases/release-N/requirements.md`) を読む。関連する実装の現状は `docs/ARCHITECTURE.md`(必要に応じて `docs/design/class-diagram.md`)から探索する
 2. **壁打ち(対話)**: AskUserQuestion を使い、以下を1テーマずつ詰める。一度に全部聞かない:
    - 解決したい課題と成功基準(誰が・何に困っていて・どうなれば成功か)
    - スコープ(今回やること / 明示的にやらないこと)

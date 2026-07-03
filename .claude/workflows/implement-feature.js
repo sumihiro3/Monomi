@@ -62,7 +62,7 @@ const target = reqPath
 // {PLACEHOLDER}: プロジェクトの規約ドキュメントに置き換えること。
 // ARCHITECTURE.md は単一ファイルでも、複数層構成なら「docs/architecture/backend.md と
 // docs/architecture/frontend.md」のように複数パスを列挙してもよい。
-const RULES = 'リポジトリは /opt/dev/Monomi。CLAUDE.md と ARCHITECTURE.md の規約に従うこと。'
+const RULES = 'リポジトリは /opt/dev/Monomi。CLAUDE.md と docs/ARCHITECTURE.md の規約に従うこと。'
 
 phase('探索')
 const [reqSummary, codeMap] = await parallel([

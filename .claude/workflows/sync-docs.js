@@ -33,12 +33,12 @@ const diffSummary = await agent(
 
 // {PLACEHOLDER}: 同期先ドキュメントをプロジェクトに合わせて増減すること。
 // Obsidian Vault 等の外部ノートを同期する場合は {VAULT_OVERVIEW_PATH} を実パスに置換 (不要なら該当ブロックごと削除)。
-// monomi-handoff.md は凍結済み(設計経緯の記録)のため同期対象外。REQUIREMENTS.md も機能軸サマリーの安定性を優先し対象外(未解決事項として留保)。
+// docs/monomi-handoff.md は凍結済み(設計経緯の記録)のため同期対象外。docs/REQUIREMENTS.md も機能軸サマリーの安定性を優先し対象外(未解決事項として留保)。
 phase('同期')
 const updates = await parallel([
   () =>
     agent(
-      `${REPO}以下の変更要約をもとに ARCHITECTURE.md を実装に同期してください。乖離がなければ変更しないこと。\n\n## 変更要約\n${diffSummary}`,
+      `${REPO}以下の変更要約をもとに docs/ARCHITECTURE.md を実装に同期してください。乖離がなければ変更しないこと。\n\n## 変更要約\n${diffSummary}`,
       { label: 'architecture更新', phase: '同期', model: 'sonnet' }
     ),
   () =>

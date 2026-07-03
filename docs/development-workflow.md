@@ -38,10 +38,10 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 
 - スクリプト: `.claude/workflows/sync-docs.js`
 - 実装差分を各ドキュメントへ同期する。Monomi での同期対象は次の通り。
-  - `ARCHITECTURE.md`（設計の権威仕様）
+  - `docs/ARCHITECTURE.md`（設計の権威仕様）
   - `README.md`（ユーザーに見える機能・セットアップ手順）
   - `docs/design/class-diagram.md`（クラス設計）
-- `REQUIREMENTS.md` は「機能軸の現状サマリー」であり細かな release 差分で揺らさないため、sync-docs の同期対象には**含めない**。
+- `docs/REQUIREMENTS.md` は「機能軸の現状サマリー」であり細かな release 差分で揺らさないため、sync-docs の同期対象には**含めない**。
 - 乖離がなければ各ドキュメントは変更しない。
 
 ### 5. リリース前検査 — `release-check`
@@ -56,7 +56,7 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 | test   | `pnpm run test`         | `vitest run`                                              |
 | build  | `pnpm run build`        | `tsc -p tsconfig.json` ＋ `chmod +x dist/cli.js`          |
 
-- `format:check` が 2 系統に分かれているのは、Biome が Markdown 整形に未対応で md は Prettier が担うため（`release-2-biome-migration` の決定）。`.claude/` と `monomi-handoff.md` は整形対象外（それぞれ Biome / Prettier の ignore 設定）。
+- `format:check` が 2 系統に分かれているのは、Biome が Markdown 整形に未対応で md は Prettier が担うため（`release-2-biome-migration` の決定）。`.claude/` と `docs/monomi-handoff.md` は整形対象外（それぞれ Biome / Prettier の ignore 設定）。
 
 ### 6. 論理単位コミット — `/logical-commits`
 
@@ -108,9 +108,9 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 
 | ドキュメント                    | 役割                                              |
 | ------------------------------- | ------------------------------------------------- |
-| `ARCHITECTURE.md`               | 現行アーキテクチャの権威仕様                      |
-| `REQUIREMENTS.md`               | 機能軸の現状要件サマリー                          |
+| `docs/ARCHITECTURE.md`          | 現行アーキテクチャの権威仕様                      |
+| `docs/REQUIREMENTS.md`          | 機能軸の現状要件サマリー                          |
 | `docs/design/class-diagram.md`  | クラス設計                                        |
 | `docs/known-issues.md`          | 既知の課題（レビュー由来のバックログ）            |
-| `monomi-handoff.md`             | 凍結した設計経緯（命名決定・要求の背景など）      |
+| `docs/monomi-handoff.md`        | 凍結した設計経緯（命名決定・要求の背景など）      |
 | `release-workflow-template.zip` | ワークフローテンプレートの導入手順（同梱 README） |

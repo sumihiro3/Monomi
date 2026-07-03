@@ -71,7 +71,7 @@ const DIMENSIONS = [
   },
   {
     key: 'arch',
-    prompt: `${DIFF}\nアーキテクチャ規約のレビュー: ARCHITECTURE.md を読み、規約違反(責務分離、命名規則、型安全性など)を探してください。`,
+    prompt: `${DIFF}\nアーキテクチャ規約のレビュー: docs/ARCHITECTURE.md を読み、規約違反(責務分離、命名規則、型安全性など)を探してください。`,
   },
   {
     key: 'security',
