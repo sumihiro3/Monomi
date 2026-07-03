@@ -1,6 +1,6 @@
 # Monomi v1 — クラス図
 
-[`ARCHITECTURE.md`](../../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜4 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
+[`ARCHITECTURE.md`](../../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜6 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
 
 **方針**: 独自ロジックが複雑になる箇所（project_key 正規化・status 導出）は god class にせず、責務ごとに値オブジェクト／ドメインサービス／モジュール関数へ分解する。Hub API は Controller（薄い）→ UseCase/Service（業務ロジック）→ Repository（永続化）の 3 層に分離し、Controller に業務ロジックを書かない。CLI は表示・入力処理に専念し、状態導出ロジックを一切持たない。エンティティ・DTO・状態は TS の `interface`／判別ユニオンで表し、振る舞いは別のドメインサービス・モジュール関数に置く（データと振る舞いの分離）。
 
@@ -562,6 +562,8 @@ classDiagram
     <<interface>>
     +bool upArrow
     +bool downArrow
+    +bool leftArrow
+    +bool rightArrow
     +bool return
     +bool escape
   }
@@ -571,6 +573,7 @@ classDiagram
     +openDetail() void
     +back() void
     +toggleHelp() void
+    +moveProject(delta: int) void
     +quit() void
   }
   class KeyBindingController {
@@ -609,6 +612,44 @@ classDiagram
   }
   class HelpOverlay {
     <<ui component (presentational)>>
+    +HELP_OVERLAY_ROWS int$
+  }
+  class BoxBorder {
+    <<module (box-border.ts, release-6)>>
+    +displayWidth(text: string) int$
+    +resolveBoxWidth(columns: int, isTTY: bool) int$
+    +topBorderWithTitle(width: int, title: string) string$
+    +bottomBorderWithLabel(width: int, label: string) string$
+  }
+  class EventScroll {
+    <<module (event-scroll.ts, release-6)>>
+    +DETAIL_RESERVED_ROWS int$
+    +visibleRowsForHeight(rows: int, isTTY: bool, reserved: int) int$
+    +clampOffset(total: int, visible: int, offset: int) int$
+    +offsetForBottom(total: int, visible: int) int$
+    +isAtBottom(total: int, visible: int, offset: int) bool$
+    +windowForOffset(total: int, visible: int, offset: int) ScrollWindow$
+    +wrapAwareWindowForTexts(texts, contentWidth, visible, offset) ScrollWindow$
+    +hardLineAwareWindowForTexts(texts, visible, offset) ScrollWindow$
+  }
+  class ScrollWindow {
+    <<interface>>
+    +int startIndex
+    +int endIndex
+    +int visibleCount
+    +string rangeLabel
+    +int startSkipHardLines
+    +int endSkipHardLines
+  }
+  class TerminalTitle {
+    <<module (terminal-title.ts, release-6 FR-09)>>
+    +DEFAULT_TERMINAL_TITLE string$
+    +setTerminalTitle(stdout: WritableStream, title: string) void$
+  }
+  class SanitizeDisplayText {
+    <<module (sanitize-display-text.ts)>>
+    +sanitizeDisplayText(text: string) string$
+    +sanitizeNullableDisplayText(text: string_or_null) string_or_null$
   }
 
   HubEndpointResolver ..> HubEndpointOps
@@ -640,6 +681,13 @@ classDiagram
   DetailView ..> HubApiClient : fetches detail
   DetailView ..> PollingLoop : polls detail
   DetailView ..> StatusDisplay
+  DetailView ..> BoxBorder : layout
+  DetailView ..> EventScroll : scroll window
+  EventScroll ..> BoxBorder : displayWidth
+  EventScroll ..> ScrollWindow : returns
+  DetailView ..> SanitizeDisplayText
+  AppView ..> TerminalTitle : FR-09
+  TerminalTitle ..> SanitizeDisplayText : sanitizeDisplayText
   PairingClient ..> HubApiClient
   PairingClient ..> Network : buildCandidateUrls
   PairingClient ..> ConfigWriter : writeChildPairingConfig
@@ -657,59 +705,64 @@ classDiagram
 - `InstanceListStore` は取得結果とフィルタ状態のみを保持し、`filtered()`/`projectRows()`（`ClientRollup` 委譲）を提供する。`ClientRollup` は hub が返す numeric priority を `max()` するだけで、優先順位の意味は解釈しない。
 - View は Container（`AppView`／`DetailView`: 状態と API 呼び出しを持つ）と Presentational（`InstanceCard`／`StatusFilterBar`／`HelpOverlay`: props を描くだけ）に分離。`AppView` は 1 instance = 1 枚の `InstanceCard` を `InstanceTable`（列数は `CardGrid.columnsForWidth` が端末幅と TTY 判定で決定）で並べる。`DetailView` は自前で `PollingLoop<InstanceDetail>` を張り、`pollIntervalMs` 間隔で `getInstanceDetail` を呼び直して status/イベントタイムラインを自動更新し、アンマウントで確実に停止する。
 - 表示語彙（ラベル・色・グリフ・経過時間・フィルタキー対応）は `StatusDisplay`（`status-display.ts`）に集約し、status 導出・優先順位ロジックは CLI に一切持たない。すべて hub 側 `StatusDeriver`／`InstanceStatusRollup` の責務。
+- release-6 で `DetailView` 用に追加された 4 モジュールは、いずれも React に依存しない純粋関数モジュール（`CardGrid` と同じ思想）。`BoxBorder`（`box-border.ts`）は表示幅計算・タイトル/範囲ラベル埋め込み罫線の生成、`EventScroll`（`event-scroll.ts`）は端末高さ→表示行数・スクロールウィンドウの算出（`DETAIL_RESERVED_BREAKDOWN` の各定数値は AppView/DetailView の JSX 行構成と手動同期が必要な暗黙結合を持つ点に注意）、`TerminalTitle`（`terminal-title.ts`）はターミナルのタブ/ウィンドウタイトル設定（OSC 0）、`SanitizeDisplayText`（`sanitize-display-text.ts`）はレポーター由来の自由記述からの ANSI/制御文字除去を担う。4 モジュールは独立ではなく、`EventScroll` は折り返し幅の見積もりに `BoxBorder.displayWidth`（East Asian Wide 対応の表示桁数計算）を再利用し、`TerminalTitle` はタイトル本文のサニタイズに `SanitizeDisplayText.sanitizeDisplayText` を再利用する（ANSI/制御文字除去ロジックの二重実装を避ける）。
 
 ---
 
 ## 責任分解の一覧表
 
-| クラス / モジュール                                                         | レイヤー      | 種別                               | 責務                                                                |
-| --------------------------------------------------------------------------- | ------------- | ---------------------------------- | ------------------------------------------------------------------- |
-| ProjectKey                                                                  | domain-model  | interface (value object)           | 正規化済みプロジェクト識別子（value + kind）を保持                  |
-| ProjectKeyKind / DeviceRole / EventType                                     | domain-model  | enum                               | 種別の列挙（判別ユニオン）                                          |
-| ProjectKeyOps                                                               | domain-model  | module (project-key.ts)            | ProjectKey の生成・種別判定・等価比較の関数群                       |
-| ProjectKeyNormalizer                                                        | domain-model  | domain service                     | git remote の表記ゆれを吸収し ProjectKey を生成する唯一の実装       |
-| NormalizeContext                                                            | domain-model  | interface (value object)           | 正規化に必要な文脈（device_id, cwd, isGitRepo, commonDir）          |
-| DeviceId                                                                    | domain-model  | module (device-id.ts)              | hostname から device_id を派生（`deriveDeviceId`）                  |
-| Device / Project / Instance / Session / Event / DeviceToken / PrStatus      | domain-model  | entity (interface)                 | §7.3 DDL に対応する永続エンティティ（データのみ）                   |
-| EpochMs / DurationMs                                                        | domain-model  | branded number                     | 時刻・期間の取り違え防止のためのブランド型                          |
-| RawState / DisplayStatus                                                    | status-engine | enum                               | 内部状態／表示状態の列挙                                            |
-| RepresentedStatus                                                           | status-engine | type alias                         | DisplayStatus ＋ CLOSED（優先度計算・分類結果の型）                 |
-| RawStateRules                                                               | status-engine | module (raw-state-resolver.ts)     | イベント → raw_state 写像、状態イベントの降順抽出・比較関数         |
-| RawStateResolver                                                            | status-engine | domain service                     | 降順イベント列の先頭から raw_state を返す薄いラッパ                 |
-| StateTransition / StateTransitionFinder                                     | status-engine | value object / domain service      | 現在 raw_state 連続区間の開始時刻を特定                             |
-| RunBoundaryScanner                                                          | status-engine | module (run-boundary-scanner.ts)   | 1 ページを走査し現在 run の状態境界を検出（ページング打ち切り判断） |
-| EscalationThresholdValues / EscalationThresholds                            | status-engine | value object                       | raw_state 別の放置昇格閾値（既定 2h/6h/24h/72h、config 上書き可）   |
-| EscalationPolicy                                                            | status-engine | domain service                     | 放置（STALE）への昇格判定、PR 待ち条件を含む                        |
-| StatusPriority                                                              | status-engine | domain service                     | 表示ステータス優先順位の数値化・比較（`higherOf`）の唯一の場所      |
-| StatusResult                                                                | status-engine | interface (value object)           | 1 session/instance の最終ステータス（`createStatusResult` で凍結）  |
-| StatusDeriver                                                               | status-engine | domain service（オーケストレータ） | resolver/finder/policy を束ねる導出パイプライン                     |
-| InstanceStatusRollup                                                        | status-engine | domain service                     | instance 配下の session から代表ステータスを選出                    |
-| DeviceRepository〜PrStatusRepository                                        | hub-api       | repository                         | SQLite アクセスと冪等性制約                                         |
-| EventIngestionService                                                       | hub-api       | use case                           | イベント受信・正規化・自動登録・冪等 upsert                         |
-| InstanceStatusService                                                       | hub-api       | use case                           | 一覧・詳細取得のための status 導出／ページング呼び出し              |
-| TokenService                                                                | hub-api       | domain service                     | token 発行・検証・（device 単位の）revoke・有効 device 集合列挙     |
-| PairingService                                                              | hub-api       | domain service                     | 6 桁コードの発行・TTL・失敗カウント・device 競合判定                |
-| AuthResolver                                                                | hub-api       | middleware                         | Bearer token → device 解決（HttpServer 前段で全ルートに適用）       |
-| Loopback                                                                    | hub-api       | module (loopback.ts)               | 送信元が loopback かの判定（pair/start・devices 管理の共有ガード）  |
-| Router                                                                      | hub-api       | infrastructure                     | メソッド＋パターンのルート照合（public フラグ付き）                 |
-| createHubServer                                                             | hub-api       | factory                            | Repository→Service→Controller→Router→HttpServer の DI 配線          |
-| HttpServer                                                                  | hub-api       | infrastructure                     | HTTP 入出力・認証ゲート・JSON 変換の薄い層                          |
-| EventsController / InstancesController / DevicesController / PairController | hub-api       | controller                         | HTTP 入出力の薄い変換（devices/pair は loopback 上乗せ）            |
-| HubEndpoint / HubEndpointResolver / HubEndpointOps                          | cli-ink       | value object / service / module    | マルチエンドポイントの到達可否判定・URL 整形                        |
-| Network                                                                     | cli-ink       | module (network.ts)                | 到達先候補検出（Tailscale/LAN 分類）と候補 URL 生成                 |
-| HubApiClient / createHubConnection / HubConnection                          | cli-ink       | infrastructure / factory           | hub への HTTP クライアントと到達先配線・再解決ファクトリ            |
-| PollingLoop<T>                                                              | cli-ink       | application service                | 汎用ポーリング（一覧・詳細）。多重取得抑止・失敗時フォールバック    |
-| ClientRollup                                                                | cli-ink       | utility                            | project 単位の priority max() 集計のみ                              |
-| InstanceListStore                                                           | cli-ink       | application state                  | フィルタ状態・取得結果の保持                                        |
-| StatusDisplay                                                               | cli-ink       | module (status-display.ts)         | 表示語彙（ラベル/色/グリフ/経過時間/フィルタキー対応）              |
-| ViewMode / KeyFlags / KeyBindingHost                                        | cli-ink       | type / interface                   | キー処理の入出力境界（AppView が Host を実装）                      |
-| KeyBindingController                                                        | cli-ink       | controller                         | キー入力 → アクションの薄い写像（PollingLoop に非依存）             |
-| ConfigWriter                                                                | cli-ink       | module (config/config-writer.ts)   | child ペアリング設定の部分書き込み（chmod 600）                     |
-| PairingClient                                                               | cli-ink       | module (pairing-client.ts)         | `monomi hub pair` / `monomi pair` のフロー実装                      |
-| AppView / DetailView                                                        | cli-ink       | ui component (container)           | 状態と API を持つコンテナ（DetailView は詳細を自動更新）            |
-| InstanceTable                                                               | cli-ink       | ui component (grid container)      | カードグリッド描画（A4: 命名不一致・レイアウト計算保持の逸脱あり）  |
-| InstanceCard / StatusFilterBar / HelpOverlay                                | cli-ink       | ui component (presentational)      | props を描くだけ                                                    |
-| CardGrid                                                                    | cli-ink       | module (card-grid.ts)              | 端末幅と TTY からカード列数を算出する純粋関数                       |
+| クラス / モジュール                                                         | レイヤー      | 種別                                            | 責務                                                                     |
+| --------------------------------------------------------------------------- | ------------- | ----------------------------------------------- | ------------------------------------------------------------------------ |
+| ProjectKey                                                                  | domain-model  | interface (value object)                        | 正規化済みプロジェクト識別子（value + kind）を保持                       |
+| ProjectKeyKind / DeviceRole / EventType                                     | domain-model  | enum                                            | 種別の列挙（判別ユニオン）                                               |
+| ProjectKeyOps                                                               | domain-model  | module (project-key.ts)                         | ProjectKey の生成・種別判定・等価比較の関数群                            |
+| ProjectKeyNormalizer                                                        | domain-model  | domain service                                  | git remote の表記ゆれを吸収し ProjectKey を生成する唯一の実装            |
+| NormalizeContext                                                            | domain-model  | interface (value object)                        | 正規化に必要な文脈（device_id, cwd, isGitRepo, commonDir）               |
+| DeviceId                                                                    | domain-model  | module (device-id.ts)                           | hostname から device_id を派生（`deriveDeviceId`）                       |
+| Device / Project / Instance / Session / Event / DeviceToken / PrStatus      | domain-model  | entity (interface)                              | §7.3 DDL に対応する永続エンティティ（データのみ）                        |
+| EpochMs / DurationMs                                                        | domain-model  | branded number                                  | 時刻・期間の取り違え防止のためのブランド型                               |
+| RawState / DisplayStatus                                                    | status-engine | enum                                            | 内部状態／表示状態の列挙                                                 |
+| RepresentedStatus                                                           | status-engine | type alias                                      | DisplayStatus ＋ CLOSED（優先度計算・分類結果の型）                      |
+| RawStateRules                                                               | status-engine | module (raw-state-resolver.ts)                  | イベント → raw_state 写像、状態イベントの降順抽出・比較関数              |
+| RawStateResolver                                                            | status-engine | domain service                                  | 降順イベント列の先頭から raw_state を返す薄いラッパ                      |
+| StateTransition / StateTransitionFinder                                     | status-engine | value object / domain service                   | 現在 raw_state 連続区間の開始時刻を特定                                  |
+| RunBoundaryScanner                                                          | status-engine | module (run-boundary-scanner.ts)                | 1 ページを走査し現在 run の状態境界を検出（ページング打ち切り判断）      |
+| EscalationThresholdValues / EscalationThresholds                            | status-engine | value object                                    | raw_state 別の放置昇格閾値（既定 2h/6h/24h/72h、config 上書き可）        |
+| EscalationPolicy                                                            | status-engine | domain service                                  | 放置（STALE）への昇格判定、PR 待ち条件を含む                             |
+| StatusPriority                                                              | status-engine | domain service                                  | 表示ステータス優先順位の数値化・比較（`higherOf`）の唯一の場所           |
+| StatusResult                                                                | status-engine | interface (value object)                        | 1 session/instance の最終ステータス（`createStatusResult` で凍結）       |
+| StatusDeriver                                                               | status-engine | domain service（オーケストレータ）              | resolver/finder/policy を束ねる導出パイプライン                          |
+| InstanceStatusRollup                                                        | status-engine | domain service                                  | instance 配下の session から代表ステータスを選出                         |
+| DeviceRepository〜PrStatusRepository                                        | hub-api       | repository                                      | SQLite アクセスと冪等性制約                                              |
+| EventIngestionService                                                       | hub-api       | use case                                        | イベント受信・正規化・自動登録・冪等 upsert                              |
+| InstanceStatusService                                                       | hub-api       | use case                                        | 一覧・詳細取得のための status 導出／ページング呼び出し                   |
+| TokenService                                                                | hub-api       | domain service                                  | token 発行・検証・（device 単位の）revoke・有効 device 集合列挙          |
+| PairingService                                                              | hub-api       | domain service                                  | 6 桁コードの発行・TTL・失敗カウント・device 競合判定                     |
+| AuthResolver                                                                | hub-api       | middleware                                      | Bearer token → device 解決（HttpServer 前段で全ルートに適用）            |
+| Loopback                                                                    | hub-api       | module (loopback.ts)                            | 送信元が loopback かの判定（pair/start・devices 管理の共有ガード）       |
+| Router                                                                      | hub-api       | infrastructure                                  | メソッド＋パターンのルート照合（public フラグ付き）                      |
+| createHubServer                                                             | hub-api       | factory                                         | Repository→Service→Controller→Router→HttpServer の DI 配線               |
+| HttpServer                                                                  | hub-api       | infrastructure                                  | HTTP 入出力・認証ゲート・JSON 変換の薄い層                               |
+| EventsController / InstancesController / DevicesController / PairController | hub-api       | controller                                      | HTTP 入出力の薄い変換（devices/pair は loopback 上乗せ）                 |
+| HubEndpoint / HubEndpointResolver / HubEndpointOps                          | cli-ink       | value object / service / module                 | マルチエンドポイントの到達可否判定・URL 整形                             |
+| Network                                                                     | cli-ink       | module (network.ts)                             | 到達先候補検出（Tailscale/LAN 分類）と候補 URL 生成                      |
+| HubApiClient / createHubConnection / HubConnection                          | cli-ink       | infrastructure / factory                        | hub への HTTP クライアントと到達先配線・再解決ファクトリ                 |
+| PollingLoop<T>                                                              | cli-ink       | application service                             | 汎用ポーリング（一覧・詳細）。多重取得抑止・失敗時フォールバック         |
+| ClientRollup                                                                | cli-ink       | utility                                         | project 単位の priority max() 集計のみ                                   |
+| InstanceListStore                                                           | cli-ink       | application state                               | フィルタ状態・取得結果の保持                                             |
+| StatusDisplay                                                               | cli-ink       | module (status-display.ts)                      | 表示語彙（ラベル/色/グリフ/経過時間/フィルタキー対応）                   |
+| ViewMode / KeyFlags / KeyBindingHost                                        | cli-ink       | type / interface                                | キー処理の入出力境界（AppView が Host を実装）                           |
+| KeyBindingController                                                        | cli-ink       | controller                                      | キー入力 → アクションの薄い写像（PollingLoop に非依存）                  |
+| ConfigWriter                                                                | cli-ink       | module (config/config-writer.ts)                | child ペアリング設定の部分書き込み（chmod 600）                          |
+| PairingClient                                                               | cli-ink       | module (pairing-client.ts)                      | `monomi hub pair` / `monomi pair` のフロー実装                           |
+| AppView / DetailView                                                        | cli-ink       | ui component (container)                        | 状態と API を持つコンテナ（DetailView は詳細を自動更新）                 |
+| InstanceTable                                                               | cli-ink       | ui component (grid container)                   | カードグリッド描画（A4: 命名不一致・レイアウト計算保持の逸脱あり）       |
+| InstanceCard / StatusFilterBar / HelpOverlay                                | cli-ink       | ui component (presentational)                   | props を描くだけ                                                         |
+| CardGrid                                                                    | cli-ink       | module (card-grid.ts)                           | 端末幅と TTY からカード列数を算出する純粋関数                            |
+| BoxBorder                                                                   | cli-ink       | module (box-border.ts, release-6)               | BOX幅・タイトル/範囲ラベル埋め込み罫線の生成（表示幅計算含む）           |
+| EventScroll / ScrollWindow                                                  | cli-ink       | module + interface (event-scroll.ts, release-6) | 詳細ビューの表示行数・スクロールウィンドウ算出（React 非依存の純粋関数） |
+| TerminalTitle                                                               | cli-ink       | module (terminal-title.ts, release-6 FR-09)     | ターミナルのタブ/ウィンドウタイトルを OSC 0 で設定                       |
+| SanitizeDisplayText                                                         | cli-ink       | module (sanitize-display-text.ts)               | レポーター由来の自由記述から ANSI/制御文字を除去（注入対策）             |
 
 ---
 
