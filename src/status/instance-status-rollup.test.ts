@@ -9,9 +9,8 @@ const rollup = new InstanceStatusRollup()
 /** テスト内の時刻計算の基準アンカー（意味を持たない単なる原点）。 */
 const NOW = toEpochMs(10_000_000)
 
-/** 15分閾値の内側(生存扱い)・外側(孤立 session 扱い)の直近イベント時刻。 */
-const LIVE_LAST_EVENT_AT = toEpochMs(NOW - 60_000) // 1分前
-const STALE_LAST_EVENT_AT = toEpochMs(NOW - 20 * 60_000) // 20分前（15分閾値超）
+/** rollup エントリの既定の直近イベント時刻（差し替えなければ「新しい」扱いになる基準点）。 */
+const DEFAULT_LAST_EVENT_AT = toEpochMs(NOW - 60_000) // 1分前
 
 /**
  * 表示ステータスから StatusResult を作るヘルパー。rawState は rollup の判定に無関係
@@ -25,7 +24,7 @@ function sr(display: RepresentedStatus, elapsedMs = 0): StatusResult {
 function entry(
   display: RepresentedStatus,
   elapsedMs = 0,
-  lastEventAt: EpochMs = LIVE_LAST_EVENT_AT
+  lastEventAt: EpochMs = DEFAULT_LAST_EVENT_AT
 ): RollupEntry {
   return { status: sr(display, elapsedMs), lastEventAt }
 }
@@ -83,52 +82,64 @@ describe('InstanceStatusRollup.rollup — representative selection (FR-04 AC-4/A
   })
 })
 
-describe('InstanceStatusRollup.rollup — stale session exclusion (release-7 FR-01)', () => {
-  it('AC-1: excludes a session whose last event is 15+ minutes older than the freshest session', () => {
-    // 孤立 session (next_wait, 20分前) が高優先度でも、生存している active session が代表になる。
-    const rep = rollup.rollup([
-      entry('NEXT_WAIT', 0, STALE_LAST_EVENT_AT),
-      entry('ACTIVE', 0, LIVE_LAST_EVENT_AT),
-    ])
-    expect(rep.display).toBe('ACTIVE')
+describe('InstanceStatusRollup.rollup — recency prioritization (release-8 FR-02)', () => {
+  it('AC-1: picks the freshest lastEventAt unconditionally, regardless of priority', () => {
+    // 古い session が高優先度 (next_wait) でも、最新イベント時刻を持つ active が代表になる。
+    // release-7 では 15分閾値内なら next_wait が選ばれていた（priority ベース）。
+    const oldNextWait = entry('NEXT_WAIT', 0, toEpochMs(NOW - 10 * 60_000)) // 10分前
+    const freshActive = entry('ACTIVE', 0, toEpochMs(NOW - 1_000)) // 1秒前
+    expect(rollup.rollup([oldNextWait, freshActive]).display).toBe('ACTIVE')
+    expect(rollup.rollup([freshActive, oldNextWait]).display).toBe('ACTIVE')
   })
 
-  it('AC-2 regression: when all sessions are within 15 minutes of each other, highest priority wins as before', () => {
+  it('AC-1 (B8 regression): session replay 15min within threshold. new session (fresh lastEventAt) wins over old', () => {
+    // B8 バグの再現ケース: session 再開時に新しい session_id が払い出され、新 session の
+    // lastEventAt が最新なら、古い session（15分以内でも古い状態）に覆い隠されない。
+    // 逆が release-7 の問題だった: 古い session が 15分閾値内にいると、古い状態で選ばれていた。
+    const oldSession = entry('NEXT_WAIT', 0, toEpochMs(NOW - 10 * 60_000))
+    const newSession = entry('ACTIVE', 0, toEpochMs(NOW - 100)) // 再開後の新 session
+    expect(rollup.rollup([oldSession, newSession]).display).toBe('ACTIVE')
+    expect(rollup.rollup([newSession, oldSession]).display).toBe('ACTIVE')
+  })
+
+  it('AC-2: tiebreak on identical lastEventAt by highest priority (ms precision, rare in practice)', () => {
+    // 完全同一 lastEventAt の複数 session は priority で比較（ms精度なので実運用ではほぼ発生しない）。
+    const timestamp = toEpochMs(NOW - 60_000)
     const rep = rollup.rollup([
-      entry('ACTIVE', 0, LIVE_LAST_EVENT_AT),
-      entry('APPROVAL_WAIT', 0, LIVE_LAST_EVENT_AT),
+      entry('ACTIVE', 0, timestamp),
+      entry('APPROVAL_WAIT', 0, timestamp),
+      entry('NEXT_WAIT', 0, timestamp),
     ])
     expect(rep.display).toBe('APPROVAL_WAIT')
   })
 
-  it('AC-3: a single session is never excluded, however old its last event is (nothing fresher to compare against)', () => {
-    const rep = rollup.rollup([entry('NEXT_WAIT', 0, STALE_LAST_EVENT_AT)])
-    expect(rep.display).toBe('NEXT_WAIT')
+  it('AC-4 regression: 15min boundary cases now use recency, not threshold-based inclusion', () => {
+    // release-7 では 15分ちょうどが境界（ちょうどなら除外）だったが、release-8 は単純に
+    // 最新を選ぶので、15分云々は無関係。最新が複数あれば priority で判定する。
+    const old = entry('NEXT_WAIT', 0, toEpochMs(NOW - 20 * 60_000)) // 20分前（明らかに古い）
+    const recent = entry('ACTIVE', 0, toEpochMs(NOW - 3_000)) // 3秒前（圧倒的に新しい）
+    expect(rollup.rollup([old, recent]).display).toBe('ACTIVE')
   })
 
-  it('AC-4 (OSSRadar case): orphaned next_wait session (20min ago) + current active session (seconds ago) => active wins', () => {
-    const orphan = entry('NEXT_WAIT', 0, toEpochMs(NOW - 20 * 60_000))
-    const current = entry('ACTIVE', 0, toEpochMs(NOW - 3_000))
-    expect(rollup.rollup([orphan, current]).display).toBe('ACTIVE')
-    expect(rollup.rollup([current, orphan]).display).toBe('ACTIVE')
+  it('AC-5 regression: same lastEventAt multiple sessions use priority as tiebreaker', () => {
+    const same = toEpochMs(NOW - 60_000)
+    const rep = rollup.rollup([entry('NEXT_WAIT', 5000, same), entry('APPROVAL_WAIT', 1000, same)])
+    // lastEventAt が同じなので priority で比較 → approval_wait が高優先度
+    expect(rep.display).toBe('APPROVAL_WAIT')
   })
 
-  it('does not exclude every session just because the freshest one is itself >15min old in wall-clock terms (relative basis, not absolute now)', () => {
-    // review-changes で検出された回帰の再現ケース: 孤立 session (2時間前) と、長時間の
-    // ツール実行中で新規イベントが無い稼働中 session (20分前) がどちらも「壁時計基準の now」
-    // からは15分を超えて古い。絶対時刻基準だと両方 stale 扱いされ全件フォールバック経由で
-    // 孤立 session の next_wait が代表に選ばれてしまう(バグ)。instance 内の最新イベントを
-    // 基準にする相対判定なら、稼働中 session だけが候補に残り active が代表になる。
-    const orphan = entry('NEXT_WAIT', 0, toEpochMs(NOW - 2 * 60 * 60_000))
-    const longRunningActive = entry('ACTIVE', 0, toEpochMs(NOW - 20 * 60_000))
-    expect(rollup.rollup([orphan, longRunningActive]).display).toBe('ACTIVE')
-    expect(rollup.rollup([longRunningActive, orphan]).display).toBe('ACTIVE')
+  it('§0.5 invariant holds even under recency-first: a freshest closed session never hides an older live one', () => {
+    // closed の lastEventAt がどれだけ新しくても、他に live な (非 closed) session が
+    // 1つでもあれば代表にはなれない。recency 優先化は live な session 同士の比較にのみ働く。
+    const olderActive = entry('ACTIVE', 0, toEpochMs(NOW - 10 * 60_000)) // 10分前
+    const freshestClosed = entry('CLOSED', 0, toEpochMs(NOW - 1_000)) // 1秒前
+    expect(rollup.rollup([olderActive, freshestClosed]).display).toBe('ACTIVE')
+    expect(rollup.rollup([freshestClosed, olderActive]).display).toBe('ACTIVE')
   })
 
-  it('treats a session exactly at the 15-minute threshold relative to the freshest session as stale (boundary is exclusive of liveness)', () => {
-    const freshest = toEpochMs(NOW - 60_000)
-    const atThreshold = toEpochMs(freshest - 15 * 60_000)
-    const rep = rollup.rollup([entry('NEXT_WAIT', 0, atThreshold), entry('ACTIVE', 0, freshest)])
-    expect(rep.display).toBe('ACTIVE')
+  it('closed becomes the representative only when every session in the instance is closed', () => {
+    const olderClosed = entry('CLOSED', 0, toEpochMs(NOW - 10 * 60_000))
+    const fresherClosed = entry('CLOSED', 0, toEpochMs(NOW - 1_000))
+    expect(rollup.rollup([olderClosed, fresherClosed]).display).toBe('CLOSED')
   })
 })

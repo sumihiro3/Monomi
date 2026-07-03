@@ -181,6 +181,28 @@ describe('InstanceStatusService.listInstances — derived status (FR-04 / §8.2)
     expect(rows[0].status.display).toBe('active')
     expect(rows[0].session.id).toBe('sess-B')
   })
+
+  it('does not let a zero-event session masquerade as freshest and mask a live one (release-8 review-changes regression)', () => {
+    // sess-A simulates a crash between sessions.upsertStarted() and events.append() (a session
+    // row with zero events ever recorded). Session B is genuinely active right now, on the same
+    // instance. Pre-fix, buildRow() used `now` (the query-time clock) as A's lastEventAt
+    // fallback; under release-8's recency-first rollup, `now` always out-recencies any real
+    // event timestamp, so A's zero-event ACTIVE would win and mask B forever. The fix uses
+    // session.startedAt (a fixed past timestamp) instead, so B correctly wins on recency.
+    const now = 2_000_000
+    nowMs = now - 3_000
+    ingestion.ingest(
+      baseEvent({ session_id: 'sess-B', event_type: 'PostToolUse', at: now - 3_000 })
+    )
+
+    const instanceId = instances.listActive()[0].id
+    sessions.upsertStarted(instanceId, 'sess-A-crashed', toEpochMs(now - 60_000))
+
+    const rows = statusService.listInstances(toEpochMs(now))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status.display).toBe('active')
+    expect(rows[0].session.id).toBe('sess-B')
+  })
 })
 
 describe('InstanceStatusService.getInstanceDetail — Agent View Lv.1 (§8.2 / §10.4)', () => {

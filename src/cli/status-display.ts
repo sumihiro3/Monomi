@@ -7,13 +7,13 @@
  */
 
 /**
- * `1`–`5` キーで切り替えられる表示ステータス（§10.3 のうち release-1 対象。
- * `closed` は非表示扱いでフィルタ対象に含めない、§5.1）。
+ * `1`–`6` キーで切り替えられる表示ステータス（§10.3 のうち release-1 対象。
+ * `closed` もフィルタ対象に含め、キー`6`でトグル可能、§5.1）。
  */
-export type StatusFilter = 'active' | 'approval_wait' | 'next_wait' | 'pr_wait' | 'stale'
+export type StatusFilter = 'active' | 'approval_wait' | 'next_wait' | 'pr_wait' | 'stale' | 'closed'
 
 /**
- * フィルタキー（`1`–`5`）に対応する {@link StatusFilter} の並び（§10.2 の表示順に一致）。
+ * フィルタキー（`1`–`6`）に対応する {@link StatusFilter} の並び（§10.2 の表示順に一致）。
  * 添字 0 が `1` キー。ここが「キー番号 → 表示状態」の対応を持つ唯一の場所。
  */
 export const FILTER_ORDER: readonly StatusFilter[] = [
@@ -22,6 +22,7 @@ export const FILTER_ORDER: readonly StatusFilter[] = [
   'next_wait',
   'pr_wait',
   'stale',
+  'closed',
 ]
 
 /** 表示状態 → 日本語ラベル（§10.2）。未知値はそのまま返す。 */
@@ -77,7 +78,7 @@ export function statusGlyph(display: string): string {
 }
 
 /**
- * 押されたキー文字（`1`–`5`）を {@link StatusFilter} へ写す。
+ * 押されたキー文字（`1`–`6`）を {@link StatusFilter} へ写す。
  *
  * @param input `useInput` が渡す入力文字。
  * @returns 対応する {@link StatusFilter}。範囲外・非数字なら null。

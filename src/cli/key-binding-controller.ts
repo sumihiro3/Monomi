@@ -58,7 +58,7 @@ export interface KeyBindingHost {
  *
  * `viewMode` が `'list'` のときのみ、フィルタ・カーソル移動・詳細を開く操作を受け付ける
  * （詳細表示中にこれらを裏で実行すると、一覧に戻った際の状態が誤操作で変わってしまうため）:
- * - `1`–`5`: 状態フィルタのトグル（{@link InstanceListStore.toggleFilter}、複数選択可）
+ * - `1`–`6`: 状態フィルタのトグル（{@link InstanceListStore.toggleFilter}、複数選択可）
  * - `j`/`k` と `↑`/`↓`: カーソル移動（vim 流・矢印両対応）
  * - `Enter`: 詳細（Agent View Lv.1）を開く
  *

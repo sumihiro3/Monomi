@@ -29,13 +29,15 @@ const sample: InstanceStatusRow[] = [
   row('c', 'next_wait'),
   row('d', 'active'),
   row('e', 'stale'),
+  row('f', 'closed'),
 ]
 
 describe('InstanceListStore — フィルタ保持と filtered()（FR-05 AC-2 / §0.5）', () => {
-  it('フィルタ未設定なら全件を返す（複製を返し、内部配列を露出しない）', () => {
+  it('フィルタ未設定なら closed 以外を返す（複製を返し、内部配列を露出しない、AC-1）', () => {
     const store = new InstanceListStore()
     store.setInstances(sample)
     expect(store.filtered()).toHaveLength(5)
+    expect(store.filtered().map((r) => r.instance_id)).not.toContain('f')
     expect(store.filtered()).not.toBe(store.instances)
   })
 
@@ -62,6 +64,7 @@ describe('InstanceListStore — フィルタ保持と filtered()（FR-05 AC-2 / 
     expect(store.filtered().map((r) => r.instance_id)).toEqual(['b'])
     store.toggleFilter('approval_wait')
     expect(store.filtered()).toHaveLength(5)
+    expect(store.filtered().map((r) => r.instance_id)).not.toContain('f')
     expect(store.activeFilters).toEqual([])
   })
 
@@ -79,6 +82,7 @@ describe('InstanceListStore — フィルタ保持と filtered()（FR-05 AC-2 / 
     store.clearFilters()
     expect(store.activeFilters).toEqual([])
     expect(store.filtered()).toHaveLength(5)
+    expect(store.filtered().map((r) => r.instance_id)).not.toContain('f')
   })
 
   it('setInstances で取得結果を差し替える（ポーリング更新の反映）', () => {
@@ -99,5 +103,33 @@ describe('InstanceListStore — フィルタ保持と filtered()（FR-05 AC-2 / 
     store.toggleFilter('approval_wait')
     // proj-2 は該当なしなので畳み込み対象から外れる。
     expect(store.projectRows().map((p) => p.projectId)).toEqual(['proj-1'])
+  })
+
+  it('closed フィルタを明示的に選択すると closed 行が表示される（AC-3 複数選択対応）', () => {
+    const store = new InstanceListStore()
+    store.setInstances(sample)
+    store.toggleFilter('closed')
+    expect(store.filtered().map((r) => r.instance_id)).toEqual(['f'])
+    expect(store.activeFilters).toEqual(['closed'])
+  })
+
+  it('複数フィルタと closed を併用すると、該当行 + closed が表示される（AC-7）', () => {
+    const store = new InstanceListStore()
+    store.setInstances(sample)
+    store.toggleFilter('active')
+    store.toggleFilter('closed')
+    expect(store.filtered().map((r) => r.instance_id)).toEqual(['a', 'd', 'f'])
+    expect(store.activeFilters).toContain('closed')
+  })
+
+  it('closed フィルタを再トグルすると解除され、既定の非表示に戻る（AC-3）', () => {
+    const store = new InstanceListStore()
+    store.setInstances(sample)
+    store.toggleFilter('closed')
+    expect(store.filtered().map((r) => r.instance_id)).toContain('f')
+    store.toggleFilter('closed')
+    expect(store.activeFilters).toEqual([])
+    expect(store.filtered().map((r) => r.instance_id)).not.toContain('f')
+    expect(store.filtered()).toHaveLength(5)
   })
 })

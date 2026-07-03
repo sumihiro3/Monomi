@@ -13,7 +13,7 @@ export interface StatusFilterBarProps {
 /**
  * 状態フィルタのバー（§10.2 の `[1]稼働中 2  [2]権限待ち 1 …`）。
  *
- * `1`–`5` キーに対応する各状態のラベルと件数を並べ、有効なフィルタを反転表示する。
+ * `1`–`6` キーに対応する各状態のラベルと件数を並べ、有効なフィルタを反転表示する。
  * フィルタのトグルは KeyBindingController→store の責務で、ここは描画のみ。
  *
  * @param props {@link StatusFilterBarProps}。

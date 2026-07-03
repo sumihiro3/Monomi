@@ -10,7 +10,7 @@ import type { ReactElement } from 'react'
  * `w`（折り返し切替, FR-08）は詳細ビュー専用。
  */
 const HELP_LINES: ReadonlyArray<readonly [string, string]> = [
-  ['1-5', '一覧: 状態フィルタのトグル（複数選択可）'],
+  ['1-6', '一覧: 状態フィルタのトグル（複数選択可）'],
   ['j / k, ↑ / ↓', '一覧: カーソル移動 / 詳細: イベント履歴スクロール'],
   ['Enter', '一覧: 詳細（Agent View Lv.1）を開く'],
   ['← / →', '詳細: 隣接プロジェクトへ移動'],

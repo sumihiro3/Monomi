@@ -1,23 +1,18 @@
-import { type EpochMs, toDurationMs } from '../domain/time.js'
+import type { EpochMs } from '../domain/time.js'
 import { StatusPriority } from './status-priority.js'
 import type { StatusResult } from './status-result.js'
 
 /**
- * session の直近イベントが、同一 instance 内で最も新しい session よりこれ以上古ければ
- * 「孤立 session（stale）」として rollup の代表選定から除外する（release-7 FR-01）。B7:
- * 孤立 session が `next_wait` 等の高優先度を保持したまま、実際に稼働中の別 session を
- * 覆い隠す不具合の対症療法。
+ * release-8 FR-02: 孤立 session 除外ロジック（release-7 STALE_SESSION_THRESHOLD_MS）を削除。
+ * 最も新しい `lastEventAt` を無条件に代表とする recency 優先化を採用（AC-1・AC-2）。
+ * これにより session 再開時の「新しい session が古い状態に覆い隠される」バグ（B8）を解決する
+ * （具体例: 15分以内に再開し新 session_id が払い出されても、古い session が 15分閾値内なら
+ * 古い状態が優先されていた）。
  *
- * ライブネス検知（PID 監視・`session_lost`）が未実装（§6）なため、「instance 内で最も新しい
- * イベントからの経過時間」を生存判定の代理指標として使う簡易ヒューリスティック。基準を
- * hub の絶対時刻（`now`）ではなく instance 内の最新イベント時刻からの相対距離にするのは、
- * 長時間のツール実行中で該当 instance 全体に新規イベントが無い場合でも、稼働中 session
- * 自身が誤って stale 扱いされないため（release-7 要件定義「スコープの確定」）。閾値は
- * `EscalationThresholds` のような config 上書きの対象にはしない（release-7 ではスコープ外。
- * `instance-status-service.ts` の `RECENT_EVENTS_LIMIT` 等と同様、呼び出し元に露出しない
- * module 定数として持つ）。
+ * ライブネス検知（PID 監視・`session_lost`）が未実装（§6）なため、最新イベント時刻（`lastEventAt`）
+ * による「鮮度優先」判定へ全面移行する。完全同一 `lastEventAt` の場合のみ {@link StatusPriority}
+ * でタイブレークする（AC-2）が、ms 精度のため実運用ではほぼ発生しない。
  */
-const STALE_SESSION_THRESHOLD_MS = toDurationMs(15 * 60_000)
 
 /**
  * rollup 対象の 1 session 分の入力（class-diagram §5.5 / release-7 FR-01）。
@@ -45,23 +40,27 @@ function maxLastEventAt(entries: RollupEntry[]): EpochMs {
 /**
  * 1 instance 配下の複数 session から代表ステータスを選ぶドメインサービス（§5.3 / §0.5）。
  *
- * 比較は {@link StatusPriority} に委譲し、最も優先度の高い（同値なら最も長く経過している）
- * session を代表にする。`CLOSED` は最下位優先度なので、稼働中など表示対象の session が
- * 1 つでもあれば closed に覆い隠されない（§0.5 のバグ禁止条件）。project レベルの
- * ロールアップは CLI 側の `ClientRollup` が担うため、ここは instance レベルに限定する。
+ * **release-8 FR-02 recency 優先化**：`CLOSED` 以外（live）の session の中で、最も新しい
+ * `lastEventAt` を持つ session を無条件に代表とする（AC-1）。複数の live session が同一
+ * `lastEventAt` を持つ場合のみ {@link StatusPriority} でタイブレーク（AC-2）。これにより session
+ * 再開時に古い session の状態に覆い隠される B8 バグを解決する。
  *
- * release-7 FR-01: 代表選定の前に、instance 内で最も新しい `lastEventAt`（{@link maxLastEventAt}）
- * から {@link STALE_SESSION_THRESHOLD_MS} 以上離れた session（孤立 session）を候補から除外する。
- * 基準が instance 内の最新イベントである以上、その最新イベント自身を持つ session は必ず
- * 候補に残る（距離 0）ため、「候補が 1 件も残らない」ケースは構造的に発生しない——
- * session が 1 件のみのとき、また instance 内の全 session が互いに閾値内に収まっているときは、
- * 除外ロジックの影響を受けない。
+ * **§0.5「closed が active を覆い隠さない」不変条件は recency 優先化後も維持する**：`CLOSED` は、
+ * 他に live な（非 closed の）session が instance 内に 1 つでもあれば、`lastEventAt` がどれだけ
+ * 新しくても候補から除外され代表になれない。recency 優先化は「live な session 同士」の比較にのみ
+ * 適用する。instance 内の全 session が `CLOSED` の場合のみ closed 自身が候補となり代表になる
+ * （instance 全体が終了しているケースで、FR-01 の既定非表示化と組み合わさる想定）。project レベル
+ * のロールアップは CLI 側の `ClientRollup` が担うため、ここは instance レベルに限定する。
  */
 export class InstanceStatusRollup {
   private readonly priority = new StatusPriority()
 
   /**
    * session ごとの結果から instance の代表ステータスを選ぶ。
+   *
+   * `CLOSED` は他に live な session が 1 つでもあれば候補から除外する（§0.5 維持）。残った候補
+   * （全件 closed なら closed 自身）の中で最も新しい `lastEventAt` を無条件に代表とし（AC-1）、
+   * 複数 session の `lastEventAt` が完全同一のときのみ priority でタイブレーク（AC-2）。
    *
    * @param entries 同一 instance 配下の各 session の {@link RollupEntry}（1 件以上）。
    * @returns 代表となる {@link StatusResult}。
@@ -71,11 +70,17 @@ export class InstanceStatusRollup {
     if (entries.length === 0) {
       throw new Error('InstanceStatusRollup.rollup: cannot roll up an empty session status list')
     }
-    const freshest = maxLastEventAt(entries)
-    const candidates = entries.filter(
-      (entry) => freshest - entry.lastEventAt < STALE_SESSION_THRESHOLD_MS
-    )
-    return candidates
+
+    // §0.5: live な (非 closed) session が 1 つでもあれば、closed は候補から除外する。
+    const live = entries.filter((entry) => entry.status.display !== 'CLOSED')
+    const candidates = live.length > 0 ? live : entries
+
+    // AC-1: 候補の中で最も新しい lastEventAt を持つ entry を探す。
+    const freshest = maxLastEventAt(candidates)
+
+    // AC-2: 複数が同じ lastEventAt を持つ場合、priority でタイブレーク。
+    const tied = candidates.filter((entry) => entry.lastEventAt === freshest)
+    return tied
       .map((entry) => entry.status)
       .reduce((representative, current) => this.priority.higherOf(representative, current))
   }

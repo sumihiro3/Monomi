@@ -43,7 +43,7 @@ export class InstanceListStore {
   }
 
   /**
-   * 状態フィルタを 1 件トグルする（`1`–`5` キー、複数選択可、§10.3）。
+   * 状態フィルタを 1 件トグルする（`1`–`6` キー、複数選択可、§10.3）。
    *
    * @param filter トグル対象の表示状態。
    */
@@ -59,15 +59,16 @@ export class InstanceListStore {
   }
 
   /**
-   * フィルタ適用後の行を返す（フィルタが空なら全件のコピー）。
+   * フィルタ適用後の行を返す（フィルタが空なら全件のコピー。ただし `closed` は既定で除外）。
    *
    * 絞り込みは `status.display` の一致のみで判定する（優先順位の解釈は行わない、§0.5）。
+   * `closed` は既定非表示（§5.1 / AC-1）。キー`6`で `closed` フィルタをトグルすれば表示可能（AC-3）。
    *
    * @returns 表示対象の instance 行。
    */
   filtered(): InstanceStatusRow[] {
     if (this.filters.length === 0) {
-      return [...this.rows]
+      return this.rows.filter((row) => row.status.display !== 'closed')
     }
     const active = new Set<string>(this.filters)
     return this.rows.filter((row) => active.has(row.status.display))

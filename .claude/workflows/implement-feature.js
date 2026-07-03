@@ -8,7 +8,7 @@ export const meta = {
     { title: '設計', detail: '実装計画と作業項目への分解', model: 'opus' },
     {
       title: '実装',
-      detail: '作業項目を順に実装(ファイル競合を避けるため逐次)',
+      detail: 'ファイル競合の無い作業項目はバッチ化して並列実装、競合する項目間のみ逐次',
       model: 'haiku/sonnet/opus(複雑度スコアで決定)',
     },
     { title: '検証', detail: 'release-check ワークフローをネスト実行', model: 'haiku' },
@@ -125,16 +125,51 @@ const design = await agent(
 log(`設計完了: ${design.items.length} 作業項目`)
 
 phase('実装')
+
+/** 2つの作業項目が対象ファイルを共有するか(共有があれば同時実行できない)。 */
+function filesOverlap(filesA, filesB) {
+  const setA = new Set(filesA)
+  return filesB.some((f) => setA.has(f))
+}
+
+// design.items は実装順(依存順)のリスト。直前までのバッチとファイルが重ならない限り
+// 同じバッチにまとめて並列実行し、重なった時点で新しいバッチに区切る。バッチ内は並列、
+// バッチ間は逐次(前のバッチが完了してから次を開始)にすることで、ファイル競合を避けつつ
+// 元の実装順序(依存関係の前提)も保つ。
+const batches = []
+for (const item of design.items) {
+  const currentBatch = batches[batches.length - 1]
+  const conflicts =
+    currentBatch && currentBatch.some((existing) => filesOverlap(existing.files, item.files))
+  if (currentBatch && !conflicts) {
+    currentBatch.push(item)
+  } else {
+    batches.push([item])
+  }
+}
+log(
+  `実装バッチ: ${batches.length}件(${batches.map((b) => b.length).join('+')} 作業項目。` +
+    '同一バッチ内は並列実行)'
+)
+
 const results = []
-for (let i = 0; i < design.items.length; i++) {
-  const item = design.items[i]
-  const model = modelForComplexity(item.complexity)
-  log(`実装 ${i + 1}/${design.items.length}: ${item.title} (複雑度 ${item.complexity} → ${model})`)
-  const r = await agent(
-    `${RULES}\n次の作業項目を実装してください。実装後、変更したファイル一覧と判断に迷った点を報告してください。テストが必要な変更は同時に書くこと。\n\n## 実装方針(全体)\n${design.summary}\n\n## 作業項目\n${item.title}\n${item.description}\n対象ファイル目安: ${item.files.join(', ')}\n\n## 要件(参照用)\n${reqSummary}`,
-    { label: `実装: ${item.title}`, phase: '実装', model }
+for (const batch of batches) {
+  const batchResults = await parallel(
+    batch.map((item) => () => {
+      const model = modelForComplexity(item.complexity)
+      log(`実装: ${item.title} (複雑度 ${item.complexity} → ${model})`)
+      return agent(
+        `${RULES}\n次の作業項目を実装してください。実装後、変更したファイル一覧と判断に迷った点を報告してください。テストが必要な変更は同時に書くこと。\n\n## 実装方針(全体)\n${design.summary}\n\n## 作業項目\n${item.title}\n${item.description}\n対象ファイル目安: ${item.files.join(', ')}\n\n## 要件(参照用)\n${reqSummary}`,
+        { label: `実装: ${item.title}`, phase: '実装', model }
+      ).then((r) => ({ item: item.title, complexity: item.complexity, model, report: r }))
+    })
   )
-  results.push({ item: item.title, complexity: item.complexity, model, report: r })
+  batch.forEach((item, idx) => {
+    if (batchResults[idx] === null) {
+      log(`実装失敗: ${item.title}(エラーのためスキップ。再実行が必要)`)
+    }
+  })
+  results.push(...batchResults.filter(Boolean))
 }
 
 phase('検証')

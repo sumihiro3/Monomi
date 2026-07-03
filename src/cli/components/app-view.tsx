@@ -41,7 +41,7 @@ export interface AppViewProps {
  * - マウント時に watch モード（間隔ポーリング）を常時 ON で開始し、その中の即時取得で
  *   全 instance を一覧表示（FR-05 AC-1・FR-03 AC-1/AC-3）。手動での OFF トグルは持たない
  *   （FR-03 AC-2 撤回）
- * - `1`–`5` で状態フィルタをトグル（AC-2）。一覧表示中のみ有効（FR-04）
+ * - `1`–`6` で状態フィルタをトグル（AC-2）。一覧表示中のみ有効（FR-04）
  * - `Enter` で選択 instance の直近イベントタイムラインを表示（AC-4）。`selectedIndex` は一覧・
  *   詳細で共有する単一状態で、表示 instance は `store.filtered()[selectedIndex]` から都度導出する
  *   （detailRow スナップショットは廃止、release-6 FR-04 AC-3）
@@ -49,7 +49,7 @@ export interface AppViewProps {
  *   循環移動する（{@link KeyBindingController.handleKey} が `moveProject` へ写す、release-6 FR-04
  *   AC-1/AC-2）。`esc` で一覧へ戻るとカーソルは移動先の instance に自然一致する（AC-3）。`j`/`k`・
  *   `↑`/`↓` は {@link DetailView} 自身がイベントスクロールとして消費し、一覧状態には影響しない
- *   （release-6 FR-02 AC-3）。`1`-`5`・`Enter` は詳細中は引き続き無視する
+ *   （release-6 FR-02 AC-3）。`1`-`6`・`Enter` は詳細中は引き続き無視する
  * - ターミナルのタブ/ウィンドウタイトルを {@link ../terminal-title.js#setTerminalTitle} で管理する
  *   （release-6 FR-09）。マウント直後・一覧表示中は既定値 `Monomi`、詳細表示中は
  *   `project名 @ device名` を設定し、隣接プロジェクト移動・ポーリング更新で表示中の project/device
@@ -286,7 +286,7 @@ export function AppView({
 /**
  * フッターのショートカットヒントを表示中のビューに応じて切り替える（FR-04 / release-6 FR-03 AC-1）。
  *
- * 詳細ビューではフィルタ（`1`-`5`）・詳細を開く（`Enter`）操作を出さず、代わりに詳細固有の
+ * 詳細ビューではフィルタ（`1`-`6`）・詳細を開く（`Enter`）操作を出さず、代わりに詳細固有の
  * `j/k scroll`（イベントスクロール, {@link DetailView}）・`←/→ project`（隣接 instance 移動,
  * {@link KeyBindingController}）・`w wrap`（イベント行の折り返し/切り詰め切替, {@link DetailView}, FR-08）を
  * 提示する。
@@ -297,14 +297,14 @@ export function AppView({
 function footerHint(viewMode: ViewMode): string {
   return viewMode === 'detail'
     ? 'j/k scroll ←/→ project w wrap esc back ? help q quit'
-    : '1-5 filter j/k ↑↓ move ↵ detail esc back ? help q quit'
+    : '1-6 filter j/k ↑↓ move ↵ detail esc back ? help q quit'
 }
 
 /**
  * 全 instance を表示状態ごとに件数集計する（フィルタバーの件数表示用）。
  *
  * @param rows 集計対象（フィルタ適用前の全件）。
- * @returns 表示状態 → 件数。フィルタ対象 5 状態は 0 で初期化する。
+ * @returns 表示状態 → 件数。フィルタ対象 6 状態は 0 で初期化する。
  */
 function countByDisplay(rows: readonly InstanceStatusRow[]): Record<string, number> {
   const counts: Record<string, number> = {}
