@@ -154,9 +154,15 @@ export class InstanceStatusService {
           this.thresholds,
           HAS_PR_WAITING
         ),
-        // 降順（received_at 新しい順）の先頭が直近イベント。イベント 0 件（理論上の
-        // 縮退ケース）は stale 除外の対象にしない安全値として now を使う（release-7 FR-01）。
-        lastEventAt: currentRunEvents[0]?.receivedAt ?? now,
+        // 降順（received_at 新しい順）の先頭が直近イベント。イベント 0 件（理論上の縮退ケース。
+        // 例: upsertStarted 後 events.append 前にプロセスがクラッシュし、イベントを一切持たない
+        // session 行だけが残るケース）は session の起動時刻（startedAt）を使う。release-8 の
+        // recency 優先化（instance-status-rollup.ts）は lastEventAt の値そのもので代表を選ぶため、
+        // ここで `now`（呼び出しの都度更新される値）を使うと、このゼロイベント session が常に
+        // 「最も新しい」と誤認され、他の実際に活動中の session を無条件に覆い隠してしまう
+        // （release-8 review-changes で検出した回帰）。startedAt は固定の過去時刻なので、実際に
+        // 新しいイベントを持つ他 session に正しく劣後する。
+        lastEventAt: currentRunEvents[0]?.receivedAt ?? session.startedAt,
       }
     })
     const sessionStatuses = entries.map((entry) => entry.status)
