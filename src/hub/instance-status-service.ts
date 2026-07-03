@@ -22,9 +22,14 @@ import {
 } from './dto.js'
 
 /**
- * 詳細（Agent View Lv.1）で返す直近イベントの件数（§7.4: 直近数十件で十分）。
+ * 詳細（Agent View Lv.1）で返す直近イベントの件数（release-6 FR-02 AC-2: 20→100）。
+ *
+ * CLI 側の下部イベント履歴BOXが表示する「全体件数(Z)」は、この取得済み上限（100件）で
+ * あり、DB上の instance の真の全イベント件数ではない（FR-02 AC-4 はスコープ外の count
+ * クエリを要求しない）。100件を超えるイベント履歴を持つ instance では、Z は実件数より
+ * 少なく表示される。
  */
-const RECENT_EVENTS_LIMIT = 20
+const RECENT_EVENTS_LIMIT = 100
 
 /**
  * status 導出用に 1 度に読み込むイベントページの件数。
