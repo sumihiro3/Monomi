@@ -13,11 +13,13 @@ export type ViewMode = 'list' | 'detail'
  * Ink の `Key` のうち本 CLI が参照するフラグだけを抜き出した最小形。
  *
  * 単体テストで `Key` 全フィールドを組み立てずに済むよう部分集合にしている
- * （AppView が `useInput` の `key` からこの 4 つを詰め替える）。
+ * （AppView が `useInput` の `key` からこの 6 つを詰め替える）。
  */
 export interface KeyFlags {
   upArrow: boolean
   downArrow: boolean
+  leftArrow: boolean
+  rightArrow: boolean
   return: boolean
   escape: boolean
 }
@@ -33,6 +35,13 @@ export interface KeyBindingHost {
   moveSelection(delta: number): void
   /** 選択中 instance の詳細ビューを開く（Enter）。 */
   openDetail(): void
+  /**
+   * 詳細ビュー中に、一覧の並び順で隣接する instance へ移動する（`+1` 次 / `-1` 前、FR-04 AC-1）。
+   *
+   * 端での循環（wrap、FR-04 AC-2）は実装側（AppView）が担う。KeyBindingController は
+   * delta を渡すだけで、選択位置の実体（`selectedIndex`）や wrap 判定は持たない。
+   */
+  moveProject(delta: number): void
   /** 戻る（esc）。ヘルプ表示中はヘルプを閉じ、詳細表示中は一覧へ戻す。 */
   back(): void
   /** ヘルプオーバーレイの表示/非表示を切り替える（`?`）。 */
@@ -52,6 +61,14 @@ export interface KeyBindingHost {
  * - `1`–`5`: 状態フィルタのトグル（{@link InstanceListStore.toggleFilter}、複数選択可）
  * - `j`/`k` と `↑`/`↓`: カーソル移動（vim 流・矢印両対応）
  * - `Enter`: 詳細（Agent View Lv.1）を開く
+ *
+ * `viewMode` が `'detail'` のときは `←`/`→` を隣接プロジェクト移動へ写す（FR-04）:
+ * - `←`: {@link KeyBindingHost.moveProject}(-1)、`→`: {@link KeyBindingHost.moveProject}(+1)
+ *
+ * `j`/`k`・`↑`/`↓` は release-4 では詳細表示中は無視していたが、release-6 でイベント履歴の
+ * スクロールへ再割当てされた（FR-02 AC-3）。ただしそのスクロールは `DetailView` 自身が
+ * 独自の `useInput` で直接消費するため、本 controller では list モードのときのみ処理し、
+ * detail モードでは（前述の `←`/`→` 以外）一切ディスパッチしない。
  *
  * `viewMode` によらず常に有効:
  * - `esc`: 戻る（ヘルプを閉じる／詳細から一覧へ）、`?`: ヘルプ、`q`: 終了
@@ -73,7 +90,9 @@ export class KeyBindingController {
    *
    * @param input `useInput` が渡す入力文字（矢印・Enter・esc では空文字）。
    * @param key 参照するキーフラグ。
-   * @param viewMode 現在表示中のビュー。`'detail'` 中はフィルタ・移動・詳細操作を無視する。
+   * @param viewMode 現在表示中のビュー。`'detail'` 中はフィルタ・カーソル移動・詳細を開く操作
+   *   を無視する。`j`/`k`・`↑`/`↓` も detail 中は無視する（`DetailView` 自身のイベントスクロール
+   *   が消費するため）。`←`/`→` のみ detail 中に隣接プロジェクト移動へ写す（FR-04）。
    */
   handleKey(input: string, key: KeyFlags, viewMode: ViewMode): void {
     if (viewMode === 'list') {
@@ -94,6 +113,17 @@ export class KeyBindingController {
 
       if (key.return) {
         this.host.openDetail()
+        return
+      }
+    }
+
+    if (viewMode === 'detail') {
+      if (key.leftArrow) {
+        this.host.moveProject(-1)
+        return
+      }
+      if (key.rightArrow) {
+        this.host.moveProject(1)
         return
       }
     }
