@@ -14,6 +14,10 @@
 #   - 全候補が応答不能なときのみイベントを `$MONOMI_HOME/outbox/*.json` へ退避（AC-3 / FR-04 AC-2）。
 #   - 次回発火時、outbox 内の未送信分を occurred_at 昇順で先に再送してから
 #     当該イベントを送る（AC-4）。
+#   - `event_type=SessionEnd` は例外経路（release-7 FR-02）: outbox flush をスキップし、
+#     先頭候補 hub のみへ connect-timeout=1s/max-time=2s で単発 POST する。セッション終了の
+#     grace period 内で完了させるため。失敗時は他イベント種別と同じく outbox へ退避し、
+#     次回いずれかのイベント発火時に再送される。SessionEnd 以外は従来の複数候補・最大8sのまま。
 #
 # 使い方（install-hooks が settings.json に登録するコマンド形）:
 #   echo "$HOOK_JSON" | monomi-report.sh                 # 一般フック（event_type は stdin から）
@@ -221,6 +225,9 @@ EOF
 # 経由で渡し、ファイルは 600 パーミッションの一時ファイルにして使用後は必ず削除する。
 post_json() {
   local url=$1 token=$2 file=$3
+  # 第4/5引数省略時は既定 2s/8s（既存呼び出し・post_json_multi は無変更・後方互換）。
+  # SessionEnd 高速経路（FR-02）は 1s/2s を明示的に渡す。
+  local connect_timeout=${4:-2} max_time=${5:-8}
   local curlrc
   curlrc=$(mktemp "${TMPDIR:-/tmp}/monomi-curlrc.XXXXXX") || return 1
   chmod 600 "$curlrc"
@@ -231,7 +238,7 @@ post_json() {
 
   local code
   code=$(curl -sS -o /dev/null -w '%{http_code}' \
-    --connect-timeout 2 --max-time 8 \
+    --connect-timeout "$connect_timeout" --max-time "$max_time" \
     -X POST \
     -K "$curlrc" \
     --data-binary @"$file" \
@@ -605,13 +612,21 @@ main() {
 $(resolve_hub_url "$config_file")
 EOF
 
-  # --- 送信フロー: 先に outbox を流し切り、次に当該イベントを送る ----------
+  # --- 送信フロー -----------------------------------------------------------
+  # SessionEnd（FR-02）: セッション終了直後の短い grace period 内で確実に完了させたい
+  # ため、outbox flush はスキップ（AC-1）し、先頭候補 1 件のみへ 1s/2s の短タイムアウトで
+  # 送る（AC-2）。他候補への順試行はしない（複数候補×8s だと grace period を超えうる）。
+  # SessionEnd 以外は従来通り、先に outbox を流し切ってから複数候補・最大8sで送る（AC-6）。
   mkdir -p "$outbox" 2>/dev/null
-  flush_outbox "$outbox" "$token" "${hub_urls[@]}"
-
   local send_rc
-  post_json_multi "$token" "$body_file" "${hub_urls[@]}"
-  send_rc=$?
+  if [ "$event_type" = 'SessionEnd' ]; then
+    post_json "${hub_urls[0]:-}" "$token" "$body_file" 1 2
+    send_rc=$?
+  else
+    flush_outbox "$outbox" "$token" "${hub_urls[@]}"
+    post_json_multi "$token" "$body_file" "${hub_urls[@]}"
+    send_rc=$?
+  fi
   case "$send_rc" in
     0)
       log_debug 'event delivered'

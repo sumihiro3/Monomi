@@ -145,15 +145,22 @@ export class InstanceStatusService {
       return null
     }
 
-    const sessionStatuses = sessions.map((session) =>
-      this.deriver.deriveForSession(
-        this.loadEventsForCurrentRun(session.id),
-        now,
-        this.thresholds,
-        HAS_PR_WAITING
-      )
-    )
-    const representative = this.rollup.rollup(sessionStatuses)
+    const entries = sessions.map((session) => {
+      const currentRunEvents = this.loadEventsForCurrentRun(session.id)
+      return {
+        status: this.deriver.deriveForSession(
+          currentRunEvents,
+          now,
+          this.thresholds,
+          HAS_PR_WAITING
+        ),
+        // 降順（received_at 新しい順）の先頭が直近イベント。イベント 0 件（理論上の
+        // 縮退ケース）は stale 除外の対象にしない安全値として now を使う（release-7 FR-01）。
+        lastEventAt: currentRunEvents[0]?.receivedAt ?? now,
+      }
+    })
+    const sessionStatuses = entries.map((entry) => entry.status)
+    const representative = this.rollup.rollup(entries)
     const representativeSession = sessions[sessionStatuses.indexOf(representative)]
 
     const project = this.projects.findById(instance.projectId)

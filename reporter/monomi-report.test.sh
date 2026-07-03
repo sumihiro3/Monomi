@@ -9,8 +9,12 @@
 #   AC-4: hub 復旧後 → outbox 内イベントが occurred_at 昇順で再送される
 #   FR-07: 4xx 隔離 / 制御文字エスケープ / rejected 上限掃除
 #   FR-04: hub_endpoints 順試行 / 全滅時のみ退避 / MONOMI_HUB_URL 最優先
+#   FR-02 (release-7): SessionEnd 高速経路 — outbox flush スキップ(AC-1) /
+#     先頭候補のみ短タイムアウトで送信(AC-2) / 4xx 隔離(AC-5) /
+#     不達時 outbox 退避(AC-4) / ワースト実行時間 <3000ms(AC-7)
 #
-# 前提: macOS bash 3.2 / curl / git / node（実 hub と capture server 用）/ sqlite3。
+# 前提: macOS bash 3.2 / curl / git / node（実 hub と capture server 用）/ sqlite3 /
+#       perl（Time::HiRes、SessionEnd のミリ秒精度タイミング計測用）。
 #       jq はテストハーネス側では使用（reporter 本体は jq 有無を吸収する）。
 #
 # 使い方: bash reporter/monomi-report.test.sh
@@ -917,6 +921,292 @@ EOF
   kill "$ep_pid" "$ov_pid" >/dev/null 2>&1
 }
 
+# =========================================================================
+# Test 13 (FR-02 AC-1 / AC-3): SessionEnd は outbox flush をスキップし直接配信
+# =========================================================================
+# outbox に既存の退避イベントを仕込んだ状態で SessionEnd を発火する。SessionEnd 経路は
+# flush_outbox を呼ばないため、既存の outbox イベントは再送されず（capture server に届か
+# ず）そのまま残り、当該 SessionEnd イベントだけが届くことを検証する。
+test_session_end_skips_outbox_flush() {
+  local name='FR-02 AC-1/AC-3: SessionEnd skips outbox flush, delivers directly'
+  local home="$WORK/t13-home"
+  local repo="$WORK/t13-repo"
+  mkdir -p "$home/outbox"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  cat >"$home/outbox/stale.json" <<'JSON'
+{"device_id":"local","session_id":"outbox-stale","instance":{"remote_url":"https://github.com/sumihiro/ProjectLens.git","path":"/x","branch":null,"is_git_repo":true,"common_dir":null},"event_type":"Notification","event_subtype":"idle_prompt","tool_name":null,"tool_summary":null,"occurred_at":"2020-01-01T06:00:00Z"}
+JSON
+
+  local caplog="$WORK/t13-cap.log"
+  local capport="$WORK/t13-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  hook_json 'SessionEnd' "$repo" '' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+
+  if ! wait_for_grep "$caplog" 'sess-1' 50; then
+    fail "$name (SessionEnd event delivered)" "caplog: $(cat "$caplog" 2>/dev/null)"
+  else
+    pass "$name (SessionEnd event delivered)"
+  fi
+
+  # flush をスキップしたので outbox の既存イベントは再送されず、caplog には現れない。
+  local n
+  n=$(grep -c 'outbox-stale' "$caplog" 2>/dev/null)
+  assert_eq "$name (stale outbox event NOT flushed)" '0' "$n"
+  # caplog は SessionEnd の 1 行だけ。
+  local total
+  total=$(wc -l <"$caplog" 2>/dev/null | tr -d ' ')
+  assert_eq "$name (caplog has exactly 1 line)" '1' "$total"
+  # 未flushの outbox ファイルはそのまま残る。
+  local left
+  left=$(ls -1 "$home"/outbox/*.json 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$name (stale outbox file still present)" '1' "$left"
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 14 (FR-02 AC-2): SessionEnd は先頭候補 1 件のみへ送り、2 番目には一切届かない
+# =========================================================================
+# hub_endpoints に到達可能な capture server を「2つとも」起動する（test_hub_url_overrides_
+# endpoints と同様の2サーバ構成）。通常イベントなら先頭が生きていればそこで確定するだけで
+# 「2番目が生きていても叩かれない」ことまでは証明できないため、あえて両方 live にして
+# 2番目の受信ログが 0 行のままであることを厳密に検証する。
+test_session_end_single_candidate_only() {
+  local name='FR-02 AC-2: SessionEnd contacts only the first of two live candidates'
+  local home="$WORK/t14-home"
+  local repo="$WORK/t14-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog1="$WORK/t14-cap1.log" capport1="$WORK/t14-cap1.port"
+  local caplog2="$WORK/t14-cap2.log" capport2="$WORK/t14-cap2.port"
+  : >"$caplog1"
+  : >"$caplog2"
+  CAP_LOG="$caplog1" CAP_PORTFILE="$capport1" node "$CAP_SERVER_JS" &
+  local cap1pid=$!
+  BG_PIDS="$BG_PIDS $cap1pid"
+  CAP_LOG="$caplog2" CAP_PORTFILE="$capport2" node "$CAP_SERVER_JS" &
+  local cap2pid=$!
+  BG_PIDS="$BG_PIDS $cap2pid"
+  if ! wait_for_file "$capport1" 100 || ! wait_for_file "$capport2" 100; then
+    fail "$name" 'capture servers did not start'
+    return
+  fi
+  local port1 port2
+  port1=$(cat "$capport1")
+  port2=$(cat "$capport2")
+
+  cat >"$home/config.yml" <<EOF
+role: child
+device_id: laptop-t14
+hub_endpoints:
+  - http://127.0.0.1:$port1
+  - http://127.0.0.1:$port2
+EOF
+
+  hook_json 'SessionEnd' "$repo" '' |
+    MONOMI_HOME="$home" "$SCRIPT" >/dev/null 2>&1
+
+  if wait_for_grep "$caplog1" 'sess-1' 50; then
+    pass "$name (delivered to 1st candidate)"
+  else
+    fail "$name (delivered to 1st candidate)" "1st caplog: $(cat "$caplog1" 2>/dev/null)"
+  fi
+  # 2 番目は生きていても一切叩かれない（受信ログは 0 行のまま）。
+  local n2
+  n2=$(wc -l <"$caplog2" 2>/dev/null | tr -d ' ')
+  assert_eq "$name (2nd candidate never contacted)" '0' "$n2"
+  # 1 件目で配信確定したので outbox には退避されない。
+  local ob
+  ob=$(ls -1 "$home"/outbox/*.json 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$name (delivered, not saved to outbox)" '0' "$ob"
+
+  kill "$cap1pid" "$cap2pid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 14b (FR-02 AC-4): 死んだポートへの SessionEnd は outbox へ1件退避される
+# =========================================================================
+# test_outbox_on_hub_down (Test 3) の SessionEnd 版。誰も listen していない単一の
+# 死んだポートへ MONOMI_HUB_URL で直接向け、outbox/*.json に 1 件退避されることを見る。
+test_session_end_dead_hub_saves_outbox() {
+  local name='FR-02 AC-4: SessionEnd to unreachable hub saves event to outbox'
+  local home="$WORK/t14b-home"
+  local repo="$WORK/t14b-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  # 誰も listen していないポートへ向ける(接続拒否)。
+  hook_json 'SessionEnd' "$repo" '' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL='http://127.0.0.1:59997' \
+      "$SCRIPT" >/dev/null 2>&1
+
+  local n
+  n=$(ls -1 "$home"/outbox/*.json 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$name (outbox file count == 1)" '1' "$n"
+
+  local f et
+  f=$(ls -1 "$home"/outbox/*.json 2>/dev/null | head -n 1)
+  if [ -n "$f" ]; then
+    et=$(jq -r '.event_type' "$f" 2>/dev/null)
+    assert_eq "$name (outbox event_type == SessionEnd)" 'SessionEnd' "$et"
+  else
+    fail "$name (outbox event_type)" 'no outbox file'
+  fi
+}
+
+# =========================================================================
+# Test 15 (FR-02 AC-5): SessionEnd の 4xx は既存通り rejected/ へ隔離される
+# =========================================================================
+test_session_end_4xx_quarantined() {
+  local name='FR-02 AC-5: SessionEnd 4xx response is quarantined to rejected/'
+  local home="$WORK/t15-home"
+  local repo="$WORK/t15-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  # Test 7 で定義済みの selective server を再利用する（無ければここで生成）。
+  local selective_server="$WORK/selective-server.cjs"
+  if [ ! -f "$selective_server" ]; then
+    cat >"$selective_server" <<'JS'
+const http = require('http');
+const fs = require('fs');
+const log = process.env.CAP_LOG;
+const portFile = process.env.CAP_PORTFILE;
+const marker = process.env.CAP_REJECT_MARKER || 'poison';
+const srv = http.createServer((req, res) => {
+  const chunks = [];
+  req.on('data', (c) => chunks.push(c));
+  req.on('end', () => {
+    const body = Buffer.concat(chunks).toString('utf8').replace(/\r?\n/g, ' ');
+    if (body.includes(marker)) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end('{"error":"invalid_payload"}');
+      return;
+    }
+    fs.appendFileSync(log, body + '\n');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+});
+srv.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(portFile, String(srv.address().port));
+});
+JS
+  fi
+
+  local caplog="$WORK/t15-cap.log"
+  local capport="$WORK/t15-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" CAP_REJECT_MARKER='sess-1' \
+    node "$selective_server" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  hook_json 'SessionEnd' "$repo" '' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+
+  local rn rf rsid
+  rn=$(ls -1 "$home"/outbox/rejected/*.json 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$name (rejected file count == 1)" '1' "$rn"
+  rf=$(ls -1 "$home"/outbox/rejected/*.json 2>/dev/null | head -n 1)
+  if [ -n "$rf" ]; then
+    rsid=$(jq -r '.session_id' "$rf" 2>/dev/null)
+    assert_eq "$name (rejected file is the SessionEnd event)" 'sess-1' "$rsid"
+  else
+    fail "$name (rejected file is the SessionEnd event)" 'no rejected file'
+  fi
+  local ob
+  ob=$(ls -1 "$home"/outbox/*.json 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$name (not left in outbox)" '0' "$ob"
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 16 (AC-7): SessionEnd のワースト実行時間は概ね3秒以内（<3000ms）に収まる
+# =========================================================================
+# 応答を返さず接続だけ保持する「死んだ hub」へ向け、SessionEnd の所要時間を実測する。
+# bash 3.2 の `date` は %N（ナノ秒）に非対応なので秒単位の粒度しか取れない。ここでは
+# perl の Time::HiRes（macOS/CI ともに標準搭載、nap() で既に使用実績あり）でミリ秒精度の
+# epoch を取り、AC-7 が定める「概ね3秒以内」を文字通り <3000ms で判定する新パターンを使う
+# （既存テストに前例なし）。short-timeout（connect-timeout=1s/max-time=2s）で頭打ちになる
+# ため、旧来の複数候補×最大8sの経路には決して張り付かないことを実測で裏付ける。
+test_session_end_fast_timeout() {
+  local name='AC-7: SessionEnd worst-case wall time stays under 3000ms'
+  local home="$WORK/t16-home"
+  local repo="$WORK/t16-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  # 接続は受け付けるが応答を一切返さない TCP サーバ（max-time の頭打ちを誘発する）。
+  local hang_server="$WORK/hang-server.cjs"
+  cat >"$hang_server" <<'JS'
+const net = require('net');
+const fs = require('fs');
+const portFile = process.env.CAP_PORTFILE;
+const srv = net.createServer((_socket) => {
+  // 接続は受けるが応答しない（curl を max-time まで張り付かせる）。
+});
+srv.listen(0, '127.0.0.1', () => {
+  fs.writeFileSync(portFile, String(srv.address().port));
+});
+JS
+  local hangport="$WORK/t16-hang.port"
+  CAP_PORTFILE="$hangport" node "$hang_server" &
+  local hangpid=$!
+  BG_PIDS="$BG_PIDS $hangpid"
+  if ! wait_for_file "$hangport" 100; then
+    fail "$name" 'hang server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$hangport")
+
+  local start_ms end_ms elapsed_ms
+  start_ms=$(perl -MTime::HiRes=time -e 'printf "%.0f\n", time()*1000')
+  hook_json 'SessionEnd' "$repo" '' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  end_ms=$(perl -MTime::HiRes=time -e 'printf "%.0f\n", time()*1000')
+  elapsed_ms=$((end_ms - start_ms))
+
+  if [ "$elapsed_ms" -lt 3000 ]; then
+    pass "$name (elapsed ${elapsed_ms}ms < 3000ms)"
+  else
+    fail "$name (elapsed ${elapsed_ms}ms < 3000ms)" "took ${elapsed_ms}ms, expected short-timeout path (~2000ms)"
+  fi
+
+  # max-time で失敗したので outbox へ退避される。
+  local ob
+  ob=$(ls -1 "$home"/outbox/*.json 2>/dev/null | wc -l | tr -d ' ')
+  assert_eq "$name (saved to outbox after timeout)" '1' "$ob"
+
+  kill "$hangpid" >/dev/null 2>&1
+}
+
 # --- 実行 ----------------------------------------------------------------
 ensure_build
 test_real_hub_records_event
@@ -931,6 +1221,11 @@ test_rejected_cap_prunes_oldest
 test_multi_endpoint_ordered_failover
 test_multi_endpoint_all_down_saves_outbox
 test_hub_url_overrides_endpoints
+test_session_end_skips_outbox_flush
+test_session_end_single_candidate_only
+test_session_end_dead_hub_saves_outbox
+test_session_end_4xx_quarantined
+test_session_end_fast_timeout
 
 echo '----------------------------------------'
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"

@@ -156,6 +156,31 @@ describe('InstanceStatusService.listInstances — derived status (FR-04 / §8.2)
     expect(rows[0].status.display).toBe('active')
     expect(rows[0].session.id).toBe('sess-B') // representative is the active session
   })
+
+  it('does not let an orphaned next_wait session mask a currently active one (release-7 FR-01 AC-4, OSSRadar case)', () => {
+    // Session A goes idle (next_wait) 20 minutes ago and never sends SessionEnd — an orphaned
+    // session left behind by e.g. a crashed/killed Claude Code process. Session B is actively
+    // working right now, on the same instance/path. Pre-FR-01, A's higher raw priority
+    // (next_wait=2 > active=1) would win the rollup and hide B's active status — this is the
+    // B7 regression this test guards against.
+    const now = 2_000_000
+    nowMs = 100_000
+    ingestion.ingest(baseEvent({ session_id: 'sess-A', event_type: 'SessionStart', at: 100_000 }))
+    nowMs = now - 20 * 60_000
+    ingestion.ingest({
+      ...baseEvent({ session_id: 'sess-A', event_type: 'Notification', at: now - 20 * 60_000 }),
+      event_subtype: 'idle_prompt',
+    })
+    nowMs = now - 3_000
+    ingestion.ingest(
+      baseEvent({ session_id: 'sess-B', event_type: 'PostToolUse', at: now - 3_000 })
+    )
+
+    const rows = statusService.listInstances(toEpochMs(now))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status.display).toBe('active')
+    expect(rows[0].session.id).toBe('sess-B')
+  })
 })
 
 describe('InstanceStatusService.getInstanceDetail — Agent View Lv.1 (§8.2 / §10.4)', () => {
