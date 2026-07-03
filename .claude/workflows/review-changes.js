@@ -3,12 +3,16 @@ export const meta = {
   description: '差分を複数次元で並列レビューし、敵対的検証を通った所見のみ報告',
   whenToUse: '実装後の差分レビュー。args: {base: "main"} で比較先ブランチを指定(省略時は main)。未コミット変更も含めてレビューする',
   phases: [
-    { title: 'レビュー', detail: '複数次元の並列レビュー', model: 'opus' },
+    { title: 'レビュー', detail: '複数次元の並列レビュー', model: 'claude-opus-4-6' },
     { title: '検証', detail: '所見ごとの敵対的検証', model: 'sonnet' },
   ],
 }
 
-// モデル使い分けの方針: 複雑なレビュー = opus / 敵対的検証 = sonnet
+// モデル使い分けの方針: 複雑なレビュー = Opus 4.6(claude-opus-4-6、バージョン固定) / 敵対的検証 = sonnet
+//
+// 'opus' エイリアスは Anthropic API では最新版(現状 Opus 4.8)に解決されるため、
+// 特定バージョンに固定したい場合はエイリアスではなく完全なモデル名を直接指定する
+// (https://code.claude.com/docs/ja/model-config#pin-models-for-third-party-deployments)。
 
 // args は JSON 文字列で渡ってくる場合があるためパースする
 let input = args
@@ -83,7 +87,7 @@ const results = await pipeline(
       label: `review:${d.key}`,
       phase: 'レビュー',
       schema: FINDINGS_SCHEMA,
-      model: 'opus',
+      model: 'claude-opus-4-6',
     }),
   (review, d) =>
     parallel(

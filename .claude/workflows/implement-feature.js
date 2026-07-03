@@ -6,12 +6,36 @@ export const meta = {
   phases: [
     { title: '探索', detail: '要件と関連コードの並列調査', model: 'haiku/sonnet' },
     { title: '設計', detail: '実装計画と作業項目への分解', model: 'opus' },
-    { title: '実装', detail: '作業項目を順に実装(ファイル競合を避けるため逐次)', model: 'sonnet' },
+    {
+      title: '実装',
+      detail: '作業項目を順に実装(ファイル競合を避けるため逐次)',
+      model: 'haiku/sonnet/opus(複雑度スコアで決定)',
+    },
     { title: '検証', detail: 'release-check ワークフローをネスト実行', model: 'haiku' },
   ],
 }
 
-// モデル使い分けの方針: 要件・設計 = opus / 実装 = sonnet / 検証 = haiku
+// モデル使い分けの方針: 要件・設計 = opus / 実装 = 複雑度スコアに応じて haiku・sonnet・opus / 検証 = haiku
+//
+// 実装フェーズのモデル割当は複雑度スコア(1-10、設計フェーズが作業項目ごとに採点)を
+// 2つの閾値で3段に分ける。閾値を変えるだけで sonnet の担当範囲を調整できる。
+// HAIKU_MAX_COMPLEXITY 以下 → haiku、OPUS_MIN_COMPLEXITY 以上 → opus、
+// その間(既定 3-8 の6段階、10段中最も広い帯)は sonnet。opus は「本当に難しい9-10」だけに絞り、
+// sonnet の担当範囲を広めにする方針(Sonnet 5 は Opus 4.8 と遜色ないため)。
+const HAIKU_MAX_COMPLEXITY = 2
+const OPUS_MIN_COMPLEXITY = 9
+
+/**
+ * 複雑度スコア(1-10)から実装フェーズのモデルを決める。
+ *
+ * @param score 設計フェーズが採点した複雑度(1-10)。
+ * @returns 'haiku' | 'sonnet' | 'opus'。
+ */
+function modelForComplexity(score) {
+  if (score <= HAIKU_MAX_COMPLEXITY) return 'haiku'
+  if (score >= OPUS_MIN_COMPLEXITY) return 'opus'
+  return 'sonnet'
+}
 
 // args は JSON 文字列で渡ってくる場合があるためパースする
 let input = args
@@ -65,15 +89,29 @@ const DESIGN_SCHEMA = {
       description: '実装順に並べた作業項目',
       items: {
         type: 'object',
-        required: ['title', 'description', 'files', 'complex'],
+        required: ['title', 'description', 'files', 'complexity'],
         properties: {
           title: { type: 'string' },
           description: { type: 'string', description: '変更内容と完了条件' },
           files: { type: 'array', items: { type: 'string' }, description: '触る予定のファイル' },
-          complex: {
-            type: 'boolean',
+          complexity: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 10,
             description:
-              '設計判断やロジックの新規実装を伴う複雑な項目なら true(高性能モデルを割り当てる)。機械的な置換・設定変更なら false',
+              '実装の複雑度(1-10、実装に割り当てるモデルの強さを決める採点)。' +
+              '次の3観点を総合して採点すること: ' +
+              '(a) 新規設計判断の有無(既存パターンの単純適用か、新しい抽象・状態管理・並行制御の設計が要るか)、' +
+              '(b) 変更範囲(単一ファイルの局所変更か、複数レイヤーにまたがる契約変更か)、' +
+              '(c) バグ混入リスク(機械的な値変更か、境界値・タイミング・レイアウト計算等が絡むか)。' +
+              '目安 — 1-3: 機械的な置換・定数値の変更・定型パターンのそのままの適用' +
+              '(例: 設定値の変更、footer文言の追加、既存コンポーネントへの1行のprops追加)。' +
+              '4-7: 典型的な実装(既存パターンの組み合わせ・中程度の分岐、大半の作業項目はここ)' +
+              '(例: 既存コンポーネントと同じ設計で新規UIコンポーネントを1つ追加する)。' +
+              '8-10: 新規のアーキテクチャ判断・複雑な状態管理・レイアウト計算等の新規ロジック・' +
+              '既存規約からの逸脱を伴う判断' +
+              '(例: ポーリング機構のジェネリック化、スクロール位置とtail-follow挙動の状態設計、' +
+              '枠線へのタイトル埋め込みの文字数計算)。',
           },
         },
       },
@@ -90,12 +128,13 @@ phase('実装')
 const results = []
 for (let i = 0; i < design.items.length; i++) {
   const item = design.items[i]
-  log(`実装 ${i + 1}/${design.items.length}: ${item.title}`)
+  const model = modelForComplexity(item.complexity)
+  log(`実装 ${i + 1}/${design.items.length}: ${item.title} (複雑度 ${item.complexity} → ${model})`)
   const r = await agent(
     `${RULES}\n次の作業項目を実装してください。実装後、変更したファイル一覧と判断に迷った点を報告してください。テストが必要な変更は同時に書くこと。\n\n## 実装方針(全体)\n${design.summary}\n\n## 作業項目\n${item.title}\n${item.description}\n対象ファイル目安: ${item.files.join(', ')}\n\n## 要件(参照用)\n${reqSummary}`,
-    { label: `実装: ${item.title}`, phase: '実装', model: item.complex ? 'opus' : 'sonnet' }
+    { label: `実装: ${item.title}`, phase: '実装', model }
   )
-  results.push({ item: item.title, report: r })
+  results.push({ item: item.title, complexity: item.complexity, model, report: r })
 }
 
 phase('検証')
