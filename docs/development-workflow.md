@@ -1,26 +1,28 @@
 # Monomi 開発ワークフロー
 
-Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の README が汎用の導入手順）を採用し、Claude Code の Workflow tool（dynamic workflows）による 6 ステップのリリースサイクルで開発する。本ドキュメントは、その汎用テンプレートを Monomi の実体（`.claude/workflows/`・`.claude/commands/`・`docs/releases/release-N/requirements.md`）に即して具体化した運用ガイドである。
+Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の README が汎用の導入手順）を採用し、Claude Code の Workflow tool（dynamic workflows）による 7 ステップのリリースサイクルで開発する。本ドキュメントは、その汎用テンプレートを Monomi の実体（`.claude/workflows/`・`.claude/commands/`・`docs/releases/release-N/requirements.md`）に即して具体化した運用ガイドである。
 
-1 サイクルは「要件を `docs/releases/release-N/requirements.md` に確定させてから実装に入り、レビュー・ドキュメント同期・検査を経てコミットする」流れで、要件確定なしに実装へ進まないことを原則とする。
+1 サイクルは「要件を `docs/releases/release-N/requirements.md` に確定させ、同名のリリースブランチを作成してから実装に入り、レビュー・ドキュメント同期・検査を経てコミットし、PR で `main` へ合流する」流れで、要件確定なしに実装へ進まないこと・`main` への直接 push はしないことを原則とする。
 
-## 6 ステップのリリースサイクル
+## 7 ステップのリリースサイクル
 
-| #   | ステップ                   | 実体                                                                  |
-| --- | -------------------------- | --------------------------------------------------------------------- |
-| 1   | 要件壁打ち                 | `/refine-requirements` → `docs/releases/release-N/requirements.md`    |
-| 2   | 実装 (探索→設計→実装→検証) | `Workflow({name: "implement-feature", args: {release: "release-N"}})` |
-| 3   | 差分レビュー               | `Workflow({name: "review-changes"})`                                  |
-| 4   | ドキュメント同期           | `Workflow({name: "sync-docs", args: {release: "release-N"}})`         |
-| 5   | リリース前検査             | `Workflow({name: "release-check"})`                                   |
-| 6   | 論理単位コミット           | `/logical-commits`                                                    |
+| #   | ステップ                         | 実体                                                                                           |
+| --- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 1   | 要件壁打ち＋リリースブランチ作成 | `/refine-requirements` → `docs/releases/release-N/requirements.md` ＋ `release-N` ブランチ作成 |
+| 2   | 実装 (探索→設計→実装→検証)       | `Workflow({name: "implement-feature", args: {release: "release-N"}})`                          |
+| 3   | 差分レビュー                     | `Workflow({name: "review-changes"})`                                                           |
+| 4   | ドキュメント同期                 | `Workflow({name: "sync-docs", args: {release: "release-N"}})`                                  |
+| 5   | リリース前検査                   | `Workflow({name: "release-check"})`                                                            |
+| 6   | 論理単位コミット                 | `/logical-commits`                                                                             |
+| 7   | ブランチ push・PR 作成           | `git push -u origin release-N` ＋ `gh pr create`                                               |
 
-### 1. 要件壁打ち — `/refine-requirements`
+### 1. 要件壁打ち＋リリースブランチ作成 — `/refine-requirements`
 
 - コマンド: `.claude/commands/refine-requirements.md`
 - 対象リリース（`release-N`）単位で要件を対話で詰め、確定要件を `docs/releases/release-N/requirements.md` に書き出す。
 - 出力の構成: ヘッダー（リリース識別子・ステータス・作成日）／背景と目的／機能要件（`FR-XX` 形式、優先度と受け入れ基準 `AC-XX` つき）／非機能要件／スコープ外／未解決事項。
 - 次工程の `implement-feature` はこのファイルを入力に取るため、**実装可能な粒度まで具体化してから確定**させる。
+- **リリースブランチ**: リリース識別子（`release-N-slug`、`docs/releases/` のディレクトリ名と完全一致）が確定した時点で、`main` を最新化してから同名のブランチを作成しチェックアウトする。以降のステップ（実装・レビュー・doc 同期・コミット）はすべてこのブランチ上で行い、ステップ 7 まで `main` はチェックアウトしない（詳細は後述の「リリースブランチの運用」）。
 
 ### 2. 実装 — `implement-feature`
 
@@ -62,6 +64,20 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 
 - コマンド: `.claude/commands/logical-commits.md`
 - 差分を意味のある論理単位に分割してコミットする。
+
+### 7. ブランチ push・PR 作成
+
+- `git push -u origin release-N` でリリースブランチをリモートへ push し、`gh pr create` で `main` 向けの PR を作成する。
+- **`main` への直接 push はしない**（実害: release-7 で直接 push を試みたところ、自動モードのガードレールに「デフォルトブランチへの直接 push」としてブロックされた）。PR のマージはユーザーが GitHub 上で行う、またはユーザーが明示的に指示した場合のみ `gh pr merge` する。
+- マージ後、ローカルの `main` を最新化し、不要になったリリースブランチを削除する（`git branch -d release-N`）。
+
+## リリースブランチの運用
+
+- **作成タイミング**: ステップ 1（要件壁打ち）で要件識別子（`release-N-slug`）が確定した時点。実装（ステップ2）に入る前に必ず作成する。
+- **命名**: `docs/releases/` のディレクトリ名と完全一致させる（例: `release-7-session-status-reliability`）。ディレクトリ名と枝分かれさせない。
+- **作成元**: 最新化した `main`（`git checkout main && git pull && git checkout -b release-N-slug`）。
+- **作業範囲**: ステップ 2〜6（実装・レビュー・doc 同期・検査・コミット）はすべてこのブランチ上で行う。
+- **合流**: ステップ 7 で PR を作成し、マージで `main` へ合流する（直接 push しない）。
 
 ## release-N の命名規則（semver とは独立）
 
