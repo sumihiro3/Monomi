@@ -19,14 +19,15 @@ description: リリース要件の壁打ち。対話で要件を固め、docs/re
    - 受け入れ基準(検証可能な形で)
    - 非機能要件(性能・セキュリティ・互換性)で関係するもの
 3. **調査(必要時)**: 技術的な実現性・代替案の比較が必要なら、サブエージェント(Explore / general-purpose)や WebSearch で調査してから提案する。推測で断定しない
-4. **確定要件の書き出し**: `docs/releases/release-N/requirements.md` に以下の構成で書く:
+4. **リリースブランチの作成**: リリース識別子(`release-N-slug`)が確定した時点で、`main` を最新化してから同名のブランチを作成しチェックアウトする(`git checkout main && git pull && git checkout -b release-N-slug`)。以降のステップ(実装・レビュー・doc同期・コミット)はこのブランチ上で行う。既に対象ブランチで作業を再開している場合は作成をスキップする
+5. **確定要件の書き出し**: `docs/releases/release-N-slug/requirements.md` に以下の構成で書く:
    - ヘッダー(リリース番号・ステータス: 確定・作成日)
    - 背景と目的
    - 機能要件(FR-XX 形式、優先度と受け入れ基準つき)
    - 非機能要件(該当するもののみ)
    - スコープ外(やらないと決めたこと)
    - 未解決事項(実装中に判断が必要な点)
-5. **次のステップの提示**: `implement-feature` ワークフローへの引き継ぎ方法(`Workflow({name: "implement-feature", args: {release: "release-N"}})`)を案内して終了する
+6. **次のステップの提示**: `implement-feature` ワークフローへの引き継ぎ方法(`Workflow({name: "implement-feature", args: {release: "release-N"}})`)を案内して終了する
 
 ## 注意
 

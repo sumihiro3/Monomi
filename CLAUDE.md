@@ -12,15 +12,16 @@
 
 ## 開発ワークフロー (release-workflow-template 導入)
 
-このプロジェクトは Claude Code の Workflow tool (dynamic workflows) による 6 ステップのリリースサイクルを採用しています。
+このプロジェクトは Claude Code の Workflow tool (dynamic workflows) による 7 ステップのリリースサイクルを採用しています。
 
-| #   | ステップ                   | 実体                                                                  |
-| --- | -------------------------- | --------------------------------------------------------------------- |
-| 1   | 要件壁打ち                 | `/refine-requirements` → `docs/releases/release-N/requirements.md`    |
-| 2   | 実装 (探索→設計→実装→検証) | `Workflow({name: "implement-feature", args: {release: "release-N"}})` |
-| 3   | 差分レビュー               | `Workflow({name: "review-changes"})`                                  |
-| 4   | ドキュメント同期           | `Workflow({name: "sync-docs", args: {release: "release-N"}})`         |
-| 5   | リリース前検査             | `Workflow({name: "release-check"})`                                   |
-| 6   | 論理単位コミット           | `/logical-commits` (あれば)                                           |
+| #   | ステップ                         | 実体                                                                                           |
+| --- | -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 1   | 要件壁打ち＋リリースブランチ作成 | `/refine-requirements` → `docs/releases/release-N/requirements.md` ＋ `release-N` ブランチ作成 |
+| 2   | 実装 (探索→設計→実装→検証)       | `Workflow({name: "implement-feature", args: {release: "release-N"}})`                          |
+| 3   | 差分レビュー                     | `Workflow({name: "review-changes"})`                                                           |
+| 4   | ドキュメント同期                 | `Workflow({name: "sync-docs", args: {release: "release-N"}})`                                  |
+| 5   | リリース前検査                   | `Workflow({name: "release-check"})`                                                            |
+| 6   | 論理単位コミット                 | `/logical-commits` (あれば)                                                                    |
+| 7   | ブランチ push・PR 作成           | `git push -u origin release-N` ＋ `gh pr create`                                               |
 
-ワークフローは `.claude/workflows/`、コマンドは `.claude/commands/` にある。要件は `docs/releases/release-N/requirements.md` に確定させてから実装に進むこと。
+ワークフローは `.claude/workflows/`、コマンドは `.claude/commands/` にある。要件は `docs/releases/release-N/requirements.md` に確定させてから実装に進むこと。リリースブランチは要件確定時に作成し、`main` への直接 push はせず PR で合流する（詳細: `docs/development-workflow.md`）。
