@@ -1,6 +1,6 @@
 import { Box, Text } from 'ink'
-import { type ReactElement } from 'react'
-import { FILTER_ORDER, statusLabel, type StatusFilter } from '../status-display.js'
+import type { ReactElement } from 'react'
+import { FILTER_ORDER, type StatusFilter, statusLabel } from '../status-display.js'
 
 /** {@link StatusFilterBar} の props（presentational: 状態を持たず props を描くだけ）。 */
 export interface StatusFilterBarProps {
@@ -21,7 +21,11 @@ export interface StatusFilterBarProps {
  */
 export function StatusFilterBar({ counts, activeFilters }: StatusFilterBarProps): ReactElement {
   return (
-    <Box>
+    // release-9-i18n: 既定ロケール(en)のラベルは日本語より長く(例 "Awaiting next
+    // instruction")、100桁前後の端末では flexWrap 無指定だと Yoga が各項目の内部で
+    // 文言と件数を千切って折り返してしまう。flexWrap="wrap" で項目単位のまとまりを保って
+    // 次行へ折り返す。
+    <Box flexWrap="wrap">
       {FILTER_ORDER.map((filter, index) => {
         const active = activeFilters.includes(filter)
         return (

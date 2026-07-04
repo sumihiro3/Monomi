@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import { parse as parseYaml } from 'yaml'
 import { z } from 'zod'
-import { toDurationMs, type DurationMs } from '../domain/time.js'
-import { resolvePaths, type MonomiPaths } from './paths.js'
+import { type DurationMs, toDurationMs } from '../domain/time.js'
+import { type MonomiPaths, resolvePaths } from './paths.js'
 
 export type { DurationMs }
 
@@ -68,6 +68,15 @@ export interface EscalationThresholdsConfig {
 /** hub / child の役割。`hub` は API サーバを起動する側、`child` はそこへ接続する側（§3.1）。 */
 export type MonomiRole = 'hub' | 'child'
 
+/**
+ * CLI 表示言語（release-9-i18n FR-01）。既定値の解決は `src/i18n/` の `resolveLocale()` が担い、
+ * ここでは型とサポート値の集合のみを所有する（`src/i18n/` はこれを import する）。
+ */
+export type MonomiLocale = 'ja' | 'en'
+
+/** サポートするロケールの一覧（zod スキーマとロケール解決の両方から参照する）。 */
+export const LOCALES = ['ja', 'en'] as const
+
 /** ロード・検証済みの Monomi 設定。 */
 export interface MonomiConfig {
   /** 役割。既定 `hub`。`child` の場合は {@link hubEndpoints} で到達先を指定する（FR-01）。 */
@@ -87,6 +96,11 @@ export interface MonomiConfig {
   watchIntervalMs: DurationMs
   /** 放置昇格閾値。 */
   escalationThresholds: EscalationThresholdsConfig
+  /**
+   * CLI 表示言語。未設定は `undefined` のまま通す（既定 `en` への解決は
+   * `src/i18n/` の `resolveLocale()` に委譲する。§release-9-i18n FR-01 AC-2）。
+   */
+  locale?: MonomiLocale
 }
 
 /**
@@ -106,6 +120,7 @@ const rawConfigSchema = z.object({
   hub_endpoints: z.array(z.string()).optional(),
   // hub の待受アドレス上書き。既定は serve 側の 0.0.0.0（FR-06）。
   bind: z.string().optional(),
+  locale: z.enum(LOCALES).optional(),
   watch_interval: durationSchema.prefault('3s'),
   escalation_thresholds: z
     .object({
@@ -128,6 +143,7 @@ function toMonomiConfig(raw: z.infer<typeof rawConfigSchema>): MonomiConfig {
     deviceId: raw.device_id,
     hubEndpoints: raw.hub_endpoints,
     bind: raw.bind,
+    locale: raw.locale,
     watchIntervalMs: raw.watch_interval,
     escalationThresholds: {
       active: raw.escalation_thresholds.active,
@@ -153,6 +169,16 @@ export function parseConfig(input: unknown): MonomiConfig {
 }
 
 /**
+ * `locale` フィールドのみを検証するスキーマ（release-9-i18n review-changes 修正）。
+ *
+ * `rawConfigSchema` は未知キーを既定で除去するだけで他フィールドの妥当性チェックは避けられない
+ * ため、`locale` 以外のフィールドが不正な config.yml（例 `port: abc`）だと {@link loadLocale} まで
+ * 巻き込まれて失敗し、--help/--version のようなロケール解決だけで足りるコマンドまで落ちてしまう。
+ * `locale` だけを検証する軽量スキーマで独立させることでこれを避ける。
+ */
+const localeOnlySchema = z.object({ locale: z.enum(LOCALES).optional() })
+
+/**
  * YAML テキストをパースして設定を返す。ファイル I/O を伴わないので単体テストしやすい。
  *
  * @param yamlText config.yml の中身。
@@ -174,4 +200,23 @@ export function loadConfig(paths: MonomiPaths = resolvePaths()): MonomiConfig {
   }
   const text = fs.readFileSync(paths.configFile, 'utf8')
   return loadConfigFromYaml(text)
+}
+
+/**
+ * `~/.monomi/config.yml` から `locale` フィールドのみを検証・解決する（release-9-i18n
+ * review-changes 修正）。{@link loadConfig} と異なりスキーマ全体を検証しないため、`locale` と
+ * 無関係なフィールドが不正な config.yml でも、ロケール解決だけで足りるコマンド（--help/--version
+ * 等）を巻き込んで失敗させない。`locale` 自体が不正な値（`ja`/`en` 以外）の場合は引き続き
+ * {@link z.ZodError} を投げる（他フィールドが必要なコマンドは {@link loadConfig} 側で検証される）。
+ *
+ * @param paths パス集合（省略時は {@link resolvePaths} で解決）。
+ * @returns config.yml の `locale`（ファイル無し・未設定なら `undefined`）。
+ * @throws {z.ZodError} `locale` の値が `ja`/`en` 以外の場合。
+ */
+export function loadLocale(paths: MonomiPaths = resolvePaths()): MonomiLocale | undefined {
+  if (!fs.existsSync(paths.configFile)) {
+    return undefined
+  }
+  const text = fs.readFileSync(paths.configFile, 'utf8')
+  return localeOnlySchema.parse(parseYaml(text) ?? {}).locale
 }
