@@ -1,0 +1,98 @@
+{
+  "configVersion": 1,
+  "language": "ja",
+  "baseBranch": "main",
+  "requirementsPath": "docs/releases/{release}/requirements.md",
+  "conventionsDoc": "docs/ARCHITECTURE.md",
+  "checks": [
+    { "key": "lint", "cmd": "pnpm run lint", "cwd": "." },
+    { "key": "format", "cmd": "pnpm run format:check", "cwd": "." },
+    { "key": "test", "cmd": "pnpm run test", "cwd": "." },
+    { "key": "build", "cmd": "pnpm run build", "cwd": "." }
+  ],
+  "reviewDimensions": [
+    {
+      "key": "bugs",
+      "prompt": "正確性のレビュー: ロジックバグ、エラーハンドリング漏れ、境界条件、非同期処理の誤用を探してください。確信度の高いものだけ報告すること。"
+    },
+    {
+      "key": "perf",
+      "prompt": "性能のレビュー: 不要な再計算・再レンダリング、N+1 的なアクセス、大きなデータの無駄なコピー、ブロッキング処理を探してください。実害のあるものだけ報告すること。"
+    },
+    {
+      "key": "arch",
+      "prompt": "アーキテクチャ規約のレビュー: docs/ARCHITECTURE.md を読み、規約違反(責務分離、命名規則、型安全性など)を探してください。"
+    },
+    {
+      "key": "security",
+      "prompt": "セキュリティのレビュー: 入力バリデーション漏れ、機密情報のログ出力、権限チェック漏れを探してください。"
+    }
+  ],
+  "diffPathScope": null,
+  "syncDocs": {
+    "targets": [
+      {
+        "path": "docs/ARCHITECTURE.md",
+        "instruction": "docs/ARCHITECTURE.md を実装に同期してください。乖離がなければ変更しないこと。"
+      },
+      {
+        "path": "README.md",
+        "instruction": "README.md を同期してください。ユーザーに見える機能変更・セットアップ手順の変更のみ反映し、乖離がなければ変更しないこと。"
+      },
+      {
+        "path": "docs/design/class-diagram.md",
+        "instruction": "docs/design/class-diagram.md をクラス構成の実装差分に同期してください。乖離がなければ変更しないこと。"
+      }
+    ],
+    "frozen": ["docs/monomi-handoff.md"],
+    "excluded": ["docs/REQUIREMENTS.md"]
+  },
+  "knownIssues": {
+    "path": "docs/known-issues.md",
+    "categoryMap": {
+      "bugs": "B",
+      "perf": "P",
+      "arch": "A",
+      "security": "S",
+      "check:test": "B",
+      "check:build": "B",
+      "check:lint": "L",
+      "check:format": "L"
+    },
+    "defaultCategory": "N"
+  },
+  "models": {
+    "review": "claude-opus-4-6",
+    "verify": "sonnet",
+    "explore": "sonnet",
+    "design": "opus",
+    "implementLow": "haiku",
+    "implementMid": "sonnet",
+    "implementHigh": "opus",
+    "check": "haiku",
+    "fix": "sonnet",
+    "docSync": "sonnet",
+    "bootstrap": "haiku"
+  },
+  "complexityRubricExamples": {
+    "low": "設定値の変更、footer文言の追加、既存コンポーネントへの1行のprops追加",
+    "mid": "既存コンポーネントと同じ設計で新規UIコンポーネントを1つ追加する",
+    "high": "ポーリング機構のジェネリック化、スクロール位置とtail-follow挙動の状態設計、枠線へのタイトル埋め込みの文字数計算"
+  },
+  "automation": {
+    "pipeline": "auto",
+    "autoApprove": true,
+    "maxFixIterationsCheck": 5,
+    "maxFixIterationsReview": 3,
+    "maxGate1RerunsPerReviewFix": 2,
+    "maxTotalCheckRuns": 10,
+    "maxAgentInvocations": 80,
+    "severityGate": {
+      "block": ["critical", "high"],
+      "fixOnce": ["medium"],
+      "backlogOnly": ["low"]
+    }
+  },
+  "templateVersion": null,
+  "installedAt": null
+}
