@@ -20,6 +20,13 @@ describe('HelpOverlay（release-9-i18n FR-02）', () => {
     expect(frame).toContain('esc')
   })
 
+  it('AC-1b: FR-06 で simplify された help.openDetail が新文言で描画される（内部用語除去）', () => {
+    const { lastFrame } = render(<HelpOverlay />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('List: open project detail') // 新文言
+    expect(frame).not.toContain('Agent View Lv.1') // 旧文言・内部用語が除去されている
+  })
+
   it('AC-5: locale: ja でタイトルと代表的な説明行が日本語で描画される（FR-02 AC-2・AC-5）', () => {
     setActiveLocale('ja')
     const { lastFrame } = render(<HelpOverlay />)
@@ -30,5 +37,13 @@ describe('HelpOverlay（release-9-i18n FR-02）', () => {
     // キー列自体はロケール非依存でそのまま描画される。
     expect(frame).toContain('1-6')
     expect(frame).toContain('esc')
+  })
+
+  it('AC-5b: FR-06 で simplify された help.openDetail が新文言で描画される（内部用語除去）', () => {
+    setActiveLocale('ja')
+    const { lastFrame } = render(<HelpOverlay />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('一覧: プロジェクト詳細を開く') // 新文言
+    expect(frame).not.toContain('Agent View Lv.1') // 旧文言・内部用語が除去されている
   })
 })

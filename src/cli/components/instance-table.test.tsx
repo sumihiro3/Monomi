@@ -55,9 +55,12 @@ describe('InstanceTable（カードグリッド、FR-01・FR-02）', () => {
   })
 
   it('FR-01 AC-1/AC-3: 既定ロケール（en）でカードに project/device/branch/状態ラベル/age を描画する（release-9-i18n FR-01 AC-2）', () => {
-    const { lastFrame } = render(<InstanceTable rows={[makeRow({})]} selectedIndex={0} />)
+    // selectedIndex を範囲外にして非選択のまま描画する（release-10-dashboard-polish FR-04 で
+    // 選択中カードは borderStyle="double" に変わったため、本テストの関心事である「内容」の検証を
+    // 選択状態のボーダー種別と切り離す）。
+    const { lastFrame } = render(<InstanceTable rows={[makeRow({})]} selectedIndex={99} />)
     const frame = lastFrame() ?? ''
-    expect(frame).toContain('╭') // ボーダー付きボックス（round border）
+    expect(frame).toContain('╭') // ボーダー付きボックス（round border、非選択）
     expect(frame).toContain('ProjectLens')
     expect(frame).toContain('Mac mini')
     expect(frame).toContain('feature/ai-sidecar')

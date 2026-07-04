@@ -1,6 +1,6 @@
 # Monomi v1 — クラス図
 
-[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜9 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
+[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜10 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
 
 **方針**: 独自ロジックが複雑になる箇所（project_key 正規化・status 導出）は god class にせず、責務ごとに値オブジェクト／ドメインサービス／モジュール関数へ分解する。Hub API は Controller（薄い）→ UseCase/Service（業務ロジック）→ Repository（永続化）の 3 層に分離し、Controller に業務ロジックを書かない。CLI は表示・入力処理に専念し、状態導出ロジックを一切持たない。エンティティ・DTO・状態は TS の `interface`／判別ユニオンで表し、振る舞いは別のドメインサービス・モジュール関数に置く（データと振る舞いの分離）。
 
@@ -607,6 +607,9 @@ classDiagram
   class AppView {
     <<ui component (container)>>
   }
+  class WatchingIndicator {
+    <<ui component (presentational, release-10 FR-02)>>
+  }
   class InstanceTable {
     <<ui component (grid container)>>
   }
@@ -688,9 +691,11 @@ classDiagram
   AppView --> StatusFilterBar
   AppView --> DetailView
   AppView --> HelpOverlay
+  AppView --> WatchingIndicator
   InstanceTable --> InstanceCard
   InstanceTable ..> CardGrid : columnsForWidth
   InstanceCard ..> StatusDisplay
+  InstanceCard ..> SanitizeDisplayText
   StatusFilterBar ..> StatusDisplay
   DetailView ..> HubApiClient : fetches detail
   DetailView ..> PollingLoop : polls detail
@@ -710,8 +715,10 @@ classDiagram
   DetailView ..> I18n : t() (box titles/labels)
   HelpOverlay ..> I18n : t() (help lines)
   InstanceTable ..> I18n : t() (empty-state label)
+  WatchingIndicator ..> I18n : t() (app.watching label)
 
   note for InstanceTable "既知バックログ A4: 名前が実体（カードグリッド）と不一致、かつ useStdout+columnsForWidth のレイアウト計算を持ち presentational 規約を逸脱。release-5 では解消せず（InstanceCardGrid への改名等は別作業）。"
+  note for WatchingIndicator "release-10 FR-02: components/* の慣例（状態を持たない presentational）に対する意図的な例外。1000ms 点滅トグル用の visible state と setInterval をここに閉じ込め、AppView 本体の再レンダーを誘発しない（既知の P4 悪化防止）。"
 ```
 
 **責務分離**:
@@ -722,9 +729,10 @@ classDiagram
 - `PairingClient`（`runHubPair`/`runChildPair`）が §9 のペアリング CLI を実装し、`HubApiClient`（pair start/claim）・`Network`（候補 URL）・`ConfigWriter`（`role`/`hub_endpoints`/`device_id` の部分書き込み、`chmod 600`）を束ねる。
 - `KeyBindingController` はキー → アクションの薄い写像に徹する。ビュー状態（選択位置・`ViewMode`）は持たず、`handleKey(input, KeyFlags, viewMode)` の引数で受け取り、画面遷移・選択移動は `KeyBindingHost`（`AppView` が React state で実装）へ委譲する。フィルタキー解決だけ `StatusDisplay.filterForKey` を使う。**`PollingLoop` には依存しない**（watch は常時 ON でトグルを持たないため、旧図の依存エッジは削除）。
 - `InstanceListStore` は取得結果とフィルタ状態のみを保持し、`filtered()`/`projectRows()`（`ClientRollup` 委譲）を提供する。`ClientRollup` は hub が返す numeric priority を `max()` するだけで、優先順位の意味は解釈しない。
-- View は Container（`AppView`／`DetailView`: 状態と API 呼び出しを持つ）と Presentational（`InstanceCard`／`StatusFilterBar`／`HelpOverlay`: props を描くだけ）に分離。`AppView` は 1 instance = 1 枚の `InstanceCard` を `InstanceTable`（列数は `CardGrid.columnsForWidth` が端末幅と TTY 判定で決定）で並べる。`DetailView` は自前で `PollingLoop<InstanceDetail>` を張り、`pollIntervalMs` 間隔で `getInstanceDetail` を呼び直して status/イベントタイムラインを自動更新し、アンマウントで確実に停止する。
-- 表示語彙（ラベル・色・グリフ・経過時間・フィルタキー対応）は `StatusDisplay`（`status-display.ts`）に集約し、status 導出・優先順位ロジックは CLI に一切持たない。すべて hub 側 `StatusDeriver`／`InstanceStatusRollup` の責務。release-9-i18n 以降、ラベルの文字列自体は `StatusDisplay` が直接持たず `I18n`（`i18n/index.ts`）の `t()` 経由でアクティブロケールに応じて解決する（`StatusDisplay` が持つのは表示状態→翻訳キーの写像と色・グリフ。色・グリフはロケール非依存）。同様に `AppView`／`DetailView`／`HelpOverlay`／`InstanceTable` の文言も `t()` 経由。
+- View は Container（`AppView`／`DetailView`: 状態と API 呼び出しを持つ）と Presentational（`InstanceCard`／`StatusFilterBar`／`HelpOverlay`: props を描くだけ）に分離。`AppView` は 1 instance = 1 枚の `InstanceCard` を `InstanceTable`（列数は `CardGrid.columnsForWidth` が端末幅と TTY 判定で決定）で並べる。`DetailView` は自前で `PollingLoop<InstanceDetail>` を張り、`pollIntervalMs` 間隔で `getInstanceDetail` を呼び直して status/イベントタイムラインを自動更新し、アンマウントで確実に停止する。`WatchingIndicator`（release-10 FR-02、`app-view.tsx` から分離）は見た目は presentational だが、この分離規約に対する唯一の意図的な例外として `visible` state と 1000ms `setInterval` を自身に閉じ込める。理由は `AppView` がすでに抱える再レンダー過多（既知バックログ P4）を、点滅の再描画トリガーで悪化させないため（React は子の `setState` だけでは親を再レンダーしない性質を利用）。`isRunning: boolean` を props に取り、`AppView` 本体の state は増やさない。
+- 表示語彙（ラベル・色・グリフ・経過時間・フィルタキー対応）は `StatusDisplay`（`status-display.ts`）に集約し、status 導出・優先順位ロジックは CLI に一切持たない。すべて hub 側 `StatusDeriver`／`InstanceStatusRollup` の責務。release-9-i18n 以降、ラベルの文字列自体は `StatusDisplay` が直接持たず `I18n`（`i18n/index.ts`）の `t()` 経由でアクティブロケールに応じて解決する（`StatusDisplay` が持つのは表示状態→翻訳キーの写像と色・グリフ。色・グリフはロケール非依存）。同様に `AppView`／`DetailView`／`HelpOverlay`／`InstanceTable`／`WatchingIndicator` の文言も `t()` 経由。
 - release-6 で `DetailView` 用に追加された 4 モジュールは、いずれも React に依存しない純粋関数モジュール（`CardGrid` と同じ思想）。`BoxBorder`（`box-border.ts`）は表示幅計算・タイトル/範囲ラベル埋め込み罫線の生成、`EventScroll`（`event-scroll.ts`）は端末高さ→表示行数・スクロールウィンドウの算出（`DETAIL_RESERVED_BREAKDOWN` の各定数値は AppView/DetailView の JSX 行構成と手動同期が必要な暗黙結合を持つ点に注意）、`TerminalTitle`（`terminal-title.ts`）はターミナルのタブ/ウィンドウタイトル設定（OSC 0）、`SanitizeDisplayText`（`sanitize-display-text.ts`）はレポーター由来の自由記述からの ANSI/制御文字除去を担う。4 モジュールは独立ではなく、`EventScroll` は折り返し幅の見積もりに `BoxBorder.displayWidth`（East Asian Wide 対応の表示桁数計算）を再利用し、`TerminalTitle` はタイトル本文のサニタイズに `SanitizeDisplayText.sanitizeDisplayText` を再利用する（ANSI/制御文字除去ロジックの二重実装を避ける）。
+- `SanitizeDisplayText` の呼び出し元は release-10-dashboard-polish のレビュー修正（CWE-150）で `DetailView` に加え `InstanceCard` にも拡大した。`device.name`（両者）・`branch`（`InstanceCard`。`DetailView` の `branch` は release-6 で対応済み）はレポーター元／ペアリング済み child が制御しうる自由記述で、hub 側の検証は型のみのため ANSI エスケープ・制御文字の混入（端末エスケープ注入）を描画直前の除染で防ぐ。
 
 ---
 
@@ -779,6 +787,7 @@ classDiagram
 | AppView / DetailView                                                        | cli-ink       | ui component (container)                        | 状態と API を持つコンテナ（DetailView は詳細を自動更新）                                                                                                                     |
 | InstanceTable                                                               | cli-ink       | ui component (grid container)                   | カードグリッド描画（A4: 命名不一致・レイアウト計算保持の逸脱あり）                                                                                                           |
 | InstanceCard / StatusFilterBar / HelpOverlay                                | cli-ink       | ui component (presentational)                   | props を描くだけ                                                                                                                                                             |
+| WatchingIndicator                                                           | cli-ink       | ui component (presentational, release-10 FR-02) | props を描くだけの規約に対する意図的な例外。1000ms 点滅トグル用の state を自身に閉じ込め、AppView 本体の再レンダーを誘発しない                                               |
 | CardGrid                                                                    | cli-ink       | module (card-grid.ts)                           | 端末幅と TTY からカード列数を算出する純粋関数                                                                                                                                |
 | BoxBorder                                                                   | cli-ink       | module (box-border.ts, release-6)               | BOX幅・タイトル/範囲ラベル埋め込み罫線の生成（表示幅計算含む）                                                                                                               |
 | EventScroll / ScrollWindow                                                  | cli-ink       | module + interface (event-scroll.ts, release-6) | 詳細ビューの表示行数・スクロールウィンドウ算出（React 非依存の純粋関数）                                                                                                     |

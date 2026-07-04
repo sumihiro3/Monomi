@@ -1312,3 +1312,20 @@ describe('DetailView — hub取得上限（total頭打ち）到達後もtail-fol
     }
   })
 })
+
+describe('DetailView — device.name の ANSI エスケープ除染（release-10-dashboard-polish レビュー修正: CWE-150）', () => {
+  it('device.name に含まれる制御シーケンスを除染して描画する', async () => {
+    const ESC = String.fromCharCode(27)
+    const row = { ...makeRow(), device: { id: 'macmini', name: `Mac mini${ESC}[2J` } }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('Mac mini')
+      // ESC 自体は Ink の正当な SGR カラーコードにも出現するため、注入した画面消去
+      // シーケンスのみが除去されていることを確認する。
+      expect(frame).not.toContain(`${ESC}[2J`)
+    })
+  })
+})

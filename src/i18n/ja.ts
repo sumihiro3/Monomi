@@ -34,7 +34,7 @@ export const JA = {
   'help.title': 'キーバインド',
   'help.filterToggle': '一覧: 状態フィルタのトグル（複数選択可）',
   'help.moveOrScroll': '一覧: カーソル移動 / 詳細: イベント履歴スクロール',
-  'help.openDetail': '一覧: 詳細（Agent View Lv.1）を開く',
+  'help.openDetail': '一覧: プロジェクト詳細を開く',
   'help.moveProject': '詳細: 隣接プロジェクトへ移動',
   'help.toggleWrap': '詳細: イベント行の折り返し/切り詰め切替',
   'help.back': '戻る / ヘルプを閉じる',
@@ -43,6 +43,7 @@ export const JA = {
 
   // app.*
   'app.errorPrefix': 'エラー: ',
+  'app.watching': 'WATCHING',
 
   // list.*
   'list.empty': '(該当するインスタンスがありません)',

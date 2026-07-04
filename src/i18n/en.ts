@@ -37,15 +37,16 @@ export const EN = {
   'help.title': 'Key Bindings',
   'help.filterToggle': 'List: toggle status filters (multi-select)',
   'help.moveOrScroll': 'List: move cursor / Detail: scroll event history',
-  'help.openDetail': 'List: open detail (Agent View Lv.1)',
+  'help.openDetail': 'List: open project detail',
   'help.moveProject': 'Detail: move to adjacent project',
   'help.toggleWrap': 'Detail: toggle event line wrap/truncate',
   'help.back': 'Back / close help',
   'help.toggleHelp': 'Toggle help',
   'help.quit': 'Quit',
 
-  // app.*（AppView 全体のエラー表示接頭辞）
+  // app.*（AppView 全体のエラー表示接頭辞・ watching インジケータ）
   'app.errorPrefix': 'Error: ',
+  'app.watching': 'WATCHING',
 
   // list.*（一覧 0 件時の案内）
   'list.empty': '(No matching instances)',

@@ -16,6 +16,7 @@ import { DetailView } from './detail-view.js'
 import { HELP_OVERLAY_ROWS, HelpOverlay } from './help-overlay.js'
 import { InstanceTable } from './instance-table.js'
 import { StatusFilterBar } from './status-filter-bar.js'
+import { WatchingIndicator } from './watching-indicator.js'
 
 /** {@link AppView} の props（container: 依存を注入してテスト可能にする）。 */
 export interface AppViewProps {
@@ -241,11 +242,13 @@ export function AppView({
   return (
     <Box flexDirection="column">
       <Text>
-        <Text bold>Claude Code Status</Text>
+        <Text backgroundColor="blue" bold>
+          {' Monomi '}
+        </Text>
         <Text dimColor>
           {'  '}— {projectCount} projects · {deviceCount} devices
         </Text>
-        {polling.isRunning() ? <Text color="green">{'  '}● watching</Text> : null}
+        <WatchingIndicator isRunning={polling.isRunning()} />
       </Text>
 
       {viewMode === 'detail' && selectedRow !== undefined ? (
