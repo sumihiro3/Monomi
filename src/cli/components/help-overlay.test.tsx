@@ -1,6 +1,7 @@
 import { render } from 'ink-testing-library'
 import { afterEach, describe, expect, it } from 'vitest'
 import { setActiveLocale } from '../../i18n/index.js'
+import { MONOMI_VERSION } from '../../index.js'
 import { HelpOverlay } from './help-overlay.js'
 
 afterEach(() => {
@@ -45,5 +46,20 @@ describe('HelpOverlay（release-9-i18n FR-02）', () => {
     const frame = lastFrame() ?? ''
     expect(frame).toContain('一覧: プロジェクト詳細を開く') // 新文言
     expect(frame).not.toContain('Agent View Lv.1') // 旧文言・内部用語が除去されている
+  })
+})
+
+describe('HelpOverlay のバージョン表示（release-11-version-automation FR-04）', () => {
+  it('AC-1・AC-4: 既定ロケール（en）で末尾に Monomi v<バージョン> が描画される', () => {
+    const { lastFrame } = render(<HelpOverlay />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain(`Monomi v${MONOMI_VERSION}`)
+  })
+
+  it('AC-2: locale: ja でも表記が変わらず Monomi v<バージョン> のまま描画される（i18n キー不要）', () => {
+    setActiveLocale('ja')
+    const { lastFrame } = render(<HelpOverlay />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain(`Monomi v${MONOMI_VERSION}`)
   })
 })

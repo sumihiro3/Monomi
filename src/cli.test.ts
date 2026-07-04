@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { run, type CliDeps } from './cli.js'
+import { MONOMI_VERSION } from './index.js'
 import { setActiveLocale } from './i18n/index.js'
 import type { InstallHooksResult } from './install-hooks/install-hooks.js'
 
@@ -225,7 +226,7 @@ describe('run (CLI dispatch)', () => {
     const deps = makeDeps()
     const code = await run([flag], deps)
     expect(code).toBe(0)
-    expect(deps.log).toHaveBeenCalledWith('0.0.1')
+    expect(deps.log).toHaveBeenCalledWith(MONOMI_VERSION)
     expect(deps.runHub).not.toHaveBeenCalled()
     expect(deps.installHooks).not.toHaveBeenCalled()
   })

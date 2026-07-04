@@ -2,6 +2,7 @@ import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { InstanceStatusRow } from '../../hub/dto.js'
 import { t } from '../../i18n/index.js'
+import { MONOMI_VERSION } from '../../version.js'
 import type { HubApiClient } from '../hub-api-client.js'
 import { InstanceListStore } from '../instance-list-store.js'
 import {
@@ -245,6 +246,7 @@ export function AppView({
         <Text backgroundColor="blue" bold>
           {' Monomi '}
         </Text>
+        <Text dimColor> v{MONOMI_VERSION}</Text>
         <Text dimColor>
           {'  '}— {projectCount} projects · {deviceCount} devices
         </Text>

@@ -1,6 +1,7 @@
 import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
-import { t, type TranslationKey } from '../../i18n/index.js'
+import { type TranslationKey, t } from '../../i18n/index.js'
+import { MONOMI_VERSION } from '../../version.js'
 
 /**
  * `[key, descriptionKey]` のヘルプ 1 行。
@@ -28,7 +29,8 @@ const HELP_LINES: ReadonlyArray<readonly [string, TranslationKey]> = [
 ]
 
 /**
- * {@link HelpOverlay} 本体（`borderStyle="round"` の上下罫線2行 + タイトル1行 + {@link HELP_LINES}）
+ * {@link HelpOverlay} 本体（`borderStyle="round"` の上下罫線2行 + タイトル1行 +
+ * {@link HELP_LINES} + バージョン行1行（release-11-version-automation FR-04））
  * が消費する表示行数（review-changes 修正）。
  *
  * detail ビュー表示中に `?` でヘルプを開くと、AppView は DetailView の下に
@@ -39,7 +41,7 @@ const HELP_LINES: ReadonlyArray<readonly [string, TranslationKey]> = [
  * スクロールして見えなくなる（実機で確認済み）。AppView は本定数 + 1（marginTop）を
  * {@link ../components/detail-view.js#DetailViewProps.extraReservedRows} として渡す。
  */
-export const HELP_OVERLAY_ROWS = HELP_LINES.length + 3
+export const HELP_OVERLAY_ROWS = HELP_LINES.length + 4
 
 /**
  * キーバインドの一覧を出すヘルプオーバーレイ（§10.3、presentational）。
@@ -58,6 +60,8 @@ export function HelpOverlay(): ReactElement {
           {t(descriptionKey)}
         </Text>
       ))}
+      {/* release-11-version-automation FR-04: en/ja 共通表記のため i18n キーを介さない生文字列。 */}
+      <Text>{`Monomi v${MONOMI_VERSION}`}</Text>
     </Box>
   )
 }

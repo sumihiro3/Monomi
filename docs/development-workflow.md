@@ -2,7 +2,7 @@
 
 Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の README が汎用の導入手順）を採用し、Claude Code の Workflow tool（dynamic workflows）による 7 ステップのリリースサイクルで開発する。本ドキュメントは、その汎用テンプレートを Monomi の実体（`.claude/workflows/`・`.claude/commands/`・`docs/releases/release-N/requirements.md`）に即して具体化した運用ガイドである。
 
-1 サイクルは「要件を `docs/releases/release-N/requirements.md` に確定させ、同名のリリースブランチを作成してから実装に入り、レビュー・ドキュメント同期・検査を経てコミットし、PR で `main` へ合流する」流れで、要件確定なしに実装へ進まないこと・`main` への直接 push はしないことを原則とする。
+1 サイクルは「要件を `docs/releases/release-N/requirements.md` に確定させ、同名のリリースブランチを作成してから実装に入り、レビュー・ドキュメント同期・検査を経てコミットし、PR で `main` へ合流する」流れで、要件確定なしに実装へ進まないこと・`main` への直接 push はしないことを原則とする。ただし、release-11（バージョンオートメーション）以降は、バージョン bump スクリプト（`pnpm version:patch` / `pnpm version:minor` / `pnpm version:major`）実行のみ `main` 上で直接実行し push する明示的な例外を設ける。
 
 ## 7 ステップのリリースサイクル
 
@@ -68,8 +68,16 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 ### 7. ブランチ push・PR 作成
 
 - `git push -u origin release-N` でリリースブランチをリモートへ push し、`gh pr create` で `main` 向けの PR を作成する。
-- **`main` への直接 push はしない**（実害: release-7 で直接 push を試みたところ、自動モードのガードレールに「デフォルトブランチへの直接 push」としてブロックされた）。PR のマージはユーザーが GitHub 上で行う、またはユーザーが明示的に指示した場合のみ `gh pr merge` する。
+- **`main` への直接 push はしない**（実害: release-7 で直接 push を試みたところ、自動モードのガードレールに「デフォルトブランチへの直接 push」としてブロックされた）。ただし、release-11 以降は、バージョン bump スクリプト（`pnpm version:*`）実行のみ主例外であり、実行後は `git push` で `main` へ直接 push する。PR のマージはユーザーが GitHub 上で行う、またはユーザーが明示的に指示した場合のみ `gh pr merge` する。
 - マージ後、ローカルの `main` を最新化し、不要になったリリースブランチを削除する（`git branch -d release-N`）。
+
+## バージョン bump の実行（release-11 以降）
+
+`pnpm version:patch` / `pnpm version:minor` / `pnpm version:major` スクリプトを実行する際は、以下に注意すること。
+
+- **working tree の状態確認**: `pnpm version` コマンドは working tree が dirty（未処理の変更がある）な場合、処理を中止して失敗する。実行前に必ず `git status` で確認し、未処理の変更があれば `git commit` または `git stash` で解消する。
+- **実行場所**: `main` ブランチを checkout してから実行する（`git checkout main`）。
+- **自動化**: `pnpm version` はテスト成功時に `package.json` を bump、git commit・git tag を自動作成する。push は手動ステップで、`git push -u origin main` で tag とともに push する（`git push --follow-tags`）。
 
 ## リリースブランチの運用
 

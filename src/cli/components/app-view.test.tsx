@@ -4,6 +4,7 @@ import { render } from 'ink-testing-library'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { InstanceDetail, InstanceStatusRow } from '../../hub/dto.js'
 import { setActiveLocale } from '../../i18n/index.js'
+import { MONOMI_VERSION } from '../../index.js'
 import type { HubApiClient } from '../hub-api-client.js'
 import { InstanceListStore } from '../instance-list-store.js'
 import { AppView } from './app-view.js'
@@ -379,6 +380,32 @@ describe('AppView — ヘッダータイトルの Monomi バッジ化（release-
     expect(lastFrame()).not.toContain('Claude Code Status')
     // AC-3: 同一行で projects/devices・watching インジケータが崩れず連結される。
     expect(lastFrame()).toContain('1 projects · 1 devices')
+  })
+})
+
+describe('AppView — ヘッダーへのバージョン常時表示（release-11-version-automation FR-03 AC-1〜AC-3）', () => {
+  it('AC-1・AC-3: ヘッダー行に Monomi バッジ直後の v{MONOMI_VERSION} が含まれる', async () => {
+    const fake = new FakeHubApiClient([
+      makeRow({ id: '1', projectName: 'ProjectLens', display: 'active', priority: 1 }),
+    ])
+    const { lastFrame } = renderApp(fake)
+
+    await vi.waitFor(() => expect(lastFrame()).toContain('ProjectLens'))
+    const frame = lastFrame() ?? ''
+    // 期待値はハードコードでなく MONOMI_VERSION 自身を参照する（bump 時のテスト手動更新を避ける、FR-01 AC-4 と同じ方針）。
+    // v{MONOMI_VERSION} は Monomi バッジと同一 <Text> ではないため、素の文字列比較では両者の間に
+    // Ink が挿む ANSI リセットコードが挟まり `toContain('Monomi v0.0.1')` は一致しない
+    // （AC-1 のバッジ「直後」は視覚上の位置関係であり、生の ANSI 混在文字列の連続性ではない）。
+    // そのため各断片の有無と出現順序（indexOf）で位置関係を検証する。
+    expect(frame).toContain(`v${MONOMI_VERSION}`)
+    const monomiIndex = frame.indexOf('Monomi')
+    const versionIndex = frame.indexOf(`v${MONOMI_VERSION}`)
+    const countsIndex = frame.indexOf('1 projects · 1 devices')
+    expect(monomiIndex).toBeGreaterThanOrEqual(0)
+    // AC-1: バージョンは Monomi バッジの直後（間に他の可視テキストを挟まない）。
+    expect(versionIndex).toBeGreaterThan(monomiIndex)
+    // AC-2: 既存の projects/devices 表示との位置関係を維持する（バージョンが手前）。
+    expect(countsIndex).toBeGreaterThan(versionIndex)
   })
 })
 
