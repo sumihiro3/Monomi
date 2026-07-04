@@ -1,6 +1,6 @@
 # Monomi v1 — クラス図
 
-[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜10 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
+[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜11 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
 
 **方針**: 独自ロジックが複雑になる箇所（project_key 正規化・status 導出）は god class にせず、責務ごとに値オブジェクト／ドメインサービス／モジュール関数へ分解する。Hub API は Controller（薄い）→ UseCase/Service（業務ロジック）→ Repository（永続化）の 3 層に分離し、Controller に業務ロジックを書かない。CLI は表示・入力処理に専念し、状態導出ロジックを一切持たない。エンティティ・DTO・状態は TS の `interface`／判別ユニオンで表し、振る舞いは別のドメインサービス・モジュール関数に置く（データと振る舞いの分離）。
 
@@ -668,6 +668,10 @@ classDiagram
     +sanitizeDisplayText(text: string) string$
     +sanitizeNullableDisplayText(text: string_or_null) string_or_null$
   }
+  class MonomiVersion {
+    <<module (version.ts, release-11)>>
+    +MONOMI_VERSION string$
+  }
 
   HubEndpointResolver ..> HubEndpointOps
   HubEndpointResolver ..> Network : isTailscaleIpv4
@@ -707,6 +711,8 @@ classDiagram
   DetailView ..> SanitizeDisplayText
   AppView ..> TerminalTitle : FR-09
   TerminalTitle ..> SanitizeDisplayText : sanitizeDisplayText
+  AppView ..> MonomiVersion : v{MONOMI_VERSION} header badge
+  HelpOverlay ..> MonomiVersion : Monomi v{MONOMI_VERSION} footer line
   PairingClient ..> HubApiClient
   PairingClient ..> Network : buildCandidateUrls
   PairingClient ..> ConfigWriter : writeChildPairingConfig
@@ -733,6 +739,7 @@ classDiagram
 - 表示語彙（ラベル・色・グリフ・経過時間・フィルタキー対応）は `StatusDisplay`（`status-display.ts`）に集約し、status 導出・優先順位ロジックは CLI に一切持たない。すべて hub 側 `StatusDeriver`／`InstanceStatusRollup` の責務。release-9-i18n 以降、ラベルの文字列自体は `StatusDisplay` が直接持たず `I18n`（`i18n/index.ts`）の `t()` 経由でアクティブロケールに応じて解決する（`StatusDisplay` が持つのは表示状態→翻訳キーの写像と色・グリフ。色・グリフはロケール非依存）。同様に `AppView`／`DetailView`／`HelpOverlay`／`InstanceTable`／`WatchingIndicator` の文言も `t()` 経由。
 - release-6 で `DetailView` 用に追加された 4 モジュールは、いずれも React に依存しない純粋関数モジュール（`CardGrid` と同じ思想）。`BoxBorder`（`box-border.ts`）は表示幅計算・タイトル/範囲ラベル埋め込み罫線の生成、`EventScroll`（`event-scroll.ts`）は端末高さ→表示行数・スクロールウィンドウの算出（`DETAIL_RESERVED_BREAKDOWN` の各定数値は AppView/DetailView の JSX 行構成と手動同期が必要な暗黙結合を持つ点に注意）、`TerminalTitle`（`terminal-title.ts`）はターミナルのタブ/ウィンドウタイトル設定（OSC 0）、`SanitizeDisplayText`（`sanitize-display-text.ts`）はレポーター由来の自由記述からの ANSI/制御文字除去を担う。4 モジュールは独立ではなく、`EventScroll` は折り返し幅の見積もりに `BoxBorder.displayWidth`（East Asian Wide 対応の表示桁数計算）を再利用し、`TerminalTitle` はタイトル本文のサニタイズに `SanitizeDisplayText.sanitizeDisplayText` を再利用する（ANSI/制御文字除去ロジックの二重実装を避ける）。
 - `SanitizeDisplayText` の呼び出し元は release-10-dashboard-polish のレビュー修正（CWE-150）で `DetailView` に加え `InstanceCard` にも拡大した。`device.name`（両者）・`branch`（`InstanceCard`。`DetailView` の `branch` は release-6 で対応済み）はレポーター元／ペアリング済み child が制御しうる自由記述で、hub 側の検証は型のみのため ANSI エスケープ・制御文字の混入（端末エスケープ注入）を描画直前の除染で防ぐ。
+- `MonomiVersion`（`version.ts`, release-11）は `package.json` の `version` を読み込む唯一の入口（`import packageJson from '../package.json' with { type: 'json' }`）。公開 API バレル `src/index.ts` はこの値を re-export するだけで自前定義を持たない。値の定義をバレルから切り出して独立した葉モジュールにしたのは、`AppView`／`HelpOverlay` のような内部コンポーネントが表示用に同じ値を必要とする一方、これらが `index.ts` から直接 import すると `index.ts`（`AppView` を re-export）→ `app-view.tsx` → `index.ts` の循環依存が生じるため（バレルへの逆依存はバレルの「実装詳細の変更を外部へ波及させない」責務を壊す）。`index.ts`／`AppView`／`HelpOverlay` はいずれも `version.ts` を一方向に参照するのみで、`index.ts` 自体は図上のノードを持たない（公開 API の再エクスポート集約であり独自の振る舞いを持たないため）。ヘルプ末尾の表記は en/ja 共通のため `I18n` の `t()` を介さない生文字列。
 
 ---
 
@@ -793,6 +800,7 @@ classDiagram
 | EventScroll / ScrollWindow                                                  | cli-ink       | module + interface (event-scroll.ts, release-6) | 詳細ビューの表示行数・スクロールウィンドウ算出（React 非依存の純粋関数）                                                                                                     |
 | TerminalTitle                                                               | cli-ink       | module (terminal-title.ts, release-6 FR-09)     | ターミナルのタブ/ウィンドウタイトルを OSC 0 で設定                                                                                                                           |
 | SanitizeDisplayText                                                         | cli-ink       | module (sanitize-display-text.ts)               | レポーター由来の自由記述から ANSI/制御文字を除去（注入対策）                                                                                                                 |
+| MonomiVersion                                                               | cli-ink       | module (version.ts, release-11)                 | `package.json` の `version` を読み込む唯一の入口。`index.ts`／`AppView`／`HelpOverlay` から一方向に参照される葉モジュール（バレルへの逆依存・循環依存を回避）                |
 
 ---
 
