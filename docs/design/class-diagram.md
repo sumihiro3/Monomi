@@ -1,6 +1,6 @@
 # Monomi v1 — クラス図
 
-[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜8 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
+[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜9 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
 
 **方針**: 独自ロジックが複雑になる箇所（project_key 正規化・status 導出）は god class にせず、責務ごとに値オブジェクト／ドメインサービス／モジュール関数へ分解する。Hub API は Controller（薄い）→ UseCase/Service（業務ロジック）→ Repository（永続化）の 3 層に分離し、Controller に業務ロジックを書かない。CLI は表示・入力処理に専念し、状態導出ロジックを一切持たない。エンティティ・DTO・状態は TS の `interface`／判別ユニオンで表し、振る舞いは別のドメインサービス・モジュール関数に置く（データと振る舞いの分離）。
 
@@ -561,6 +561,13 @@ classDiagram
     +formatAge(seconds: int) string$
     +FILTER_ORDER StatusFilter[]$
   }
+  class I18n {
+    <<module (i18n/index.ts, release-9)>>
+    +t(key: TranslationKey, vars: VarsRecord) string$
+    +setActiveLocale(locale: MonomiLocale) void$
+    +getActiveLocale() MonomiLocale$
+    +resolveLocale(locale: MonomiLocale) MonomiLocale$
+  }
   class ViewMode {
     <<type alias>>
     list_or_detail
@@ -698,6 +705,11 @@ classDiagram
   PairingClient ..> HubApiClient
   PairingClient ..> Network : buildCandidateUrls
   PairingClient ..> ConfigWriter : writeChildPairingConfig
+  StatusDisplay ..> I18n : statusLabel resolves via t()
+  AppView ..> I18n : t() (error prefix)
+  DetailView ..> I18n : t() (box titles/labels)
+  HelpOverlay ..> I18n : t() (help lines)
+  InstanceTable ..> I18n : t() (empty-state label)
 
   note for InstanceTable "既知バックログ A4: 名前が実体（カードグリッド）と不一致、かつ useStdout+columnsForWidth のレイアウト計算を持ち presentational 規約を逸脱。release-5 では解消せず（InstanceCardGrid への改名等は別作業）。"
 ```
@@ -711,7 +723,7 @@ classDiagram
 - `KeyBindingController` はキー → アクションの薄い写像に徹する。ビュー状態（選択位置・`ViewMode`）は持たず、`handleKey(input, KeyFlags, viewMode)` の引数で受け取り、画面遷移・選択移動は `KeyBindingHost`（`AppView` が React state で実装）へ委譲する。フィルタキー解決だけ `StatusDisplay.filterForKey` を使う。**`PollingLoop` には依存しない**（watch は常時 ON でトグルを持たないため、旧図の依存エッジは削除）。
 - `InstanceListStore` は取得結果とフィルタ状態のみを保持し、`filtered()`/`projectRows()`（`ClientRollup` 委譲）を提供する。`ClientRollup` は hub が返す numeric priority を `max()` するだけで、優先順位の意味は解釈しない。
 - View は Container（`AppView`／`DetailView`: 状態と API 呼び出しを持つ）と Presentational（`InstanceCard`／`StatusFilterBar`／`HelpOverlay`: props を描くだけ）に分離。`AppView` は 1 instance = 1 枚の `InstanceCard` を `InstanceTable`（列数は `CardGrid.columnsForWidth` が端末幅と TTY 判定で決定）で並べる。`DetailView` は自前で `PollingLoop<InstanceDetail>` を張り、`pollIntervalMs` 間隔で `getInstanceDetail` を呼び直して status/イベントタイムラインを自動更新し、アンマウントで確実に停止する。
-- 表示語彙（ラベル・色・グリフ・経過時間・フィルタキー対応）は `StatusDisplay`（`status-display.ts`）に集約し、status 導出・優先順位ロジックは CLI に一切持たない。すべて hub 側 `StatusDeriver`／`InstanceStatusRollup` の責務。
+- 表示語彙（ラベル・色・グリフ・経過時間・フィルタキー対応）は `StatusDisplay`（`status-display.ts`）に集約し、status 導出・優先順位ロジックは CLI に一切持たない。すべて hub 側 `StatusDeriver`／`InstanceStatusRollup` の責務。release-9-i18n 以降、ラベルの文字列自体は `StatusDisplay` が直接持たず `I18n`（`i18n/index.ts`）の `t()` 経由でアクティブロケールに応じて解決する（`StatusDisplay` が持つのは表示状態→翻訳キーの写像と色・グリフ。色・グリフはロケール非依存）。同様に `AppView`／`DetailView`／`HelpOverlay`／`InstanceTable` の文言も `t()` 経由。
 - release-6 で `DetailView` 用に追加された 4 モジュールは、いずれも React に依存しない純粋関数モジュール（`CardGrid` と同じ思想）。`BoxBorder`（`box-border.ts`）は表示幅計算・タイトル/範囲ラベル埋め込み罫線の生成、`EventScroll`（`event-scroll.ts`）は端末高さ→表示行数・スクロールウィンドウの算出（`DETAIL_RESERVED_BREAKDOWN` の各定数値は AppView/DetailView の JSX 行構成と手動同期が必要な暗黙結合を持つ点に注意）、`TerminalTitle`（`terminal-title.ts`）はターミナルのタブ/ウィンドウタイトル設定（OSC 0）、`SanitizeDisplayText`（`sanitize-display-text.ts`）はレポーター由来の自由記述からの ANSI/制御文字除去を担う。4 モジュールは独立ではなく、`EventScroll` は折り返し幅の見積もりに `BoxBorder.displayWidth`（East Asian Wide 対応の表示桁数計算）を再利用し、`TerminalTitle` はタイトル本文のサニタイズに `SanitizeDisplayText.sanitizeDisplayText` を再利用する（ANSI/制御文字除去ロジックの二重実装を避ける）。
 
 ---
@@ -758,7 +770,8 @@ classDiagram
 | PollingLoop<T>                                                              | cli-ink       | application service                             | 汎用ポーリング（一覧・詳細）。多重取得抑止・失敗時フォールバック                                                                                                             |
 | ClientRollup                                                                | cli-ink       | utility                                         | project 単位の priority max() 集計のみ                                                                                                                                       |
 | InstanceListStore                                                           | cli-ink       | application state                               | フィルタ状態・取得結果の保持                                                                                                                                                 |
-| StatusDisplay                                                               | cli-ink       | module (status-display.ts)                      | 表示語彙（ラベル/色/グリフ/経過時間/フィルタキー対応）                                                                                                                       |
+| StatusDisplay                                                               | cli-ink       | module (status-display.ts)                      | 表示語彙（ラベル/色/グリフ/経過時間/フィルタキー対応）。ラベル文字列は `I18n` の `t()` 経由で解決、色・グリフはロケール非依存                                                |
+| I18n                                                                        | cli-ink       | module (i18n/index.ts, release-9)               | 表示文言解決の唯一の入口（`t`/`setActiveLocale`/`getActiveLocale`/`resolveLocale`）。ロケールはモジュールレベル・シングルトンで保持（React context 不使用）                  |
 | ViewMode / KeyFlags / KeyBindingHost                                        | cli-ink       | type / interface                                | キー処理の入出力境界（AppView が Host を実装）                                                                                                                               |
 | KeyBindingController                                                        | cli-ink       | controller                                      | キー入力 → アクションの薄い写像（PollingLoop に非依存）                                                                                                                      |
 | ConfigWriter                                                                | cli-ink       | module (config/config-writer.ts)                | child ペアリング設定の部分書き込み（chmod 600）                                                                                                                              |
