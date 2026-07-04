@@ -13,8 +13,9 @@ export interface StatusFilterBarProps {
 /**
  * 状態フィルタのバー（§10.2 の `[1]稼働中 2  [2]権限待ち 1 …`）。
  *
- * `1`–`6` キーに対応する各状態のラベルと件数を並べ、有効なフィルタを反転表示する。
- * フィルタのトグルは KeyBindingController→store の責務で、ここは描画のみ。
+ * `1`–`6` キーに対応する各状態のラベルと件数を並べ、有効なフィルタを `backgroundColor` で
+ * 強調表示する（未選択時は無強調、release-10-dashboard-polish FR-05 AC-1。従来の `inverse`
+ * 反転から置換）。フィルタのトグルは KeyBindingController→store の責務で、ここは描画のみ。
  *
  * @param props {@link StatusFilterBarProps}。
  * @returns フィルタバーの要素。
@@ -30,7 +31,7 @@ export function StatusFilterBar({ counts, activeFilters }: StatusFilterBarProps)
         const active = activeFilters.includes(filter)
         return (
           <Box key={filter} marginRight={2}>
-            <Text inverse={active}>
+            <Text backgroundColor={active ? 'blue' : undefined}>
               [{index + 1}]{statusLabel(filter)} {counts[filter] ?? 0}
             </Text>
           </Box>

@@ -76,4 +76,39 @@ describe('InstanceCard（FR-01）', () => {
     expect(unselected).not.toContain(CYAN)
     expect(selected).toContain(CYAN)
   })
+
+  it('AC-1/AC-2: selected=true で borderStyle が double 罫線になり cyan が付く（release-10-dashboard-polish FR-04）', () => {
+    const { lastFrame } = render(<InstanceCard row={makeRow({})} selected width={36} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('╔') // double 罫線（cli-boxes: double.topLeft）
+    expect(frame).toContain(CYAN)
+  })
+
+  it('AC-2: selected=false では borderStyle が round 罫線のままで cyan は付かない（release-10-dashboard-polish FR-04）', () => {
+    const { lastFrame } = render(<InstanceCard row={makeRow({})} selected={false} width={36} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('╭') // round 罫線（cli-boxes: round.topLeft）
+    expect(frame).not.toContain(CYAN)
+  })
+
+  it('device.name / branch に含まれる ANSI エスケープを除染して描画する（release-10-dashboard-polish レビュー修正: CWE-150）', () => {
+    const ESC = String.fromCharCode(27)
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({
+          deviceName: `Mac mini${ESC}[2J`,
+          branch: `feature/x${ESC}]0;PWNED${String.fromCharCode(7)}`,
+        })}
+        selected={false}
+        width={40}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    // ESC 自体は Ink の正当な SGR カラーコードにも出現するため、注入した具体的な
+    // シーケンス（画面消去・OSC タイトル書換）のみが除去されていることを確認する。
+    expect(frame).not.toContain(`${ESC}[2J`)
+    expect(frame).not.toContain('PWNED')
+    expect(frame).toContain('Mac mini')
+    expect(frame).toContain('feature/x')
+  })
 })

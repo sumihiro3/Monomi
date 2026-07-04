@@ -279,7 +279,7 @@ export function DetailView({
           <Text bold>{source.project.name}</Text>
         </Field>
         <Field label="device">
-          <Text>{source.device.name}</Text>
+          <Text>{sanitizeDisplayText(source.device.name)}</Text>
         </Field>
         <Field label="branch">
           <Text>{sanitizeNullableDisplayText(source.branch) ?? '-'}</Text>

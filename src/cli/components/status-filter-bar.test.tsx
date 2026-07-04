@@ -3,6 +3,9 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { setActiveLocale } from '../../i18n/index.js'
 import { StatusFilterBar } from './status-filter-bar.js'
 
+/** ANSI 青（背景色）のエスケープ。ink が `backgroundColor="blue"` に対して出力する。 */
+const BG_BLUE = '[44m'
+
 afterEach(() => {
   setActiveLocale('en')
 })
@@ -23,5 +26,19 @@ describe('StatusFilterBar（release-9-i18n レイアウト回帰）', () => {
     expect(frame).toContain('[4]Awaiting PR review 1')
     expect(frame).toContain('[5]Stale 2')
     expect(frame).toContain('[6]Closed 3')
+  })
+})
+
+describe('StatusFilterBar（release-10-dashboard-polish FR-05）', () => {
+  it('AC-1/AC-2: activeFilters に含まれるフィルタのみ backgroundColor で強調される（inverse→backgroundColor 置換）', () => {
+    const { lastFrame } = render(<StatusFilterBar counts={COUNTS} activeFilters={['active']} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain(BG_BLUE)
+  })
+
+  it('AC-2: activeFilters が空のときは、どのバッジにも backgroundColor 強調が付かない', () => {
+    const { lastFrame } = render(<StatusFilterBar counts={COUNTS} activeFilters={[]} />)
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain(BG_BLUE)
   })
 })
