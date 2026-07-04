@@ -8,8 +8,7 @@
  * この面を通じて外部へ波及するのを防ぐ。
  */
 
-/** パッケージのバージョン文字列（`monomi --version` が表示する値）。 */
-export const MONOMI_VERSION = '0.0.1'
+export { MONOMI_VERSION } from './version.js'
 
 export { AppView, type AppViewProps } from './cli/components/app-view.js'
 // cli-ink: hub への読み取りクライアントと Ink ダッシュボードの入口（FR-05）。

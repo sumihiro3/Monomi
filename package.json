@@ -11,7 +11,11 @@
     "lint": "biome lint .",
     "format:check": "biome format . && prettier --check \"**/*.{md,mdx}\"",
     "test": "vitest run",
-    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js"
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "preversion": "pnpm run test",
+    "version:patch": "pnpm version patch",
+    "version:minor": "pnpm version minor",
+    "version:major": "pnpm version major"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
