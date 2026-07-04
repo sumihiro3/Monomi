@@ -1,6 +1,7 @@
 import { render } from 'ink-testing-library'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { InstanceStatusRow } from '../../hub/dto.js'
+import { setActiveLocale } from '../../i18n/index.js'
 import { InstanceCard } from './instance-card.js'
 
 /** ANSI シアン（前景色）のエスケープ。ink がボーダー色 `cyan` に対して出力する。 */
@@ -33,13 +34,26 @@ function makeRow(over: {
   }
 }
 
+afterEach(() => {
+  setActiveLocale('en')
+})
+
 describe('InstanceCard（FR-01）', () => {
-  it('AC-1: project/device/branch/状態ラベル/age を描画する', () => {
+  it('AC-1: 既定ロケール（en）で project/device/branch/状態ラベル/age を描画する（release-9-i18n FR-01 AC-2）', () => {
     const { lastFrame } = render(<InstanceCard row={makeRow({})} selected={false} width={36} />)
     const frame = lastFrame() ?? ''
     expect(frame).toContain('ProjectLens')
     expect(frame).toContain('Mac mini')
     expect(frame).toContain('feature/ai-sidecar')
+    expect(frame).toContain('Awaiting approval') // approval_wait の en ラベル（status-display 再利用、AC-3）
+    expect(frame).toContain('○') // approval_wait のグリフ
+    expect(frame).toContain('12m') // 720 秒 → 12m（formatAge 再利用）
+  })
+
+  it('AC-1: locale: ja で状態ラベルが日本語で描画される（release-9-i18n FR-02 AC-2・AC-5）', () => {
+    setActiveLocale('ja')
+    const { lastFrame } = render(<InstanceCard row={makeRow({})} selected={false} width={36} />)
+    const frame = lastFrame() ?? ''
     expect(frame).toContain('権限待ち') // approval_wait のラベル（status-display 再利用、AC-3）
     expect(frame).toContain('○') // approval_wait のグリフ
     expect(frame).toContain('12m') // 720 秒 → 12m（formatAge 再利用）

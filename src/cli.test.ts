@@ -1,6 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { run, type CliDeps } from './cli.js'
+import { setActiveLocale } from './i18n/index.js'
 import type { InstallHooksResult } from './install-hooks/install-hooks.js'
+
+// テスト間でアクティブロケール(モジュールレベル・シングルトン)を既定 en へリセットする規約
+// (src/i18n/i18n.test.ts・instance-card.test.tsx と同じ規約)。
+afterEach(() => {
+  setActiveLocale('en')
+})
 
 /** テスト用の {@link CliDeps}。全ハンドラをモックにし、呼び出しの検証だけに専念する。 */
 function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
@@ -21,6 +28,7 @@ function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     ),
     runHub: vi.fn(async () => {}),
     loadRole: vi.fn(() => 'hub' as const),
+    loadLocale: vi.fn(() => 'en' as const),
     listDevices: vi.fn(async () => []),
     revokeDevice: vi.fn(async (deviceId: string) => ({
       ok: true,
@@ -260,5 +268,34 @@ describe('run (CLI dispatch)', () => {
     const code = await run(['hub'], deps)
     expect(code).toBe(1)
     expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('EADDRINUSE'))
+  })
+})
+
+describe('run locale wiring (release-9-i18n FR-02 AC-4 / AC-6)', () => {
+  it('applies the locale resolved by deps.loadLocale before rendering any text (locale: ja)', async () => {
+    const deps = makeDeps({ loadLocale: vi.fn(() => 'ja' as const) })
+    const code = await run(['--help'], deps)
+    expect(code).toBe(0)
+    expect(deps.loadLocale).toHaveBeenCalledTimes(1)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('使い方'))
+  })
+
+  it('still uses the English default when deps.loadLocale resolves "en"', async () => {
+    const deps = makeDeps()
+    const code = await run(['--help'], deps)
+    expect(code).toBe(0)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('Usage'))
+  })
+
+  it('converts an invalid-locale failure from deps.loadLocale into exit code 1 without a stack trace escaping run()', async () => {
+    const deps = makeDeps({
+      loadLocale: vi.fn(() => {
+        throw new Error('invalid locale "fr": expected "ja" or "en"')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(1)
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('invalid locale'))
+    expect(deps.runDashboard).not.toHaveBeenCalled()
   })
 })

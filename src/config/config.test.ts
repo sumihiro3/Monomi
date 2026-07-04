@@ -7,6 +7,7 @@ import {
   DEFAULT_PORT,
   loadConfig,
   loadConfigFromYaml,
+  loadLocale,
   parseConfig,
   parseDurationMs,
 } from './config.js'
@@ -182,6 +183,21 @@ describe('parseConfig validation', () => {
   })
 })
 
+describe('parseConfig locale (release-9-i18n FR-01)', () => {
+  it('accepts locale: ja and locale: en (AC-1)', () => {
+    expect(parseConfig({ locale: 'ja' }).locale).toBe('ja')
+    expect(parseConfig({ locale: 'en' }).locale).toBe('en')
+  })
+
+  it('rejects an unsupported locale (AC-3)', () => {
+    expect(() => parseConfig({ locale: 'fr' })).toThrow(ZodError)
+  })
+
+  it('leaves locale undefined when omitted (default resolution belongs to i18n, AC-2/AC-6)', () => {
+    expect(parseConfig({}).locale).toBeUndefined()
+  })
+})
+
 describe('loadConfigFromYaml', () => {
   it('parses the documented config.yml format', () => {
     const yamlText = [
@@ -204,6 +220,10 @@ describe('loadConfigFromYaml', () => {
 
   it('treats an empty yaml document as all defaults', () => {
     expect(loadConfigFromYaml('').port).toBe(DEFAULT_PORT)
+  })
+
+  it('parses locale: ja from yaml (release-9-i18n FR-01 AC-1)', () => {
+    expect(loadConfigFromYaml('locale: ja').locale).toBe('ja')
   })
 
   it('parses a child config.yml with a hub_endpoints block sequence (FR-01 AC-1)', () => {
@@ -249,5 +269,58 @@ describe('loadConfig', () => {
     expect(c.port).toBe(51000)
     expect(c.deviceId).toBe('mac-2')
     expect(c.watchIntervalMs).toBe(3 * S)
+  })
+
+  it('rejects a config.yml with an invalid field (e.g. an out-of-range port)', () => {
+    const paths = tmpPaths()
+    fs.writeFileSync(paths.configFile, 'port: 99999\n')
+    expect(() => loadConfig(paths)).toThrow(ZodError)
+  })
+})
+
+describe('loadLocale（release-9-i18n review-changes 修正）', () => {
+  const tmpHomes: string[] = []
+
+  afterEach(() => {
+    for (const dir of tmpHomes.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  function tmpPaths() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-cfg-'))
+    tmpHomes.push(dir)
+    return resolvePaths(dir)
+  }
+
+  it('returns undefined when config.yml is absent', () => {
+    expect(loadLocale(tmpPaths())).toBeUndefined()
+  })
+
+  it('returns undefined when config.yml exists but locale is omitted', () => {
+    const paths = tmpPaths()
+    fs.writeFileSync(paths.configFile, 'port: 51000\n')
+    expect(loadLocale(paths)).toBeUndefined()
+  })
+
+  it('resolves locale: ja even when the file has no other fields', () => {
+    const paths = tmpPaths()
+    fs.writeFileSync(paths.configFile, 'locale: ja\n')
+    expect(loadLocale(paths)).toBe('ja')
+  })
+
+  it('resolves a valid locale even when an unrelated field is invalid (the review-changes regression)', () => {
+    // port: abc は loadConfig() 全体では ZodError になるが、loadLocale() はそれに巻き込まれない
+    // （--help/--version がロケール解決だけで足りるコマンドまで落ちないようにするための分離）。
+    const paths = tmpPaths()
+    fs.writeFileSync(paths.configFile, 'port: abc\nlocale: ja\n')
+    expect(() => loadConfig(paths)).toThrow(ZodError)
+    expect(loadLocale(paths)).toBe('ja')
+  })
+
+  it('still rejects an invalid locale value itself', () => {
+    const paths = tmpPaths()
+    fs.writeFileSync(paths.configFile, 'locale: fr\n')
+    expect(() => loadLocale(paths)).toThrow(ZodError)
   })
 })

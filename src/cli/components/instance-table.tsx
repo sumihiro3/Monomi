@@ -1,6 +1,7 @@
 import { Box, Text, useStdout } from 'ink'
 import type { ReactElement } from 'react'
 import type { InstanceStatusRow } from '../../hub/dto.js'
+import { t } from '../../i18n/index.js'
 import { columnsForWidth } from '../card-grid.js'
 import { InstanceCard } from './instance-card.js'
 
@@ -38,7 +39,12 @@ export function InstanceTable({ rows, selectedIndex }: InstanceTableProps): Reac
   const columns = columnsForWidth(stdout.columns, Boolean(stdout.isTTY))
 
   if (rows.length === 0) {
-    return <Text dimColor>{'  '}(該当するインスタンスがありません)</Text>
+    return (
+      <Text dimColor>
+        {'  '}
+        {t('list.empty')}
+      </Text>
+    )
   }
 
   if (columns === 1) {

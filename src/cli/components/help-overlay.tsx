@@ -1,23 +1,30 @@
 import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
+import { t, type TranslationKey } from '../../i18n/index.js'
 
 /**
- * `[key, description]` のヘルプ 1 行。
+ * `[key, descriptionKey]` のヘルプ 1 行。
  *
  * 一覧ビューと詳細ビュー（Agent View Lv.1）でキーの意味が変わるものは説明にビューを明記し、
  * フッターヒント（{@link ./app-view.js#footerHint}）との不整合を無くす。`j`/`k`・`↑`/`↓` は
  * 一覧ではカーソル移動、詳細ではイベント履歴スクロール（release-6 FR-02 AC-3）。`←`/`→`（FR-04）と
  * `w`（折り返し切替, FR-08）は詳細ビュー専用。
+ *
+ * `key`（`'1-6'`・`'j / k, ↑ / ↓'` 等）はキーバインドそのものでロケール非依存のため、リテラルの
+ * まま持つ。説明のみ翻訳キー化し（release-9-i18n FR-02）、{@link HelpOverlay} の描画時に `t()` で
+ * 解決する。`t()` をこの配列の初期化（モジュールスコープの const 評価）で呼ぶと、import 時点の
+ * アクティブロケール（常に既定の `en`）で文言が凍結されてしまうため（`../../i18n/index.js` 参照）、
+ * ここではキーの参照のみを持ち、解決は描画時まで遅延させる。
  */
-const HELP_LINES: ReadonlyArray<readonly [string, string]> = [
-  ['1-6', '一覧: 状態フィルタのトグル（複数選択可）'],
-  ['j / k, ↑ / ↓', '一覧: カーソル移動 / 詳細: イベント履歴スクロール'],
-  ['Enter', '一覧: 詳細（Agent View Lv.1）を開く'],
-  ['← / →', '詳細: 隣接プロジェクトへ移動'],
-  ['w', '詳細: イベント行の折り返し/切り詰め切替'],
-  ['esc', '戻る / ヘルプを閉じる'],
-  ['?', 'ヘルプの表示/非表示'],
-  ['q', '終了'],
+const HELP_LINES: ReadonlyArray<readonly [string, TranslationKey]> = [
+  ['1-6', 'help.filterToggle'],
+  ['j / k, ↑ / ↓', 'help.moveOrScroll'],
+  ['Enter', 'help.openDetail'],
+  ['← / →', 'help.moveProject'],
+  ['w', 'help.toggleWrap'],
+  ['esc', 'help.back'],
+  ['?', 'help.toggleHelp'],
+  ['q', 'help.quit'],
 ]
 
 /**
@@ -44,11 +51,11 @@ export const HELP_OVERLAY_ROWS = HELP_LINES.length + 3
 export function HelpOverlay(): ReactElement {
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>
-      <Text bold>キーバインド</Text>
-      {HELP_LINES.map(([key, description]) => (
+      <Text bold>{t('help.title')}</Text>
+      {HELP_LINES.map(([key, descriptionKey]) => (
         <Text key={key}>
           <Text color="cyan">{key.padEnd(16)}</Text>
-          {description}
+          {t(descriptionKey)}
         </Text>
       ))}
     </Box>

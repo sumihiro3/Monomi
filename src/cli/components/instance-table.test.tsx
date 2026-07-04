@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events'
 import { render as inkRender } from 'ink'
 import { render } from 'ink-testing-library'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { InstanceStatusRow } from '../../hub/dto.js'
+import { setActiveLocale } from '../../i18n/index.js'
 import { InstanceTable } from './instance-table.js'
 
 /** ANSI シアン（前景色）のエスケープ。ink が選択カードのボーダー色 `cyan` に対して出力する。 */
@@ -37,19 +38,38 @@ function makeRow(over: {
   }
 }
 
+afterEach(() => {
+  setActiveLocale('en')
+})
+
 describe('InstanceTable（カードグリッド、FR-01・FR-02）', () => {
-  it('FR-01 AC-4: 0 件のとき不在メッセージを表示する', () => {
+  it('FR-01 AC-4: 既定ロケール（en）で 0 件のとき英語の不在メッセージを表示する（release-9-i18n FR-02 AC-2・AC-5）', () => {
+    const { lastFrame } = render(<InstanceTable rows={[]} selectedIndex={0} />)
+    expect(lastFrame() ?? '').toContain('(No matching instances)')
+  })
+
+  it('FR-01 AC-4: locale: ja で 0 件のとき日本語の不在メッセージを表示する（release-9-i18n FR-02 AC-2・AC-5）', () => {
+    setActiveLocale('ja')
     const { lastFrame } = render(<InstanceTable rows={[]} selectedIndex={0} />)
     expect(lastFrame() ?? '').toContain('(該当するインスタンスがありません)')
   })
 
-  it('FR-01 AC-1/AC-3: カードに project/device/branch/状態ラベル/age を描画する', () => {
+  it('FR-01 AC-1/AC-3: 既定ロケール（en）でカードに project/device/branch/状態ラベル/age を描画する（release-9-i18n FR-01 AC-2）', () => {
     const { lastFrame } = render(<InstanceTable rows={[makeRow({})]} selectedIndex={0} />)
     const frame = lastFrame() ?? ''
     expect(frame).toContain('╭') // ボーダー付きボックス（round border）
     expect(frame).toContain('ProjectLens')
     expect(frame).toContain('Mac mini')
     expect(frame).toContain('feature/ai-sidecar')
+    expect(frame).toContain('Awaiting approval') // approval_wait の en ラベル（status-display 再利用、AC-3）
+    expect(frame).toContain('○') // approval_wait のグリフ
+    expect(frame).toContain('12m') // 720 秒 → 12m（formatAge 再利用）
+  })
+
+  it('FR-01 AC-1/AC-3: locale: ja でカードの状態ラベルが日本語で描画される（release-9-i18n FR-02 AC-2・AC-5）', () => {
+    setActiveLocale('ja')
+    const { lastFrame } = render(<InstanceTable rows={[makeRow({})]} selectedIndex={0} />)
+    const frame = lastFrame() ?? ''
     expect(frame).toContain('権限待ち') // approval_wait ラベル（status-display 再利用、AC-3）
     expect(frame).toContain('○') // approval_wait のグリフ
     expect(frame).toContain('12m') // 720 秒 → 12m（formatAge 再利用）

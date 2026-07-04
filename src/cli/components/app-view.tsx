@@ -1,6 +1,7 @@
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
 import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react'
 import type { InstanceStatusRow } from '../../hub/dto.js'
+import { t } from '../../i18n/index.js'
 import type { HubApiClient } from '../hub-api-client.js'
 import { InstanceListStore } from '../instance-list-store.js'
 import {
@@ -269,7 +270,12 @@ export function AppView({
         </Box>
       )}
 
-      {error !== null ? <Text color="red">エラー: {error}</Text> : null}
+      {error !== null ? (
+        <Text color="red">
+          {t('app.errorPrefix')}
+          {error}
+        </Text>
+      ) : null}
       {showHelp ? (
         <Box marginTop={1}>
           <HelpOverlay />

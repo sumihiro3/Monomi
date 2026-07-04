@@ -1,6 +1,7 @@
 import { Box, Text, useInput, useStdout } from 'ink'
 import { type ReactElement, type ReactNode, useEffect, useMemo, useState } from 'react'
 import type { InstanceDetail, InstanceStatusRow, RecentEventDto } from '../../hub/dto.js'
+import { t } from '../../i18n/index.js'
 import { bottomBorderWithLabel, resolveBoxWidth, topBorderWithTitle } from '../box-border.js'
 import {
   clampOffset,
@@ -258,8 +259,12 @@ export function DetailView({
   return (
     <Box flexDirection="column">
       {/* 上部: プロジェクト概要 BOX（FR-01 AC-1・FR-05・FR-06）。上辺罫線はタイトル「概要」を
-          埋め込んだ自前行に置換し（borderTop=false）、幅を端末一杯に固定する（FR-06 AC-1/AC-3）。 */}
-      <Text>{topBorderWithTitle(boxWidth, '概要')}</Text>
+          埋め込んだ自前行に置換し（borderTop=false）、幅を端末一杯に固定する（FR-06 AC-1/AC-3）。
+          release-9-i18n FR-02: タイトルは t('detail.overview') で解決する（en 訳語は ASCII の
+          "Overview"）。box-border.ts の displayWidth は全角/半角どちらも表示桁数を計算済みのため、
+          en の ASCII タイトルに切り替わっても罫線と角文字（╮）のずれは生じない（box-border 側の
+          変更は不要）。 */}
+      <Text>{topBorderWithTitle(boxWidth, t('detail.overview'))}</Text>
       <Box
         borderStyle="round"
         borderTop={false}
@@ -283,7 +288,10 @@ export function DetailView({
           <Text color={statusColor(source.status.display)}>
             {statusGlyph(source.status.display)} {statusLabel(source.status.display)}
           </Text>
-          <Text dimColor> ({formatAge(source.status.elapsed_seconds)}経過)</Text>
+          <Text dimColor>
+            {' '}
+            ({t('detail.elapsedSuffix', { age: formatAge(source.status.elapsed_seconds) })})
+          </Text>
         </Field>
         <Field label="session_id">
           <Text>{sanitizeDisplayText(source.session.id)}</Text>
@@ -310,7 +318,9 @@ export function DetailView({
           （常に最低1件は表示するフォールバック）でも高さを visible ちょうどに強制し、
           そのケースで残っていたわずかな画面あふれも合わせて解消する。 */}
       <Box flexDirection="column" marginTop={1}>
-        <Text>{topBorderWithTitle(boxWidth, 'イベント履歴')}</Text>
+        {/* release-9-i18n FR-02: タイトルは t('detail.eventHistory') で解決する（en 訳語は ASCII の
+            "Event History"）。box-border.ts の displayWidth 計算は変更不要（上の概要 BOX 参照）。 */}
+        <Text>{topBorderWithTitle(boxWidth, t('detail.eventHistory'))}</Text>
         <Box
           borderStyle="round"
           borderTop={false}
@@ -325,7 +335,7 @@ export function DetailView({
               error を前面に出すのは detail が null のまま（初回ロード失敗）のときだけにする。 */}
           {detail !== null ? (
             total === 0 ? (
-              <Text dimColor>(イベントがありません)</Text>
+              <Text dimColor>{t('detail.noEvents')}</Text>
             ) : (
               // window で切り出した可視分のみを古い順（上）→ 新しい順（下）で描く（FR-02 AC-1）。
               // wrap は wrapMode に従う（FR-08）: 'truncate-end' で 1 行固定、'wrap' で全文折り返し。
@@ -409,9 +419,9 @@ export function DetailView({
               })
             )
           ) : error !== null ? (
-            <Text color="red">詳細の取得に失敗しました: {error}</Text>
+            <Text color="red">{t('detail.fetchFailed', { error })}</Text>
           ) : (
-            <Text dimColor>読み込み中…</Text>
+            <Text dimColor>{t('detail.loading')}</Text>
           )}
         </Box>
         {/* FR-07: 範囲ラベル "X-Y of Z" を下辺罫線へ右寄せで埋め込む（BOX 内の独立ラベル行は廃止）。

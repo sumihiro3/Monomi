@@ -5,9 +5,15 @@ import { createElement } from 'react'
 import { AppView } from './cli/components/app-view.js'
 import { createHubApiClient, createHubConnection } from './cli/hub-api-client.js'
 import { type ChildPairOptions, runChildPair, runHubPair } from './cli/pairing-client.js'
-import { loadConfig, type MonomiRole } from './config/config.js'
+import {
+  loadConfig,
+  loadLocale as loadLocaleFromConfig,
+  type MonomiLocale,
+  type MonomiRole,
+} from './config/config.js'
 import type { DeviceDto, DeviceRevokeResult } from './hub/dto.js'
 import { main as runHubServer } from './hub/serve.js'
+import { resolveLocale, setActiveLocale, t } from './i18n/index.js'
 import { MONOMI_VERSION } from './index.js'
 import {
   type InstallHooksOptions,
@@ -18,21 +24,13 @@ import {
 
 /**
  * `monomi` bin の使い方（`--help`/引数不明時に表示）。
+ *
+ * `t()` はアクティブロケール解決後（{@link run} 冒頭の `setActiveLocale` 後）に評価する必要があるため、
+ * モジュールスコープの `const` にせず関数にしている（`../i18n/index.js` の落とし穴を参照）。
  */
-const USAGE = `Monomi — a status dashboard for Claude Code across machines
-
-使い方:
-  monomi                          稼働中 instance をダッシュボード表示（Ink）
-  monomi hub                       hub API サーバを起動（DB 初期化 + bootstrap + HTTP）
-  monomi hub pair                  6桁ペアリングコードを発行し到達先候補 URL を表示（hub 側）
-  monomi hub devices list          登録デバイス一覧を表示（トークン有効/失効つき）
-  monomi hub devices revoke <id>   device のトークンを失効（以後その token は 401）
-  monomi pair --code <code> [--hub <url> ...]  hub とペアリングし token+設定を保存（child 側。
-                                    --hub は複数指定可、指定順が到達優先順）
-  monomi install-hooks              Claude Code の7フックを ~/.claude/settings.json へ登録
-  monomi uninstall-hooks            Monomi 起因のフックのみ除去
-  monomi --version, -v              バージョンを表示
-  monomi --help, -h                 このヘルプを表示`
+function usage(): string {
+  return t('cli.usage')
+}
 
 /**
  * {@link run} が呼び出す副作用の集合。テストで実 HTTP/実 fs/実 Ink 起動を避けるために
@@ -47,6 +45,14 @@ export interface CliDeps {
   runHub: () => Promise<void>
   /** このデバイスの role を解決する（`monomi hub` の child ガード用 / FR-01 AC-2）。 */
   loadRole: () => MonomiRole
+  /**
+   * CLI 表示ロケールを解決する（{@link run} 冒頭で `setActiveLocale` に渡す /
+   * release-9-i18n FR-02 AC-4）。既定実装は `config.ts` の `loadLocale()`（`locale` フィールドのみを
+   * 検証する軽量パス）を使う。`locale` と無関係なフィールドが不正な config.yml でも、--help/--version
+   * のようなロケール解決だけで足りるコマンドが巻き込まれて落ちないようにするため
+   * （review-changes 修正。{@link loadRole} のようなフルスキーマ検証とは意図的に非対称）。
+   */
+  loadLocale: () => MonomiLocale
   /** `monomi hub devices list` の実体（localhost hub API をローカルトークンで叩く / FR-03 AC-1）。 */
   listDevices: () => Promise<DeviceDto[]>
   /** `monomi hub devices revoke <id>` の実体（FR-03 AC-2）。 */
@@ -77,6 +83,7 @@ export const defaultCliDeps: CliDeps = {
   uninstallHooks: uninstallHooksImpl,
   runHub: () => runHubServer(),
   loadRole: () => loadConfig().role,
+  loadLocale: () => resolveLocale(loadLocaleFromConfig()),
   listDevices: async () => (await createHubApiClient()).listDevices(),
   revokeDevice: async (deviceId: string) => (await createHubApiClient()).revokeDevice(deviceId),
   hubPair: () => runHubPair({ log: (message) => console.log(message) }),
@@ -95,7 +102,7 @@ export const defaultCliDeps: CliDeps = {
  */
 function formatDevicesTable(devices: DeviceDto[]): string {
   if (devices.length === 0) {
-    return 'No devices registered yet. Start the hub (monomi hub) or pair a device first.'
+    return t('cli.hubDevices.listEmpty')
   }
   const header = ['DEVICE_ID', 'NAME', 'ROLE', 'TOKEN', 'LAST_SEEN'] as const
   const rows = devices.map((d) => [
@@ -121,11 +128,23 @@ function formatDevicesTable(devices: DeviceDto[]): string {
  * へルーティングし、それぞれの実体呼び出しでスローされたエラーは終了コード 1 として握りつぶさず
  * メッセージ表示に変換する（bin から直接叩いたときにスタックトレースで壊れて見えないようにする）。
  *
+ * ロケール解決（`setActiveLocale`）もここで一度だけ行う（release-9-i18n FR-02 AC-4）。
+ * `deps.loadLocale` が投げる例外（不正な `locale` 値の zod バリデーションエラー等）も、
+ * 副作用呼び出しと同じく終了コード 1 + メッセージへ変換する（bin 直呼びでスタックトレースを
+ * 露出させないという既存方針と整合させる）。
+ *
  * @param argv `process.argv.slice(2)` 相当のサブコマンド引数。
  * @param deps 差し替え可能な副作用（省略時は {@link defaultCliDeps}）。
  * @returns プロセス終了コード。
  */
 export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promise<number> {
+  try {
+    setActiveLocale(deps.loadLocale())
+  } catch (err) {
+    deps.error(err instanceof Error ? err.message : String(err))
+    return 1
+  }
+
   const [command] = argv
 
   switch (command) {
@@ -142,14 +161,23 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
       return runGuarded(deps, async () => {
         const result = deps.installHooks()
         deps.log(
-          `Monomi hooks installed: ${result.added} entr${result.added === 1 ? 'y' : 'ies'} in ${result.settingsPath} (${result.removed} stale entr${result.removed === 1 ? 'y' : 'ies'} replaced)`
+          t('cli.installHooks.success', {
+            added: result.added,
+            settingsPath: result.settingsPath,
+            removed: result.removed,
+          })
         )
       })
 
     case 'uninstall-hooks':
       return runGuarded(deps, async () => {
         const result = deps.uninstallHooks()
-        deps.log(`Monomi hooks removed: ${result.removed} entry(ies) from ${result.settingsPath}`)
+        deps.log(
+          t('cli.uninstallHooks.success', {
+            removed: result.removed,
+            settingsPath: result.settingsPath,
+          })
+        )
       })
 
     case '--version':
@@ -159,11 +187,11 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
 
     case '--help':
     case '-h':
-      deps.log(USAGE)
+      deps.log(usage())
       return 0
 
     default:
-      deps.error(`monomi: unknown command "${command}"\n\n${USAGE}`)
+      deps.error(`${t('cli.unknownCommand', { command })}\n\n${usage()}`)
       return 1
   }
 }
@@ -182,9 +210,7 @@ async function handleHubCommand(args: string[], deps: CliDeps): Promise<void> {
   const [sub] = args
   if (sub === undefined) {
     if (deps.loadRole() === 'child') {
-      throw new Error(
-        "monomi hub: this device is configured as role:child. Run 'monomi hub' only on the hub device, or set role:hub in ~/.monomi/config.yml."
-      )
+      throw new Error(t('cli.hub.childRoleGuard'))
     }
     await deps.runHub()
     return
@@ -197,7 +223,7 @@ async function handleHubCommand(args: string[], deps: CliDeps): Promise<void> {
     await handleDevicesCommand(args.slice(1), deps)
     return
   }
-  throw new Error(`monomi hub: unknown subcommand "${sub}"\n\n${USAGE}`)
+  throw new Error(`${t('cli.hub.unknownSubcommand', { sub })}\n\n${usage()}`)
 }
 
 /**
@@ -225,7 +251,7 @@ function parsePairArgs(args: string[]): ChildPairOptions {
       }
       const next = args[i + 1]
       if (next === undefined) {
-        throw new Error(`monomi pair: ${flag} requires a value`)
+        throw new Error(t('cli.pair.valueRequired', { flag }))
       }
       i += 1
       return next
@@ -238,13 +264,11 @@ function parsePairArgs(args: string[]): ChildPairOptions {
         hub.push(takeValue())
         break
       default:
-        throw new Error(`monomi pair: unknown option "${arg}"\n\n${USAGE}`)
+        throw new Error(`${t('cli.pair.unknownOption', { option: arg })}\n\n${usage()}`)
     }
   }
   if (code === undefined || code.length === 0) {
-    throw new Error(
-      'monomi pair: --code <code> is required. Get a code with `monomi hub pair` on the hub device.'
-    )
+    throw new Error(t('cli.pair.codeRequired'))
   }
   return { code, hub }
 }
@@ -268,19 +292,16 @@ async function handleDevicesCommand(args: string[], deps: CliDeps): Promise<void
     }
     case 'revoke': {
       if (deviceId === undefined) {
-        throw new Error('monomi hub devices revoke: a <device_id> argument is required.')
+        throw new Error(t('cli.hubDevices.deviceIdRequired'))
       }
       const result = await deps.revokeDevice(deviceId)
       deps.log(
-        `Revoked ${result.revoked} token(s) for device "${result.device_id}". ` +
-          'That device must pair again to reconnect.'
+        t('cli.hubDevices.revokeSuccess', { revoked: result.revoked, deviceId: result.device_id })
       )
       return
     }
     default:
-      throw new Error(
-        `monomi hub devices: unknown action "${action ?? ''}". Use "list" or "revoke <device_id>".`
-      )
+      throw new Error(t('cli.hubDevices.unknownAction', { action: action ?? '' }))
   }
 }
 

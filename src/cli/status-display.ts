@@ -1,9 +1,13 @@
+import { type TranslationKey, t } from '../i18n/index.js'
+
 /**
  * CLI 表示専用の状態語彙（ラベル・色・グリフ・フィルタキー対応・経過時間整形）。
  *
  * ここには status 導出ロジックを一切持たない（§0.5: 導出・優先順位は hub 側の責務）。
  * hub が返す wire の `display` 文字列（小文字 snake。例 `approval_wait`）を、
- * ターミナル表示用の日本語ラベル・色・グリフへ写すだけの presentation 語彙を集約する。
+ * ターミナル表示用のラベル・色・グリフへ写すだけの presentation 語彙を集約する。
+ * ラベルはアクティブロケールに応じて `t()`（`src/i18n/`）経由で解決する
+ * （release-9-i18n FR-02 AC-2）。色・グリフはロケール非依存。
  */
 
 /**
@@ -25,14 +29,18 @@ export const FILTER_ORDER: readonly StatusFilter[] = [
   'closed',
 ]
 
-/** 表示状態 → 日本語ラベル（§10.2）。未知値はそのまま返す。 */
-const STATUS_LABELS: Record<string, string> = {
-  active: '稼働中',
-  approval_wait: '権限待ち',
-  next_wait: '次の指示待ち',
-  pr_wait: 'PRレビュー待ち',
-  stale: '放置',
-  closed: '終了',
+/**
+ * 表示状態 → 翻訳キー（§10.2、release-9-i18n FR-02 AC-2）。`statusLabel` はこのマップに
+ * 存在するキーでのみ `t()` を呼ぶ。未知の `display` はマップに存在しないため、`t()` を経由せず
+ * `display` をそのまま返す分岐へ流れる（未知値フォールバックの回帰防止）。
+ */
+const STATUS_LABEL_KEYS: Record<string, TranslationKey> = {
+  active: 'status.active',
+  approval_wait: 'status.approvalWait',
+  next_wait: 'status.nextWait',
+  pr_wait: 'status.prWait',
+  stale: 'status.stale',
+  closed: 'status.closed',
 }
 
 /** 表示状態 → Ink の色名。未知値は既定色。 */
@@ -46,13 +54,14 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 /**
- * 表示状態の日本語ラベルを返す。
+ * 表示状態のラベルを、アクティブロケールで解決して返す（release-9-i18n FR-02 AC-2）。
  *
  * @param display wire の表示状態（小文字 snake）。
- * @returns 日本語ラベル。未知値は入力をそのまま返す。
+ * @returns アクティブロケールのラベル（`t()` 経由）。未知値は入力をそのまま返す。
  */
 export function statusLabel(display: string): string {
-  return STATUS_LABELS[display] ?? display
+  const key = STATUS_LABEL_KEYS[display]
+  return key ? t(key) : display
 }
 
 /**
