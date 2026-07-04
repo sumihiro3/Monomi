@@ -2,40 +2,34 @@ export const meta = {
   name: 'implement-feature',
   description: 'リリース要件を入力に、探索→設計→実装→検証を行う機能実装パイプライン',
   whenToUse:
-    '確定済み要件 (docs/releases/release-N/requirements.md) を実装するとき。args: {release: "release-1"} でリリース指定、または {task: "..."} で単発タスク指定。スコープを絞る場合は {scope: "..."} を併用',
+    '確定済み要件を実装するとき。args: {release: "release-1"} でリリース指定、または {task: "..."} で単発タスク指定。スコープを絞る場合は {scope: "..."} を併用。{config: {...}} で設定を直接渡せる。{skipVerify: true} で最終検証(release-check のネスト実行)を省略する(run-release からの起動用)',
   phases: [
+    { title: '準備', detail: 'config 読込と入力検証', model: 'haiku' },
     { title: '探索', detail: '要件と関連コードの並列調査', model: 'haiku/sonnet' },
     { title: '設計', detail: '実装計画と作業項目への分解', model: 'opus' },
     {
       title: '実装',
-      detail: 'ファイル競合の無い作業項目はバッチ化して並列実装、競合する項目間のみ逐次',
-      model: 'haiku/sonnet/opus(複雑度スコアで決定)',
+      detail:
+        'ファイル競合の無い作業項目はバッチ化して並列実装、競合する項目間のみ逐次。失敗項目は 1 回リトライ',
+      model: 'config.models.implementLow/Mid/High(複雑度スコアで決定)',
     },
-    { title: '検証', detail: 'release-check ワークフローをネスト実行', model: 'haiku' },
+    { title: '照合', detail: '報告された変更ファイルと git 差分の機械照合', model: 'haiku' },
+    {
+      title: '検証',
+      detail: 'release-check ワークフローをネスト実行(skipVerify 指定時は省略)',
+      model: 'haiku',
+    },
   ],
 }
 
-// モデル使い分けの方針: 要件・設計 = opus / 実装 = 複雑度スコアに応じて haiku・sonnet・opus / 検証 = haiku
-//
-// 実装フェーズのモデル割当は複雑度スコア(1-10、設計フェーズが作業項目ごとに採点)を
-// 2つの閾値で3段に分ける。閾値を変えるだけで sonnet の担当範囲を調整できる。
-// HAIKU_MAX_COMPLEXITY 以下 → haiku、OPUS_MIN_COMPLEXITY 以上 → opus、
-// その間(既定 3-8 の6段階、10段中最も広い帯)は sonnet。opus は「本当に難しい9-10」だけに絞り、
-// sonnet の担当範囲を広めにする方針(Sonnet 5 は Opus 4.8 と遜色ないため)。
-const HAIKU_MAX_COMPLEXITY = 2
-const OPUS_MIN_COMPLEXITY = 9
-
-/**
- * 複雑度スコア(1-10)から実装フェーズのモデルを決める。
- *
- * @param score 設計フェーズが採点した複雑度(1-10)。
- * @returns 'haiku' | 'sonnet' | 'opus'。
- */
-function modelForComplexity(score) {
-  if (score <= HAIKU_MAX_COMPLEXITY) return 'haiku'
-  if (score >= OPUS_MIN_COMPLEXITY) return 'opus'
-  return 'sonnet'
-}
+// モデル使い分けの方針: 探索・設計・実装のモデルは config.models から取得する。
+// 実装フェーズは複雑度スコア(1-10、設計フェーズが作業項目ごとに採点)を 2 つの閾値で 3 段に分け、
+// implementLow / implementMid / implementHigh を割り当てる。閾値を変えるだけで中位モデルの
+// 担当範囲を調整できる。LOW_MAX_COMPLEXITY 以下 → implementLow、HIGH_MIN_COMPLEXITY 以上 →
+// implementHigh、その間(既定 3-8 の 6 段階、10 段中最も広い帯)は implementMid。
+// 上位モデルは「本当に難しい 9-10」だけに絞り、中位モデルの担当範囲を広めにする方針。
+const LOW_MAX_COMPLEXITY = 2
+const HIGH_MIN_COMPLEXITY = 9
 
 // args は JSON 文字列で渡ってくる場合があるためパースする
 let input = args
@@ -54,15 +48,73 @@ const scope = input.scope || ''
 if (!release && !taskDesc) {
   throw new Error('args.release(例: {release: "release-1"})または args.task を指定してください')
 }
-const reqPath = release ? `docs/releases/${release}/requirements.md` : null
+
+phase('準備')
+
+// config ブートストラップ: args.config が無ければリポジトリの workflow.config.json を読む。
+// エージェントによる値の捏造を防ぐため、不存在は exists: false で報告させたうえで明示 throw する。
+let config = input.config
+if (typeof config === 'string') {
+  try {
+    config = JSON.parse(config)
+  } catch (e) {
+    throw new Error('args.config を JSON として解釈できません')
+  }
+}
+if (!config) {
+  const loaded = await agent(
+    'カレントリポジトリの .claude/workflow.config.json を読み、存在すれば {exists: true, config: <ファイル内容そのまま>}、無ければ {exists: false} を返してください。内容の要約・省略・補完は禁止。',
+    {
+      label: 'config読込',
+      phase: '準備',
+      schema: {
+        type: 'object',
+        required: ['exists'],
+        properties: {
+          exists: { type: 'boolean' },
+          config: { type: 'object' },
+        },
+      },
+      model: 'haiku',
+    }
+  )
+  if (loaded && loaded.exists && loaded.config) config = loaded.config
+}
+if (!config) {
+  throw new Error(
+    'workflow.config.json が読めません。args.config を渡すか .claude/workflow.config.json を作成してください'
+  )
+}
+if (config.configVersion !== 1) {
+  throw new Error(
+    `workflow.config.json の configVersion がエンジン要求版(1)と一致しません: ${config.configVersion}`
+  )
+}
+
+const MODELS = config.models || {}
+
+/**
+ * 複雑度スコア(1-10)から実装フェーズのモデルを決める。
+ *
+ * @param score 設計フェーズが採点した複雑度(1-10)。
+ * @returns config.models の implementLow / implementMid / implementHigh のいずれか。
+ */
+function modelForComplexity(score) {
+  if (score <= LOW_MAX_COMPLEXITY) return MODELS.implementLow || 'haiku'
+  if (score >= HIGH_MIN_COMPLEXITY) return MODELS.implementHigh || 'opus'
+  return MODELS.implementMid || 'sonnet'
+}
+
+// 要件ファイルパスは config のテンプレート({release} プレースホルダ)から組み立てる
+const reqPathTemplate = config.requirementsPath || 'docs/releases/{release}/requirements.md'
+const reqPath = release ? reqPathTemplate.replace('{release}', release) : null
 const target = reqPath
   ? `要件ファイル ${reqPath}${scope ? `(今回のスコープ: ${scope})` : ''}`
   : `タスク: ${taskDesc}`
 
-// {PLACEHOLDER}: プロジェクトの規約ドキュメントに置き換えること。
-// ARCHITECTURE.md は単一ファイルでも、複数層構成なら「docs/architecture/backend.md と
-// docs/architecture/frontend.md」のように複数パスを列挙してもよい。
-const RULES = 'リポジトリは /opt/dev/Monomi。CLAUDE.md と docs/ARCHITECTURE.md の規約に従うこと。'
+// エージェントはカレント作業ディレクトリ(=リポジトリルート)前提で動かす。規約文書は config から取得
+const conventionsDoc = config.conventionsDoc || 'CLAUDE.md'
+const RULES = `リポジトリはカレント作業ディレクトリ。CLAUDE.md と ${conventionsDoc} の規約に従うこと。`
 
 phase('探索')
 const [reqSummary, codeMap] = await parallel([
@@ -74,11 +126,18 @@ const [reqSummary, codeMap] = await parallel([
   () =>
     agent(
       `${RULES}\n${target} に関連する既存コードを調査してください。関連ファイルパス、既存パターン、再利用できる実装、変更が必要になりそうな箇所を報告してください。`,
-      { label: 'コード調査', phase: '探索', agentType: 'Explore', model: 'sonnet' }
+      { label: 'コード調査', phase: '探索', agentType: 'Explore', model: MODELS.explore || 'sonnet' }
     ),
 ])
 
 phase('設計')
+
+// 複雑度採点の較正例は config.complexityRubricExamples から取得する(プロジェクトごとに差し替え可能)
+const rubric = config.complexityRubricExamples || {}
+const rubricLow = rubric.low ? `(例: ${rubric.low})` : ''
+const rubricMid = rubric.mid ? `(例: ${rubric.mid})` : ''
+const rubricHigh = rubric.high ? `(例: ${rubric.high})` : ''
+
 const DESIGN_SCHEMA = {
   type: 'object',
   required: ['summary', 'items'],
@@ -105,23 +164,62 @@ const DESIGN_SCHEMA = {
               '(b) 変更範囲(単一ファイルの局所変更か、複数レイヤーにまたがる契約変更か)、' +
               '(c) バグ混入リスク(機械的な値変更か、境界値・タイミング・レイアウト計算等が絡むか)。' +
               '目安 — 1-3: 機械的な置換・定数値の変更・定型パターンのそのままの適用' +
-              '(例: 設定値の変更、footer文言の追加、既存コンポーネントへの1行のprops追加)。' +
-              '4-7: 典型的な実装(既存パターンの組み合わせ・中程度の分岐、大半の作業項目はここ)' +
-              '(例: 既存コンポーネントと同じ設計で新規UIコンポーネントを1つ追加する)。' +
-              '8-10: 新規のアーキテクチャ判断・複雑な状態管理・レイアウト計算等の新規ロジック・' +
+              rubricLow +
+              '。4-7: 典型的な実装(既存パターンの組み合わせ・中程度の分岐、大半の作業項目はここ)' +
+              rubricMid +
+              '。8-10: 新規のアーキテクチャ判断・複雑な状態管理・レイアウト計算等の新規ロジック・' +
               '既存規約からの逸脱を伴う判断' +
-              '(例: ポーリング機構のジェネリック化、スクロール位置とtail-follow挙動の状態設計、' +
-              '枠線へのタイトル埋め込みの文字数計算)。',
+              rubricHigh +
+              '。',
           },
         },
       },
     },
   },
 }
-const design = await agent(
-  `${RULES}\n以下の要件と現状調査をもとに実装計画を設計し、実装順に並べた作業項目に分解してください。各項目は独立して検証できる粒度にすること。依存関係がある場合は、依存される側を先に並べること。\n\n## 要件\n${reqSummary}\n\n## 現状調査\n${codeMap}`,
-  { label: '設計', phase: '設計', schema: DESIGN_SCHEMA, model: 'opus' }
-)
+// 設計出力がプレースホルダ的なジャンクでないかを検査する。
+// (既知の事故: 大きな StructuredOutput 送信がペイロード切断され、切り分け用の
+// 最小診断ペイロード(summary:"test", items:[{title:"t",...}])がそのまま正式な
+// 設計出力として採用され、実装ゼロで終了した。docs/known-issues.md 解決済みログ参照)
+function isJunkDesign(d) {
+  if (!d || typeof d.summary !== 'string' || d.summary.trim().length < 15) return true
+  if (!Array.isArray(d.items) || d.items.length === 0) return true
+  return d.items.some((item) => {
+    if (!item || typeof item.title !== 'string' || item.title.trim().length < 4) return true
+    if (typeof item.description !== 'string' || item.description.trim().length < 8) return true
+    if (!Array.isArray(item.files) || item.files.length === 0) return true
+    // 拡張子・パス区切りの有無では判定しない(Makefile・Dockerfile・LICENSE 等の
+    // 拡張子なしファイルを誤ってジャンク判定してしまうため)。空文字のみ弾く
+    return item.files.some((f) => typeof f !== 'string' || f.trim().length === 0)
+  })
+}
+
+const designPrompt = `${RULES}\n以下の要件と現状調査をもとに実装計画を設計し、実装順に並べた作業項目に分解してください。各項目は独立して検証できる粒度にすること。依存関係がある場合は、依存される側を先に並べること。\n\n## 要件\n${reqSummary}\n\n## 現状調査\n${codeMap}`
+
+let design = await agent(designPrompt, {
+  label: '設計',
+  phase: '設計',
+  schema: DESIGN_SCHEMA,
+  model: MODELS.design || 'opus',
+})
+if (!design) {
+  throw new Error('設計エージェントが失敗しました。再実行してください')
+}
+
+if (isJunkDesign(design)) {
+  log('設計出力がプレースホルダ的で無効と判定されたため、再設計を1回試行します')
+  design = await agent(
+    `${designPrompt}\n\n前回の出力はプレースホルダ的な内容(極端に短い title/description、意味のない files 等)で無効でした。` +
+      `具体的で実行可能な作業項目に分解し直してください。StructuredOutput の送信が大きすぎて失敗する場合は、` +
+      `items の description を短く圧縮して再送すること(切り分け用の最小ペイロードを最終出力として送らないこと)。`,
+    { label: '設計(再試行)', phase: '設計', schema: DESIGN_SCHEMA, model: MODELS.design || 'opus' }
+  )
+  if (!design || isJunkDesign(design)) {
+    throw new Error(
+      '設計エージェントが有効な設計を出力できませんでした(プレースホルダ的な出力が続いています)。要件を分割するか手動で設計を確認してください。'
+    )
+  }
+}
 log(`設計完了: ${design.items.length} 作業項目`)
 
 phase('実装')
@@ -152,33 +250,121 @@ log(
     '同一バッチ内は並列実行)'
 )
 
-const results = []
-for (const batch of batches) {
-  const batchResults = await parallel(
-    batch.map((item) => () => {
-      const model = modelForComplexity(item.complexity)
-      log(`実装: ${item.title} (複雑度 ${item.complexity} → ${model})`)
-      return agent(
-        `${RULES}\n次の作業項目を実装してください。実装後、変更したファイル一覧と判断に迷った点を報告してください。テストが必要な変更は同時に書くこと。\n\n## 実装方針(全体)\n${design.summary}\n\n## 作業項目\n${item.title}\n${item.description}\n対象ファイル目安: ${item.files.join(', ')}\n\n## 要件(参照用)\n${reqSummary}`,
-        { label: `実装: ${item.title}`, phase: '実装', model }
-      ).then((r) => ({ item: item.title, complexity: item.complexity, model, report: r }))
-    })
-  )
-  batch.forEach((item, idx) => {
-    if (batchResults[idx] === null) {
-      log(`実装失敗: ${item.title}(エラーのためスキップ。再実行が必要)`)
-    }
-  })
-  results.push(...batchResults.filter(Boolean))
+// 完了報告に「変更したファイル一覧」を必ず含めさせる(後段で git 差分と機械照合する)
+const IMPLEMENT_SCHEMA = {
+  type: 'object',
+  required: ['changedFiles', 'report'],
+  properties: {
+    changedFiles: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '実際に変更・新規作成したファイル(リポジトリルートからの相対パス)',
+    },
+    report: { type: 'string', description: '実装内容の要約と判断に迷った点' },
+  },
 }
 
-phase('検証')
-const verify = await workflow('release-check')
+/**
+ * 作業項目 1 件を実装エージェントに割り当てて実行する。
+ *
+ * @param item 設計フェーズが生成した作業項目。
+ * @param labelPrefix ログ用のラベル接頭辞('実装' または '再実装')。
+ * @returns 成功時は {item, complexity, model, changedFiles, report}、失敗時は null。
+ */
+function runImplementItem(item, labelPrefix) {
+  const model = modelForComplexity(item.complexity)
+  log(`${labelPrefix}: ${item.title} (複雑度 ${item.complexity} → ${model})`)
+  return agent(
+    `${RULES}\n次の作業項目を実装してください。テストが必要な変更は同時に書くこと。実装後、実際に変更・新規作成したファイルをリポジトリルートからの相対パスで changedFiles に列挙し、実装内容と判断に迷った点を report で報告してください。実際に編集していないファイルを changedFiles に含めてはいけません。\n\n## 実装方針(全体)\n${design.summary}\n\n## 作業項目\n${item.title}\n${item.description}\n対象ファイル目安: ${item.files.join(', ')}\n\n## 要件(参照用)\n${reqSummary}`,
+    { label: `${labelPrefix}: ${item.title}`, phase: '実装', schema: IMPLEMENT_SCHEMA, model }
+  ).then(
+    (r) =>
+      r && {
+        item: item.title,
+        complexity: item.complexity,
+        model,
+        changedFiles: r.changedFiles || [],
+        report: r.report,
+      }
+  )
+}
+
+// 失敗項目はサイレントスキップせず 1 回リトライし、それでも失敗した項目は failedItems に記録する。
+// リトライは同一バッチ内で行う(後続バッチが依存する可能性があるため、次バッチ開始前に解消を試みる)
+const results = []
+const failedItems = []
+for (const batch of batches) {
+  const batchResults = await parallel(batch.map((item) => () => runImplementItem(item, '実装')))
+  const retryTargets = batch.filter((item, idx) => batchResults[idx] === null)
+  results.push(...batchResults.filter(Boolean))
+  if (retryTargets.length > 0) {
+    log(`実装失敗: ${retryTargets.length} 件を 1 回リトライします`)
+    const retryResults = await parallel(
+      retryTargets.map((item) => () => runImplementItem(item, '再実装'))
+    )
+    retryTargets.forEach((item, idx) => {
+      if (retryResults[idx] === null) {
+        log(`実装失敗(リトライ後): ${item.title}(failedItems に記録)`)
+        failedItems.push(item.title)
+      }
+    })
+    results.push(...retryResults.filter(Boolean))
+  }
+}
+
+phase('照合')
+
+/** ファイルパスの表記ゆれ(先頭の ./ や余分な空白)を照合用に正規化する。 */
+function normalizePath(p) {
+  return p.trim().replace(/^\.\//, '')
+}
+
+// 実装エージェントが報告したファイルと実際の git 差分を機械照合する(run-release Gate 0.5 の入力)。
+// 新規作成ファイルは git diff に現れないため、未追跡ファイル一覧も併せて実差分とみなす
+const reported = [...new Set(results.flatMap((r) => r.changedFiles).map(normalizePath))]
+const diffReport = await agent(
+  'カレントリポジトリで `git diff --name-only HEAD` と `git ls-files --others --exclude-standard` を実行し、両コマンドの出力を結合・重複除去したファイルパスの配列を files として返してください。出力の加工・省略・推測は禁止。',
+  {
+    label: '差分照合',
+    phase: '照合',
+    schema: {
+      type: 'object',
+      required: ['files'],
+      properties: { files: { type: 'array', items: { type: 'string' } } },
+    },
+    model: 'haiku',
+  }
+)
+const actualDiff = Array.isArray(diffReport?.files) ? diffReport.files.map(normalizePath) : []
+const actualSet = new Set(actualDiff)
+// 報告されたのに実差分に現れないファイル = 捏造疑い。差分取得自体に失敗した場合は
+// 検証できないため、安全側に倒して報告された全ファイルを unverified とする
+const unverified = diffReport ? reported.filter((f) => !actualSet.has(f)) : reported
+if (!diffReport) {
+  log('差分照合エージェントが失敗したため、報告された全ファイルを unverified 扱いにします')
+} else if (unverified.length > 0) {
+  log(`照合不一致: ${unverified.length} 件のファイルが報告されたが実差分に現れません(捏造疑い)`)
+} else {
+  log('照合完了: 報告されたファイルはすべて実差分に存在します')
+}
+
+// skipVerify 指定時は最終検証を省略する(run-release から起動される場合、workflow() の
+// ネストは 1 段までのため release-check は run-release 側が直接実行する)
+let verification = null
+if (input.skipVerify !== true) {
+  phase('検証')
+  verification = await workflow('release-check', { config })
+}
 
 return {
   design: design.summary,
-  implemented: results.map(r => r.item),
+  implemented: results.map((r) => r.item),
+  failedItems,
+  fileAudit: { reported, actualDiff, unverified },
   reports: results,
-  verification: verify,
-  next: 'review-changes ワークフローで差分レビューを実施してください',
+  verification,
+  next:
+    failedItems.length > 0
+      ? `実装に失敗した作業項目が ${failedItems.length} 件あります。failedItems を確認・対応後、review-changes ワークフローで差分レビューを実施してください`
+      : 'review-changes ワークフローで差分レビューを実施してください',
 }
