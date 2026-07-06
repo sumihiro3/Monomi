@@ -162,13 +162,18 @@ async function notify(title, message) {
 }
 
 // ---- 起票(AC-6): record-known-issues は新設のため scriptPath 指定で起動する ----
+// 注意: workflow() の相対 scriptPath は「親スクリプトのディレクトリ」基準で解決される
+// (cwd 基準ではない)。'.claude/workflows/record-known-issues.js' と書くと
+// .claude/workflows/.claude/workflows/... に二重解決されて file not found になる
+// (2026-07-07 に run-release を絶対パス起動した際の実障害)。同一ディレクトリの
+// ファイル名のみを指定すること
 const filedIssues = []
 let resolvedLogProposal = null
 
 /** 所見を record-known-issues ワークフローで起票し、結果を filedIssues に集約する。 */
 async function fileKnownIssues(findings) {
   if (!Array.isArray(findings) || findings.length === 0) return
-  const r = await workflow({ scriptPath: '.claude/workflows/record-known-issues.js' }, { config, findings })
+  const r = await workflow({ scriptPath: 'record-known-issues.js' }, { config, findings })
   addConsumption('triage', 1)
   if (!r) {
     log('record-known-issues が結果を返さなかったため、起票結果を確認できませんでした')
