@@ -82,9 +82,13 @@ const untouchableNote =
     ? `\n次の文書は凍結・除外指定のため、内容の乖離があっても変更しないこと: ${untouchable.join(', ')}`
     : ''
 
+// advisor(サーバーサイド相談ツール)は応答がストールする既知障害があるため使用を禁止する(2026-07-06 に再現)
+const ADVISOR_BAN =
+  'advisor 等のサーバーサイド相談ツールは呼び出さないこと(応答がストールする既知障害があるため)。自身の分析のみで作業を完結すること。'
+
 phase('差分把握')
 const diffSummary = await agent(
-  `${CWD}git diff ${base}... と git status / git diff(未コミット分)を確認し、今回の変更内容を要約してください: 追加・変更されたモジュール/機能、ユーザーに見える変更、開発環境の変更(依存関係・ビルドコマンド)。ドキュメント更新の判断材料になる粒度で。${release ? `対象リリース: ${release}` : ''}`,
+  `${ADVISOR_BAN}\n${CWD}git diff ${base}... と git status / git diff(未コミット分)を確認し、今回の変更内容を要約してください: 追加・変更されたモジュール/機能、ユーザーに見える変更、開発環境の変更(依存関係・ビルドコマンド)。ドキュメント更新の判断材料になる粒度で。${release ? `対象リリース: ${release}` : ''}`,
   { label: '差分要約', phase: '差分把握', model: docSyncModel }
 )
 if (!diffSummary) {
@@ -96,7 +100,7 @@ if (!diffSummary) {
 phase('トリアージ')
 const triageModel = (config.models && config.models.bootstrap) || 'haiku'
 const triageResult = await agent(
-  `${CWD}以下の変更要約をもとに、次の同期対象ドキュメントそれぞれについて、この差分がその文書の記述対象と関係するかを判定してください。` +
+  `${ADVISOR_BAN}\n${CWD}以下の変更要約をもとに、次の同期対象ドキュメントそれぞれについて、この差分がその文書の記述対象と関係するかを判定してください。` +
     `判定に確信が持てない場合や境界的なケースは、必ず relevant: true にすること(見落としより過剰起動を優先する)。` +
     `judgements の path は下記の一覧の値をそのまま使うこと。\n\n## 変更要約\n${diffSummary}\n\n## 同期対象\n${targets
       .map(t => `- ${t.path}: ${t.instruction}`)
@@ -156,7 +160,7 @@ const updates = await parallel(
   targetsToRun.map(
     t => () =>
       agent(
-        `${CWD}以下の変更要約をもとにドキュメントを同期してください。${untouchableNote}\n\n## 同期指示\n${t.instruction}\n\n## 変更要約\n${diffSummary}`,
+        `${ADVISOR_BAN}\n${CWD}以下の変更要約をもとにドキュメントを同期してください。${untouchableNote}\n\n## 同期指示\n${t.instruction}\n\n## 変更要約\n${diffSummary}`,
         { label: `${t.path}更新`, phase: '同期', model: docSyncModel }
       ).then(r => ({ path: t.path, result: r }))
   )
