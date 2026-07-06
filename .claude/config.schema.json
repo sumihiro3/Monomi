@@ -1,0 +1,334 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "workflow.config.json",
+  "description": "リリースワークフローエンジン(.claude/workflows/*.js)が読み込むプロジェクト固有設定のスキーマ。エンジン本体はプロジェクト中立とし、固有値(検査コマンド・レビュープロンプト・文書パス等)はすべてこの config に置く。信頼境界: checks[].cmd は任意シェルコマンドとして実行され、reviewDimensions[].prompt・syncDocs.targets[].instruction はエージェントへの指示として無検証で展開される。このファイルは .claude/workflows/*.js 本体と同じ信頼レベル(リポジトリにコミットされ、通常の PR レビューでのみ変更される)を前提とする。外部入力や未レビューの変更を書き込んではならない",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "configVersion",
+    "language",
+    "baseBranch",
+    "requirementsPath",
+    "conventionsDoc",
+    "checks",
+    "reviewDimensions",
+    "diffPathScope",
+    "syncDocs",
+    "knownIssues",
+    "models",
+    "complexityRubricExamples",
+    "automation",
+    "templateVersion",
+    "installedAt"
+  ],
+  "definitions": {
+    "model": {
+      "type": "string",
+      "description": "モデル指定。ティア名(haiku/sonnet/opus)または完全モデル ID(例: claude-opus-4-6)の両対応。バージョン固定したい場合は完全 ID を使う",
+      "pattern": "^(haiku|sonnet|opus|claude-[a-z0-9][a-z0-9.-]*)$"
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"]
+    },
+    "relativePath": {
+      "type": "string",
+      "description": "リポジトリルート起点の相対パス(絶対パス禁止)",
+      "minLength": 1,
+      "pattern": "^[^/]"
+    },
+    "categoryPrefix": {
+      "type": "string",
+      "description": "known-issues の起票 ID カテゴリ接頭辞(例: B, P, A, S, L, N)",
+      "pattern": "^[A-Z]$"
+    }
+  },
+  "properties": {
+    "configVersion": {
+      "const": 1,
+      "description": "config 形式の版数。エンジン要求版と一致しない場合、エンジンは起動を拒否する"
+    },
+    "language": {
+      "type": "string",
+      "enum": ["ja", "en"],
+      "description": "プロンプト言語。現状はどのエンジンも参照せず、全プロンプトは日本語ハードコードのまま。en は将来の英語化実装のための予約値であり、設定しても挙動は変わらない"
+    },
+    "baseBranch": {
+      "type": "string",
+      "minLength": 1,
+      "description": "差分比較・PR 先の基底ブランチ。エンジンはこのブランチへ直接 push しない"
+    },
+    "requirementsPath": {
+      "type": "string",
+      "pattern": "\\{release\\}",
+      "description": "要件ファイルのパステンプレート。{release} プレースホルダ必須"
+    },
+    "conventionsDoc": {
+      "$ref": "#/definitions/relativePath",
+      "description": "実装・レビューが参照する規約ドキュメント"
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "description": "release-check が並列実行する検査コマンド群",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "cmd", "cwd"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "description": "検査の識別子(known-issues 起票時は check:<key> として categoryMap を引く)"
+          },
+          "cmd": { "type": "string", "minLength": 1 },
+          "cwd": {
+            "type": "string",
+            "minLength": 1,
+            "description": "コマンドの実行ディレクトリ(リポジトリルート相対。ルートなら \".\")"
+          }
+        }
+      }
+    },
+    "reviewDimensions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "review-changes の並列レビュー次元。prompt には差分特定の前置きをエンジンが付与するため、観点の指示のみ書く",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "prompt"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]*$",
+            "description": "次元の識別子(known-issues 起票時に categoryMap を引くキー)"
+          },
+          "prompt": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "diffPathScope": {
+      "type": ["string", "array", "null"],
+      "description": "レビュー・同期対象の差分をパスで絞り込む(モノレポ用)。null なら全体。現状はどのエンジンも参照しておらず、値を設定しても絞り込みは効かない。モノレポ対応の実装(Phase 4 スコープ)までの予約値",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "syncDocs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targets", "frozen", "excluded"],
+      "properties": {
+        "targets": {
+          "type": "array",
+          "minItems": 1,
+          "description": "実装差分を同期するドキュメントと、その同期方針の指示",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "instruction"],
+            "properties": {
+              "path": { "$ref": "#/definitions/relativePath" },
+              "instruction": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "frozen": {
+          "type": "array",
+          "description": "凍結済み文書(同期対象外であることを明示するリスト)",
+          "items": { "$ref": "#/definitions/relativePath" }
+        },
+        "excluded": {
+          "type": "array",
+          "description": "意図的に同期しない文書",
+          "items": { "$ref": "#/definitions/relativePath" }
+        }
+      }
+    },
+    "knownIssues": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "categoryMap", "defaultCategory"],
+      "properties": {
+        "path": { "$ref": "#/definitions/relativePath" },
+        "categoryMap": {
+          "type": "object",
+          "description": "所見種別(レビュー次元 key または check:<検査 key>)→起票 ID カテゴリ接頭辞。マップ外は defaultCategory を使う",
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)?$"
+          },
+          "additionalProperties": { "$ref": "#/definitions/categoryPrefix" }
+        },
+        "defaultCategory": { "$ref": "#/definitions/categoryPrefix" }
+      }
+    },
+    "models": {
+      "type": "object",
+      "description": "工程ロール別のモデル割当。追加ロールも model 形式なら許容する",
+      "required": [
+        "review",
+        "verify",
+        "explore",
+        "design",
+        "implementLow",
+        "implementMid",
+        "implementHigh",
+        "check",
+        "fix",
+        "docSync",
+        "bootstrap"
+      ],
+      "properties": {
+        "review": {
+          "$ref": "#/definitions/model",
+          "description": "差分レビュー(次元レビューエージェント)"
+        },
+        "verify": {
+          "$ref": "#/definitions/model",
+          "description": "所見の敵対的検証"
+        },
+        "explore": {
+          "$ref": "#/definitions/model",
+          "description": "既存コードの調査"
+        },
+        "design": {
+          "$ref": "#/definitions/model",
+          "description": "実装計画の設計"
+        },
+        "implementLow": {
+          "$ref": "#/definitions/model",
+          "description": "実装(複雑度スコア低: 機械的な変更)"
+        },
+        "implementMid": {
+          "$ref": "#/definitions/model",
+          "description": "実装(複雑度スコア中: 典型的な実装)"
+        },
+        "implementHigh": {
+          "$ref": "#/definitions/model",
+          "description": "実装(複雑度スコア高: 新規設計判断を伴う)"
+        },
+        "check": {
+          "$ref": "#/definitions/model",
+          "description": "検査コマンドの実行と結果報告"
+        },
+        "fix": {
+          "$ref": "#/definitions/model",
+          "description": "検査・レビュー失敗の修正(run-release の修正ループ)"
+        },
+        "docSync": {
+          "$ref": "#/definitions/model",
+          "description": "ドキュメント同期"
+        },
+        "bootstrap": {
+          "$ref": "#/definitions/model",
+          "description": "config 読込等の軽量ブートストラップ。構造上、config 自体を読む前にこの値は参照できないため、各エンジンのブートストラップ処理は 'haiku' を直接指定する(鶏と卵)。この値を変更しても効果はない"
+        }
+      },
+      "additionalProperties": { "$ref": "#/definitions/model" }
+    },
+    "complexityRubricExamples": {
+      "type": "object",
+      "description": "実装作業項目の複雑度採点(1-10)を較正するプロジェクト固有の具体例。汎用ルーブリック本文はエンジン側が持つ",
+      "additionalProperties": false,
+      "required": ["low", "mid", "high"],
+      "properties": {
+        "low": {
+          "type": "string",
+          "minLength": 1,
+          "description": "複雑度 1-3 の具体例(機械的な置換・定数値の変更・定型パターンのそのままの適用)"
+        },
+        "mid": {
+          "type": "string",
+          "minLength": 1,
+          "description": "複雑度 4-7 の具体例(既存パターンの組み合わせ・中程度の分岐)"
+        },
+        "high": {
+          "type": "string",
+          "minLength": 1,
+          "description": "複雑度 8-10 の具体例(新規のアーキテクチャ判断・複雑な状態管理・新規ロジック)"
+        }
+      }
+    },
+    "automation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pipeline",
+        "autoApprove",
+        "maxFixIterationsCheck",
+        "maxFixIterationsReview",
+        "maxGate1RerunsPerReviewFix",
+        "maxTotalCheckRuns",
+        "maxAgentInvocations",
+        "severityGate"
+      ],
+      "properties": {
+        "pipeline": {
+          "type": "string",
+          "enum": ["auto", "ask"],
+          "description": "要件確定後の run-release 自動起動。auto=確認なしで起動 / ask=起動確認を挟む"
+        },
+        "autoApprove": {
+          "type": "boolean",
+          "description": "true なら run-release 内で論理単位コミットまで自動実行(ユーザーによるコミット一括承認とみなす)"
+        },
+        "maxFixIterationsCheck": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Gate 1(検査ループ)の修正試行上限"
+        },
+        "maxFixIterationsReview": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Gate 2(レビューループ)の修正試行上限"
+        },
+        "maxGate1RerunsPerReviewFix": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "レビュー修正 1 回あたりの Gate 1 再実行の別枠上限"
+        },
+        "maxTotalCheckRuns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "release-check の全工程通算実行回数の上限"
+        },
+        "maxAgentInvocations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "全工程通算のエージェント起動数上限(超過は収束不能と同じ停止経路)"
+        },
+        "severityGate": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["block", "fixOnce", "backlogOnly"],
+          "description": "confirmed 所見の severity 別の扱い。block=修正ループでブロック / fixOnce=修正 1 回試行後に起票 / backlogOnly=起票のみ",
+          "properties": {
+            "block": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/definitions/severity" }
+            },
+            "fixOnce": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/definitions/severity" }
+            },
+            "backlogOnly": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "$ref": "#/definitions/severity" }
+            }
+          }
+        }
+      }
+    },
+    "templateVersion": {
+      "type": ["string", "null"],
+      "description": "導入元テンプレートリポジトリの版。テンプレート未経由(開発元リポジトリ等)は null"
+    },
+    "installedAt": {
+      "type": ["string", "null"],
+      "description": "テンプレート導入日(YYYY-MM-DD)。テンプレート未経由は null"
+    }
+  }
+}

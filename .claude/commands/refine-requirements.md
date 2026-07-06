@@ -1,36 +1,62 @@
 ---
-description: リリース要件の壁打ち。対話で要件を固め、docs/releases/release-N/requirements.md に確定要件を書き出す
+description: リリース要件の壁打ち。対話で要件を固め、config の requirementsPath が指す requirements.md に確定要件を書き出し、automation.pipeline に従って run-release を起動する
 ---
 
 # /refine-requirements — 要件壁打ちフェーズ
 
-リリース(release-N)単位で要件をユーザーと壁打ちし、確定要件を `docs/releases/release-N/requirements.md` に書き出す。
-`implement-feature` ワークフローはこのファイルを入力として受け取るため、**実装可能な粒度まで具体化してから確定**させること。
+リリース(release-N)単位で要件をユーザーと壁打ちし、確定要件を `.claude/workflow.config.json` の `requirementsPath`(`{release}` をリリース識別子で置換したパス)に書き出す。
+後続の `run-release` / `implement-feature` ワークフローはこのファイルを入力として受け取るため、**実装可能な粒度まで具体化してから確定**させること。
 
 引数: `$ARGUMENTS`(対象リリース番号や要件の種。例: `release-1 ログイン機能`。省略時はユーザーに確認)
 
 ## 進め方
 
-1. **現状把握**: プロジェクトの README / 要件書 (あれば) と、対象リリースの既存ドラフト (あれば `docs/releases/release-N/requirements.md`) を読む。関連する実装の現状は `docs/ARCHITECTURE.md`(必要に応じて `docs/design/class-diagram.md`)から探索する
-2. **壁打ち(対話)**: AskUserQuestion を使い、以下を1テーマずつ詰める。一度に全部聞かない:
+1. **config の読込**: `.claude/workflow.config.json` を Read する。以降のパス・ブランチ・自動化設定はすべてこの config から取る(`requirementsPath`・`baseBranch`・`conventionsDoc`・`knownIssues.path`・`automation.pipeline`)。ファイルが無い・読めない場合は「`.claude/workflow.config.json` がありません。作成してから再実行してください」と明示して中断する(書き出し先やベースブランチを推測で補完しない)
+2. **現状把握**: プロジェクトの README / 要件書(あれば)と、対象リリースの既存ドラフト(あれば `requirementsPath` の該当パス)を読む。関連する実装の現状は `conventionsDoc` から探索する。あわせて `knownIssues.path` のバックログを確認し、今回のリリースで対応する既存課題があればその ID を控える
+3. **壁打ち(対話)**: AskUserQuestion を使い、以下を1テーマずつ詰める。一度に全部聞かない:
    - 解決したい課題と成功基準(誰が・何に困っていて・どうなれば成功か)
-   - スコープ(今回やること / 明示的にやらないこと)
+   - スコープ(今回やること / 明示的にやらないこと)。割れた論点と最終決定はスコープ確定表の材料として論点・決定のペアで記録する
    - 優先度(必須 / 推奨 / 将来)
-   - 受け入れ基準(検証可能な形で)
+   - 受け入れ基準(検証可能な形で。各 AC が自動検証可能か手動検証必須かも判定する。記法は後述)
    - 非機能要件(性能・セキュリティ・互換性)で関係するもの
-3. **調査(必要時)**: 技術的な実現性・代替案の比較が必要なら、サブエージェント(Explore / general-purpose)や WebSearch で調査してから提案する。推測で断定しない
-4. **リリースブランチの作成**: リリース識別子(`release-N-slug`)が確定した時点で、`main` を最新化してから同名のブランチを作成しチェックアウトする(`git checkout main && git pull && git checkout -b release-N-slug`)。以降のステップ(実装・レビュー・doc同期・コミット)はこのブランチ上で行う。既に対象ブランチで作業を再開している場合は作成をスキップする
-5. **確定要件の書き出し**: `docs/releases/release-N-slug/requirements.md` に以下の構成で書く:
-   - ヘッダー(リリース番号・ステータス: 確定・作成日)
-   - 背景と目的
-   - 機能要件(FR-XX 形式、優先度と受け入れ基準つき)
-   - 非機能要件(該当するもののみ)
-   - スコープ外(やらないと決めたこと)
-   - 未解決事項(実装中に判断が必要な点)
-6. **次のステップの提示**: `implement-feature` ワークフローへの引き継ぎ方法(`Workflow({name: "implement-feature", args: {release: "release-N"}})`)を案内して終了する
+4. **調査(必要時)**: 技術的な実現性・代替案の比較が必要なら、サブエージェント(Explore / general-purpose)や WebSearch で調査してから提案する。推測で断定しない
+5. **リリースブランチの作成**: リリース識別子(`release-N-slug`)が確定した時点で、`baseBranch` を最新化してから同名のブランチを作成しチェックアウトする(`git checkout <baseBranch> && git pull && git checkout -b release-N-slug`)。以降のステップ(実装・レビュー・doc同期・コミット)はこのブランチ上で行う。既に対象ブランチで作業を再開している場合は作成をスキップする
+6. **確定要件の書き出し**: `requirementsPath` の該当パスに、後述の「requirements.md の構成(実運用フォーマット)」に従って書く
+7. **確定要件のコミット**: 書き出した requirements.md を単独の docs コミットにする(例: `docs: release-N-slug の確定要件を追加`)。run-release の Gate 0 は作業ツリーがクリーンであることを要求するため、未コミットのまま次のステップへ進まない
+8. **run-release の起動**: `config.automation.pipeline` の値で分岐する:
+   - `"auto"`: **起動確認を挟まず**、そのまま次を起動する:
+     ```
+     Workflow({scriptPath: ".claude/workflows/run-release.js", args: {release: "release-N-slug", config: <手順1で読み込んだ config>}})
+     ```
+   - `"ask"`: AskUserQuestion で起動可否を確認し、承認された場合のみ上記を起動する。見送られた場合は、上記の起動スニペットと従来の個別実行(`implement-feature` 以降の各工程)を案内して終了する
+   - 起動は常に **scriptPath 指定**とする(新規ワークフローが同一セッションで name 解決されない既知の罠の構造的回避)
+
+## requirements.md の構成(実運用フォーマット)
+
+以下の順で書く。FR/AC の番号・場所 bullet・検証区分の記法は run-release(品質ゲート・AC 充足検証・PR 分岐)が機械的に参照するため、形式を崩さないこと。
+
+1. **ヘッダー**: リリース識別子 / `ステータス: 確定`(run-release の Gate 0 preflight がこの文字列の有無を検査する) / 作成日 / 対応する設計・参照資料
+2. **背景と目的**
+3. **スコープの確定(壁打ちでの決定事項)**: `| 論点 | 決定 |` の2列表。壁打ちで割れた論点と最終決定を記録する(決定事項が無い小規模リリースでは省略可)
+4. **機能要件**: FR ごとに次の形式で書く:
+   - 見出し: `### FR-XX: <タイトル>(優先度: 必須|推奨|将来)`(XX は 01 からの連番ゼロ埋め)
+   - 先頭の bullet に場所: `- 場所: <対象ファイルの相対パス>`(新規ファイルは `(新規)` を付記。複数ファイル可)
+   - 受け入れ基準: `- AC-N: <検証可能な内容>` を連番で列挙する
+   - `knownIssues.path` の既存バックログ項目に対応する FR は、本文に対象 ID を明記する(起票済み課題との対応関係を追跡可能にする)
+5. **非機能要件**(該当するもののみ)
+6. **スコープ外**(やらないと決めたこと)
+7. **未解決事項**(実装中に判断が必要な点)
+8. **次のステップ**: run-release の起動スニペット(手順8と同じ scriptPath 形式)を記載する
+
+### AC の検証区分の記法(自動検証可能 / 手動検証必須)
+
+- すべての AC は既定で**自動検証可能**(テスト・lint・build・grep 等の機械検証、またはエージェントによるコード実査で充足を判定できる)として書く。この場合の付記は不要
+- 機械検証できない AC(実機での目視確認・無人完走の受け入れ試験・外部サービスへの通知到達確認など)は、AC 本文に **`(手動検証必須)`** と付記する。例: `- AC-5: 受け入れ試験(手動検証必須) — 小規模実タスク 1 件で無人完走すること`
+- この区分は run-release の PR 作成分岐の入力になる: 手動検証必須 AC が未実施のまま残る場合、run-release は draft PR に降格し未実施項目を PR 本文に明記する
 
 ## 注意
 
 - 既存ドラフトがある場合は、ドラフトを尊重しつつ曖昧な点・矛盾・不足を指摘して詰める
 - ユーザーの回答と相反する技術的事実があれば、根拠つきで率直に指摘する
 - 要件が大きすぎる場合はリリース分割(release-N → release-N+1)を提案する
+- requirements.md のパス・ベースブランチ・参照文書名をこのコマンド本文にハードコードしない(config との二重管理を避け、常に config を正とする)

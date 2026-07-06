@@ -16,6 +16,8 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 | 6   | 論理単位コミット                 | `/logical-commits`                                                                             |
 | 7   | ブランチ push・PR 作成           | `git push -u origin release-N` ＋ `gh pr create`                                               |
 
+release-12 以降は、ステップ 2〜7 を統括ワークフロー `run-release` で無人連鎖実行できる（後述の「run-release による全自動パイプライン」）。各ワークフローを単体で起動する従来の手順も引き続き有効で、その場合は各エンジンが `.claude/workflow.config.json` を自動で読み込んで従来同等に動作する。
+
 ### 1. 要件壁打ち＋リリースブランチ作成 — `/refine-requirements`
 
 - コマンド: `.claude/commands/refine-requirements.md`
@@ -70,6 +72,52 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 - `git push -u origin release-N` でリリースブランチをリモートへ push し、`gh pr create` で `main` 向けの PR を作成する。
 - **`main` への直接 push はしない**（実害: release-7 で直接 push を試みたところ、自動モードのガードレールに「デフォルトブランチへの直接 push」としてブロックされた）。ただし、release-11 以降は、バージョン bump スクリプト（`pnpm version:*`）実行のみ主例外であり、実行後は `git push` で `main` へ直接 push する。PR のマージはユーザーが GitHub 上で行う、またはユーザーが明示的に指示した場合のみ `gh pr merge` する。
 - マージ後、ローカルの `main` を最新化し、不要になったリリースブランチを削除する（`git branch -d release-N`）。
+
+## run-release による全自動パイプライン（release-12 以降）
+
+release-12 で、7 ステップのうちステップ 2〜7（実装→レビュー→doc 同期→検査→コミット→PR 作成）を無人で連鎖実行する統括ワークフロー `run-release`（`.claude/workflows/run-release.js`）が追加された。エンジン（`.claude/workflows/*.js`・`.claude/commands/*.md`）はプロジェクト中立で、Monomi 固有の値（pnpm 検査コマンド・同期対象文書・レビューモデル `claude-opus-4-6`・自動化上限値など）はすべて `.claude/workflow.config.json` に集約されている。
+
+### 起動方法
+
+- コマンド: `/run-release`（`.claude/commands/run-release.md`）。`.claude/workflow.config.json` を読み、スキーマ検証のうえ `args.config` として渡し、scriptPath 指定で `run-release.js` を起動する。config が存在しない場合は起動しない。
+- 自動起動: `config.automation.pipeline` が `"auto"` の場合、`/refine-requirements` での要件確定・リリースブランチ作成後に**確認なしで** run-release が起動する（`"ask"` のときのみ起動確認を挟む）。Monomi の既定値は `"auto"`。
+
+### 品質ゲート
+
+パイプラインは 4 つのゲートで品質を担保する。上限値はすべて `config.automation` のキー。
+
+| ゲート                   | 位置                   | 内容                                                                                                                                                                                                                                                                                                                      |
+| ------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gate 0（preflight）      | 起動直後               | ①作業ツリーがクリーン（autoApprove でも例外なし） ②現在ブランチが対象リリース名と一致し、かつ `baseBranch`（`main`）ではない ③requirements.md が存在し「ステータス: 確定」 ④config の `configVersion` がエンジン要求版と一致。いずれか違反で**何も変更せず**停止し通知する                                                |
+| Gate 0.5（実装照合）     | implement-feature 直後 | 実装エージェントが報告した変更ファイル一覧と `git diff --name-only` を機械照合する。捏造疑い（報告ファイルに実差分なし）・実装失敗の残存は 1 回リトライし、それでも残れば critical 相当として停止／draft PR 分岐へ                                                                                                        |
+| Gate 1（検査ループ）     | 実装後                 | release-check 失敗→fix エージェント（修正のみ、合否判定はしない）→テスト不変ガード（fix 差分でのテストの skip 化・期待値改変・削除を検査）→再検査を繰り返す。上限は `maxFixIterationsCheck`（5）・release-check 通算 `maxTotalCheckRuns`（10）。失敗内容（正規化済み failedItems）が 2 回連続一致したら収束不能と判定する |
+| Gate 2（レビューループ） | 検査通過後             | review-changes の confirmed 所見を `severityGate` で振り分ける。critical/high→修正→Gate 1 再実行（別枠上限 `maxGate1RerunsPerReviewFix`＝2）→差分再レビュー。medium→修正 1 回試行、残れば起票対象。low→起票のみ。ループ上限は `maxFixIterationsReview`（3）                                                               |
+
+- Gate 2 通過後は doc 同期（sync-docs）→最終 release-check を行う。最終検査の失敗は別枠 2 回の修正ループにかけ、収束しなければ起票のうえ draft PR へ降格する。
+- **ハードストップ**: 全工程通算のエージェント起動数が `maxAgentInvocations`（80）を超えたら、収束不能と同じ停止経路に入る（暴走防止）。
+
+### autoApprove の意味
+
+- `config.automation.autoApprove`（Monomi の既定は `true`。起動時 `args.autoApprove` で上書き可）が **true** の場合、run-release の起動そのものを**ユーザーによるコミット一括承認とみなし**、ワークフロー内エージェントが論理単位コミット→push→PR 作成まで実行する（`/logical-commits` の「自動 commit はしない」規約への明文化された例外）。
+- **false** の場合、**コミット直前で停止**し、コミット案・PR 案を戻り値で返してメインセッションの `/logical-commits`（対話承認）へ引き継ぐ。
+
+### 停止時の挙動と PR 作成の分岐
+
+| 状態                                     | 挙動                                                      |
+| ---------------------------------------- | --------------------------------------------------------- |
+| Gate 0 違反                              | 何も変更せず停止（コミット・修正を一切行わない）          |
+| critical 所見が残存（Gate 0.5 由来含む） | PR を作らず停止。ブランチ・作業状態は保全（reset しない） |
+| high 所見が残存                          | draft PR を作成し、未解決所見を本文に明記                 |
+| 手動検証必須 AC が残存                   | draft PR を作成し、未実施であることを明記                 |
+| それ以外                                 | 通常 PR                                                   |
+
+- 未対応所見・収束不能分は triage 工程で `record-known-issues`（`.claude/workflows/record-known-issues.js`）により `docs/known-issues.md` へ自動起票される（採番・カテゴリ接頭辞は `config.knownIssues` に従う）。
+- push は `git push -u origin <release>` のみで、**`baseBranch`（`main`）への push は run-release からは行わない**。後述のバージョン bump の `main` 直接 push 例外は手動運用であり、run-release の対象外。
+- 完了・停止（Gate 0 拒否・収束不能を含む）のいずれの終端でも、ワークフロー内から push 通知（bark）が送信される。
+
+### PR 本文
+
+PR 本文は自動生成され、FR/AC 充足状況（AC 充足検証 checker が実コード grep・検査出力で裏取りした結果に基づく。実装エージェントの自己申告は使わない）・最終検査結果・所見対応・起票 ID・更新文書一覧・消費サマリー（フェーズ別エージェント起動数）を含む。
 
 ## バージョン bump の実行（release-11 以降）
 
@@ -130,11 +178,12 @@ Monomi は release-workflow-template（`release-workflow-template.zip` 同梱の
 
 ## 関連ドキュメント
 
-| ドキュメント                    | 役割                                              |
-| ------------------------------- | ------------------------------------------------- |
-| `docs/ARCHITECTURE.md`          | 現行アーキテクチャの権威仕様                      |
-| `docs/REQUIREMENTS.md`          | 機能軸の現状要件サマリー                          |
-| `docs/design/class-diagram.md`  | クラス設計                                        |
-| `docs/known-issues.md`          | 既知の課題（レビュー由来のバックログ）            |
-| `docs/monomi-handoff.md`        | 凍結した設計経緯（命名決定・要求の背景など）      |
-| `release-workflow-template.zip` | ワークフローテンプレートの導入手順（同梱 README） |
+| ドキュメント                    | 役割                                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `.claude/workflow.config.json`  | ワークフローエンジンに渡すプロジェクト固有値（検査コマンド・同期対象・モデル・自動化上限）の一元管理 |
+| `docs/ARCHITECTURE.md`          | 現行アーキテクチャの権威仕様                                                                         |
+| `docs/REQUIREMENTS.md`          | 機能軸の現状要件サマリー                                                                             |
+| `docs/design/class-diagram.md`  | クラス設計                                                                                           |
+| `docs/known-issues.md`          | 既知の課題（レビュー由来のバックログ）                                                               |
+| `docs/monomi-handoff.md`        | 凍結した設計経緯（命名決定・要求の背景など）                                                         |
+| `release-workflow-template.zip` | ワークフローテンプレートの導入手順（同梱 README）                                                    |
