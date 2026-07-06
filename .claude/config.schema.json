@@ -110,7 +110,7 @@
     },
     "diffPathScope": {
       "type": ["string", "array", "null"],
-      "description": "レビュー・同期対象の差分をパスで絞り込む(モノレポ用)。null なら全体。現状はどのエンジンも参照しておらず、値を設定しても絞り込みは効かない。モノレポ対応の実装(Phase 4 スコープ)までの予約値",
+      "description": "レビュー(review-changes)の差分取得をパスで絞り込む(モノレポ用)。config=プロジェクト既定(恒常フィルタ)、args=呼び出し単位の上書き(args 優先)、両方 null なら全差分。sync-docs はこの値を参照しない(同期対象の絞り込みは関連性トリアージが担う)",
       "items": { "type": "string", "minLength": 1 }
     },
     "syncDocs": {
@@ -221,7 +221,7 @@
         },
         "bootstrap": {
           "$ref": "#/definitions/model",
-          "description": "config 読込等の軽量ブートストラップ。構造上、config 自体を読む前にこの値は参照できないため、各エンジンのブートストラップ処理は 'haiku' を直接指定する(鶏と卵)。この値を変更しても効果はない"
+          "description": "軽量工程用モデル。config 読込フォールバック自体は構造上この値を参照できず 'haiku' 固定(鶏と卵)だが、config 読込後の軽量工程(sync-docs の関連性トリアージ等)ではこの値を参照する"
         }
       },
       "additionalProperties": { "$ref": "#/definitions/model" }
