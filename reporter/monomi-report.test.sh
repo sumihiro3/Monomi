@@ -154,6 +154,30 @@ hook_json() {
     "$1" "$2" "$3"
 }
 
+# tool_input 付き PreToolUse フック JSON（$4 は tool_input の生 JSON フラグメント。
+# 値中にクォートを含めないシンプルなケース向け。複雑な値は tool_hook_json_node を使う）。
+tool_hook_json() {
+  # $1=session_id $2=cwd $3=tool_name $4=tool_input_json
+  printf '{"session_id":"%s","hook_event_name":"PreToolUse","cwd":"%s","tool_name":"%s","tool_input":%s}' \
+    "$1" "$2" "$3" "$4"
+}
+
+# tool_input 付き PreToolUse フック JSON を node の JSON.stringify で安全に組み立てる
+# （script フィールドのようにクォート・改行を含む値向け）。
+#   $1=session_id $2=cwd $3=tool_name $4=tool_input_key $5=tool_input_value
+tool_hook_json_node() {
+  node -e '
+    const [sessionId, cwd, toolName, key, value] = process.argv.slice(1);
+    process.stdout.write(JSON.stringify({
+      session_id: sessionId,
+      hook_event_name: "PreToolUse",
+      cwd,
+      tool_name: toolName,
+      tool_input: { [key]: value },
+    }));
+  ' "$1" "$2" "$3" "$4" "$5"
+}
+
 # =========================================================================
 # Test 1 (AC-1): 実 hub 起動下で Notification → events に 1 行
 # =========================================================================
@@ -1244,6 +1268,285 @@ test_home_dir_permission_enforced() {
   assert_eq "$name (pre-existing wide-permission \$home repaired to 0700)" '0700' "$(dir_mode "$home_existing")"
 }
 
+# =========================================================================
+# Test 18 (release-16 FR-01 AC-1〜AC-3): Workflow ツールの tool_summary 抽出
+# =========================================================================
+test_tool_summary_workflow() {
+  local name='FR-01: Workflow tool_summary extraction'
+  local home="$WORK/t18-home"
+  local repo="$WORK/t18-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t18-cap.log"
+  local capport="$WORK/t18-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  # AC-1: tool_input.name があれば name を優先する（scriptPath 併存時も name 優先）。
+  : >"$caplog"
+  tool_hook_json 'wf-name' "$repo" 'Workflow' \
+    '{"name":"run-release","scriptPath":".claude/workflows/run-release.js"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-1 name priority)" 'run-release' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-1 name priority)" 'no request captured'
+  fi
+
+  # AC-2: name が無く scriptPath のみ → basename（ディレクトリ・.js 拡張子を除去）。
+  : >"$caplog"
+  tool_hook_json 'wf-scriptpath' "$repo" 'Workflow' \
+    '{"scriptPath":".claude/workflows/run-release.js"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-2 scriptPath basename)" 'run-release' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-2 scriptPath basename)" 'no request captured'
+  fi
+
+  # AC-3: name/scriptPath 無し、インライン script のみ → script 内 meta.name を抽出。
+  : >"$caplog"
+  tool_hook_json_node 'wf-script' "$repo" 'Workflow' 'script' \
+    $'export const meta = {\n  name: \'inline-flow\',\n  description: \'x\',\n};\n' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-3 inline script meta.name)" 'inline-flow' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-3 inline script meta.name)" 'no request captured'
+  fi
+
+  # AC-3: meta.name も抽出できないインライン script → 固定文言 "workflow" にフォールバック。
+  : >"$caplog"
+  tool_hook_json_node 'wf-script-noname' "$repo" 'Workflow' 'script' \
+    $'export const meta = {\n  description: \'x\',\n};\n' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-3 fallback literal 'workflow')" 'workflow' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-3 fallback literal 'workflow')" 'no request captured'
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 19 (release-16 FR-01 AC-4〜AC-5): Task(Agent)/Skill ツールの tool_summary 抽出
+# =========================================================================
+test_tool_summary_task_and_skill() {
+  local name='FR-01: Task/Agent/Skill tool_summary extraction'
+  local home="$WORK/t19-home"
+  local repo="$WORK/t19-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t19-cap.log"
+  local capport="$WORK/t19-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  # AC-4: Task, subagent_type + description の両方 → "<subagent_type>: <description>"。
+  : >"$caplog"
+  tool_hook_json 'task-both' "$repo" 'Task' \
+    '{"subagent_type":"general-purpose","description":"investigate bug"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-4 both fields)" 'general-purpose: investigate bug' \
+      "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-4 both fields)" 'no request captured'
+  fi
+
+  # AC-4: subagent_type のみ → subagent_type のみ。
+  : >"$caplog"
+  tool_hook_json 'task-subagent-only' "$repo" 'Task' \
+    '{"subagent_type":"general-purpose"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-4 subagent_type only)" 'general-purpose' \
+      "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-4 subagent_type only)" 'no request captured'
+  fi
+
+  # AC-4: tool_name=Agent 表記でも同様に扱う。description のみ → description のみ。
+  : >"$caplog"
+  tool_hook_json 'agent-desc-only' "$repo" 'Agent' \
+    '{"description":"investigate bug"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-4 Agent alias, description only)" 'investigate bug' \
+      "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-4 Agent alias, description only)" 'no request captured'
+  fi
+
+  # AC-5: Skill → tool_input.skill がそのまま入る。
+  : >"$caplog"
+  tool_hook_json 'skill-1' "$repo" 'Skill' '{"skill":"code-review"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (AC-5 skill)" 'code-review' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (AC-5 skill)" 'no request captured'
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 20 (release-16 FR-01 AC-6): 対象外ツールの抽出結果が従来どおり（回帰なし）
+# =========================================================================
+test_tool_summary_other_tools_regression() {
+  local name='FR-01 AC-6: non-target tool_summary extraction unchanged'
+  local home="$WORK/t20-home"
+  local repo="$WORK/t20-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t20-cap.log"
+  local capport="$WORK/t20-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  # Bash: command が入る。
+  : >"$caplog"
+  tool_hook_json 'bash-1' "$repo" 'Bash' '{"command":"ls -la"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (Bash command)" 'ls -la' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (Bash command)" 'no request captured'
+  fi
+
+  # Read: command が無ければ file_path が入る。
+  : >"$caplog"
+  tool_hook_json 'read-1' "$repo" 'Read' '{"file_path":"/tmp/x.txt"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (Read file_path)" '/tmp/x.txt' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (Read file_path)" 'no request captured'
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 21 (release-16 FR-01 AC-7): jq 無しフォールバックでも Workflow/Task/Skill の
+# 基本抽出が動作する（インライン script の meta.name 抽出は対象外）。
+# =========================================================================
+test_tool_summary_nojq_fallback() {
+  local name='FR-01 AC-7: no-jq fallback extraction'
+  local home="$WORK/t21-home"
+  local repo="$WORK/t21-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t21-cap.log"
+  local capport="$WORK/t21-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  # AC-1 相当: Workflow + name（jq 無し）。
+  : >"$caplog"
+  tool_hook_json 'nojq-wf-name' "$repo" 'Workflow' \
+    '{"name":"run-release","scriptPath":".claude/workflows/run-release.js"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" MONOMI_DISABLE_JQ=1 \
+      "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (Workflow name)" 'run-release' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (Workflow name)" 'no request captured'
+  fi
+
+  # AC-2 相当: Workflow + scriptPath のみ（jq 無し）。
+  : >"$caplog"
+  tool_hook_json 'nojq-wf-scriptpath' "$repo" 'Workflow' \
+    '{"scriptPath":".claude/workflows/run-release.js"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" MONOMI_DISABLE_JQ=1 \
+      "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (Workflow scriptPath basename)" 'run-release' \
+      "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (Workflow scriptPath basename)" 'no request captured'
+  fi
+
+  # AC-5 相当: Skill（jq 無し）。
+  : >"$caplog"
+  tool_hook_json 'nojq-skill' "$repo" 'Skill' '{"skill":"code-review"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" MONOMI_DISABLE_JQ=1 \
+      "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (Skill)" 'code-review' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (Skill)" 'no request captured'
+  fi
+
+  # Task の subagent_type（jq 無し。要件が明示する対象）。
+  : >"$caplog"
+  tool_hook_json 'nojq-task' "$repo" 'Task' \
+    '{"subagent_type":"general-purpose","description":"investigate bug"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" MONOMI_DISABLE_JQ=1 \
+      "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (Task subagent_type)" 'general-purpose: investigate bug' \
+      "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (Task subagent_type)" 'no request captured'
+  fi
+
+  # 回帰確認: 対象外ツール（Bash）も jq 無しで従来どおり動作する。
+  : >"$caplog"
+  tool_hook_json 'nojq-bash' "$repo" 'Bash' '{"command":"ls -la"}' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" MONOMI_DISABLE_JQ=1 \
+      "$SCRIPT" >/dev/null 2>&1
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (Bash command regression)" 'ls -la' "$(jq -r '.tool_summary' "$caplog" | head -n 1)"
+  else
+    fail "$name (Bash command regression)" 'no request captured'
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
 # --- 実行 ----------------------------------------------------------------
 ensure_build
 test_real_hub_records_event
@@ -1264,6 +1567,10 @@ test_session_end_dead_hub_saves_outbox
 test_session_end_4xx_quarantined
 test_session_end_fast_timeout
 test_home_dir_permission_enforced
+test_tool_summary_workflow
+test_tool_summary_task_and_skill
+test_tool_summary_other_tools_regression
+test_tool_summary_nojq_fallback
 
 echo '----------------------------------------'
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"

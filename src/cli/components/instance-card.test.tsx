@@ -14,6 +14,7 @@ function makeRow(over: {
   branch?: string | null
   display?: string
   elapsedSeconds?: number
+  runningWork?: InstanceStatusRow['running_work']
 }): InstanceStatusRow {
   const display = over.display ?? 'approval_wait'
   return {
@@ -31,6 +32,7 @@ function makeRow(over: {
     },
     pr: { state: 'none' },
     session: { id: 'sess-1', last_heartbeat_at: null },
+    running_work: over.runningWork === undefined ? null : over.runningWork,
   }
 }
 
@@ -110,5 +112,70 @@ describe('InstanceCard（FR-01）', () => {
     expect(frame).not.toContain('PWNED')
     expect(frame).toContain('Mac mini')
     expect(frame).toContain('feature/x')
+  })
+})
+
+describe('InstanceCard — running_work（release-16-running-work-display FR-03 AC-1/2/4/5）', () => {
+  it('AC-1: running_work があるとき "▶ <name>" 行を描画する', () => {
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({ runningWork: { kind: 'workflow', name: 'run-release' } })}
+        selected={false}
+        width={36}
+      />
+    )
+    expect(lastFrame() ?? '').toContain('▶ run-release')
+  })
+
+  it('AC-2: running_work が null のとき "-" を描画し、行数（カード高さ）は running_work あり/なしで変わらない', () => {
+    const withWork = render(
+      <InstanceCard
+        row={makeRow({ runningWork: { kind: 'skill', name: 'code-review' } })}
+        selected={false}
+        width={36}
+      />
+    ).lastFrame()
+    const withoutWork = render(
+      <InstanceCard row={makeRow({ runningWork: null })} selected={false} width={36} />
+    ).lastFrame()
+
+    expect(withoutWork ?? '').not.toContain('▶')
+    expect((withoutWork ?? '').split('\n')).toHaveLength((withWork ?? '').split('\n').length)
+  })
+
+  it('AC-4: running_work.name に含まれる ANSI エスケープ・制御文字を除染して描画する（CWE-150）', () => {
+    const ESC = String.fromCharCode(27)
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({
+          runningWork: { kind: 'agent', name: `explorer${ESC}]0;PWNED${String.fromCharCode(7)}` },
+        })}
+        selected={false}
+        width={40}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain('PWNED')
+    expect(frame).toContain('▶ explorer')
+  })
+
+  it('AC-5: カード幅に収まらない長い名前は切り詰められ、レイアウトが崩れない', () => {
+    const longName = `run-release-with-a-very-long-workflow-name-that-overflows-the-card-width-${'x'.repeat(60)}`
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({ runningWork: { kind: 'workflow', name: longName } })}
+        selected={false}
+        width={24}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    const lines = frame.split('\n')
+    expect(frame).not.toContain(longName)
+    // 罫線を含む全行が同じ表示幅（=カード width）に収まっている（崩れなし）。
+    for (const line of lines) {
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI SGR コードのみ除去して幅を測る
+      const visible = line.replace(/\u001b\[[0-9;]*m/g, '')
+      expect(visible.length).toBeLessThanOrEqual(24)
+    }
   })
 })

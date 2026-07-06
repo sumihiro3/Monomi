@@ -20,6 +20,7 @@ function row(instanceId: string, display: string, projectId = instanceId): Insta
     },
     pr: { state: 'none' },
     session: { id: `sess-${instanceId}`, last_heartbeat_at: null },
+    running_work: null,
   }
 }
 

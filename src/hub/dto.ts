@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { EVENT_TYPES } from '../domain/enums.js'
 import { type EpochMs, toEpochMs } from '../domain/time.js'
+import type { RunningWork } from '../status/running-work-resolver.js'
 
 /**
  * `POST /api/v1/events` の受信ペイロード（§8.1 リクエスト。§0.1/§0.5 反映）。
@@ -111,6 +112,7 @@ export interface InstanceStatusRow {
   status: StatusDto
   pr: PrDto
   session: SessionDto
+  running_work: RunningWork | null
 }
 
 /** 直近イベント 1 件（§10.4 Agent View Lv.1 の生ログ）。 */

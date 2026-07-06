@@ -25,6 +25,7 @@ function makeRow(): InstanceStatusRow {
     },
     pr: { state: 'none' },
     session: { id: 'sess-1', last_heartbeat_at: null },
+    running_work: null,
   }
 }
 
@@ -1326,6 +1327,104 @@ describe('DetailView — device.name の ANSI エスケープ除染（release-10
       // ESC 自体は Ink の正当な SGR カラーコードにも出現するため、注入した画面消去
       // シーケンスのみが除去されていることを確認する。
       expect(frame).not.toContain(`${ESC}[2J`)
+    })
+  })
+})
+
+describe('DetailView — 概要 BOX の running フィールド（release-16-running-work-display FR-03 AC-2/AC-3/AC-4）', () => {
+  /**
+   * running フィールドの行だけを取り出し、ANSI エスケープ（dimColor 等）と罫線（│）・
+   * paddingX の空白を取り除いた「ラベル+値」部分だけに整形する（他フィールドの "-"／
+   * 同名文字列と混同しないための専用抽出）。
+   */
+  function findRunningLine(frame: string): string {
+    const esc = String.fromCharCode(27)
+    const ansi = new RegExp(`${esc}\\[[0-9;?]*[a-zA-Z]`, 'g')
+    const line =
+      frame
+        .replace(ansi, '')
+        .split('\n')
+        .find((l) => l.includes('Running') || l.includes('実行中')) ?? ''
+    return line.replace(/^│\s*/, '').replace(/\s*│$/, '')
+  }
+
+  it.each<['workflow' | 'agent' | 'skill', string]>([
+    ['workflow', 'workflow'],
+    ['agent', 'agent'],
+    ['skill', 'skill'],
+  ])('AC-3: running_work.kind=%s → running フィールドに "<name> (%s)" 形式で表示される', async (kind, kindLabel) => {
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      running_work: { kind, name: 'run-release' },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      expect(findRunningLine(lastFrame() ?? '')).toBe(`Running     run-release (${kindLabel})`)
+    })
+  })
+
+  it('AC-2: running_work が null → running フィールドは "-" 表示になる（行数は変わらない）', async () => {
+    const row = makeRow() // makeRow() の running_work は null
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      // Overview BOX の他フィールドと同様に描画され、running だけ "-" になる。
+      expect(frame).toContain('ProjectLens')
+      expect(findRunningLine(frame)).toBe('Running     -')
+    })
+  })
+
+  it('AC-4: running_work.name に含まれる制御シーケンスを除染して描画する（CWE-150）', async () => {
+    const ESC = String.fromCharCode(27)
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      running_work: { kind: 'agent', name: `deploy${ESC}[2J` },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('deploy (agent)')
+      expect(frame).not.toContain(`${ESC}[2J`)
+    })
+  })
+
+  it('locale: ja では running ラベル・kind が日本語で描画される（release-9-i18n FR-02 と同じ i18n 経路）', async () => {
+    setActiveLocale('ja')
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      running_work: { kind: 'workflow', name: 'run-release' },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      expect(findRunningLine(lastFrame() ?? '')).toBe('実行中         run-release (ワークフロー)')
+    })
+  })
+
+  it('ポーリングで running_work が更新される（次ターンで null に戻る、AC-5 相当）', async () => {
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      running_work: { kind: 'workflow', name: 'run-release' },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row, 20)
+
+    await vi.waitFor(() => {
+      expect(findRunningLine(lastFrame() ?? '')).toBe('Running     run-release (workflow)')
+    })
+
+    // Stop 後は hub が running_work を null にする（FR-02 の関心事）。detail 側は
+    // ポーリング更新に追随して表示を "-" に戻すだけでよい（source = detail ?? row）。
+    fake.setResponder(() => makeDetail({ ...row, running_work: null }, []))
+    await vi.waitFor(() => {
+      expect(findRunningLine(lastFrame() ?? '')).toBe('Running     -')
     })
   })
 })

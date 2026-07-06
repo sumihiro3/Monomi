@@ -32,6 +32,7 @@ function makeRow(over: {
     },
     pr: { state: 'none' },
     session: { id: `sess-${over.id}`, last_heartbeat_at: null },
+    running_work: null,
   }
 }
 

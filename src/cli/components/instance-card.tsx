@@ -33,7 +33,14 @@ export interface InstanceCardProps {
  * （release-10-dashboard-polish FR-04 AC-3）。`device.name`・`branch` はレポーター元/ペアリング
  * 済み child が制御しうる自由記述で、hub 側の検証は型のみのため ANSI エスケープ・制御文字を
  * 含み得る。描画前に {@link ../sanitize-display-text.js} で除染する（release-10-dashboard-polish
- * レビュー修正: CWE-150、{@link ./detail-view.js} と同じ対策）。
+ * レビュー修正: CWE-150、{@link ./detail-view.js} と同じ対策）。末尾行には `running_work`
+ * （実行中の作業名。hub が `PreToolUse(Workflow/Task/Agent/Skill)` から導出、release-16-running-work-display
+ * FR-02）を `▶ <name>` 形式で描く。`null`（非稼働・区切りイベント後）のときは `branch` の
+ * `-` フォールバック（AC-2）と同じ流儀で行自体は維持し `-` を表示し、カード高さを安定させる
+ * （FR-03 AC-2）。`name` はレポーター元の自由記述（Workflow 名・`subagent_type`・skill 名）で
+ * ANSI エスケープ・制御文字を含み得るため、`device.name`・`branch` と同様に
+ * {@link ../sanitize-display-text.js} で除染してから描画する（FR-03 AC-4）。`wrap="truncate-end"`
+ * によりカード幅（`width` prop）に収まらない名前は切り詰め、レイアウトは崩れない（FR-03 AC-5）。
  *
  * @param props {@link InstanceCardProps}。
  * @returns 1 instance を表す カードの要素。
@@ -64,6 +71,9 @@ export function InstanceCard({ row, selected, width }: InstanceCardProps): React
           {'  '}
           {formatAge(row.status.elapsed_seconds)}
         </Text>
+      </Text>
+      <Text dimColor wrap="truncate-end">
+        {row.running_work ? `▶ ${sanitizeDisplayText(row.running_work.name)}` : '-'}
       </Text>
     </Box>
   )
