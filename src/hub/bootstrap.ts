@@ -1,15 +1,15 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import { parseDocument } from 'yaml'
-import { DeviceRepository } from '../db/repositories/device-repository.js'
-import { TokenRepository } from '../db/repositories/token-repository.js'
-import type { Database } from '../db/database.js'
 import { loadConfig } from '../config/config.js'
 import type { MonomiPaths } from '../config/paths.js'
-import { resolvePaths } from '../config/paths.js'
+import { ensureMonomiHome, resolvePaths } from '../config/paths.js'
+import type { Database } from '../db/database.js'
+import { DeviceRepository } from '../db/repositories/device-repository.js'
+import { TokenRepository } from '../db/repositories/token-repository.js'
 import { deriveDeviceId } from '../domain/device-id.js'
 import type { Device } from '../domain/entities.js'
-import { epochMsNow, type EpochMs } from '../domain/time.js'
+import { type EpochMs, epochMsNow } from '../domain/time.js'
 import { TokenService } from './token-service.js'
 
 /** {@link bootstrap} の任意依存（テスト時の決定性のために hostname / 時刻を注入できる）。 */
@@ -104,7 +104,7 @@ export function bootstrap(
   const hostname = options.hostname ?? os.hostname()
   const now = options.now ?? epochMsNow
 
-  fs.mkdirSync(paths.home, { recursive: true })
+  ensureMonomiHome(paths)
 
   const config = loadConfig(paths)
   const deviceRepo = new DeviceRepository(db)

@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
-import { writeChildPairingConfig } from '../config/config-writer.js'
 import { loadConfig } from '../config/config.js'
-import { resolvePaths, type MonomiPaths } from '../config/paths.js'
+import { writeChildPairingConfig } from '../config/config-writer.js'
+import { ensureMonomiHome, type MonomiPaths, resolvePaths } from '../config/paths.js'
 import { deriveDeviceId } from '../domain/device-id.js'
 import type { PairClaimResponse, PairStartResponse } from '../hub/dto.js'
 import { HubApiClient, PairRejectedError } from './hub-api-client.js'
@@ -229,7 +229,7 @@ export async function runChildPair(options: ChildPairOptions, deps: ChildPairDep
     )
   }
 
-  fs.mkdirSync(paths.home, { recursive: true })
+  ensureMonomiHome(paths)
   writeTokenFile(paths.tokenFile, claimed.token)
   writeChildPairingConfig(paths.configFile, {
     role: 'child',

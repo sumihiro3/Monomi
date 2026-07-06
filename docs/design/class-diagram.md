@@ -1,6 +1,6 @@
 # Monomi v1 — クラス図
 
-[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜11 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
+[`ARCHITECTURE.md`](../ARCHITECTURE.md)（現状スナップショット）に対応する実装クラス図。release-1〜13 の実装（`src/`）を反映した現況を、レイヤーごとに 4 枚のクラス図＋責任分解表へ分ける（命名・型はレイヤー間およびソースと一貫させる）。命名の変遷など凍結済みの設計経緯は `monomi-handoff.md` を参照。
 
 **方針**: 独自ロジックが複雑になる箇所（project_key 正規化・status 導出）は god class にせず、責務ごとに値オブジェクト／ドメインサービス／モジュール関数へ分解する。Hub API は Controller（薄い）→ UseCase/Service（業務ロジック）→ Repository（永続化）の 3 層に分離し、Controller に業務ロジックを書かない。CLI は表示・入力処理に専念し、状態導出ロジックを一切持たない。エンティティ・DTO・状態は TS の `interface`／判別ユニオンで表し、振る舞いは別のドメインサービス・モジュール関数に置く（データと振る舞いの分離）。
 
@@ -472,6 +472,7 @@ classDiagram
 - **Repository** は SQL とスキーマ制約（`ARCHITECTURE.md` §7.3 ＋ `tokens` テーブル）にのみ責任を持つ。イベントは `NewEvent`、PR は `NewPrStatus` を受けて採番済みエンティティを返す。ハートビートは専用ルートを持たず、`POST /api/v1/events`（ハートビート系イベント）として ingest 経路に集約する（旧図の `HeartbeatController` は存在しない）。
 - **TokenService / PairingService** を分離し、「token のハッシュ化（SHA-256）・検証・（device 単位の一括）revoke・有効 device 集合の列挙」と「6 桁コードの発行・TTL・失敗カウント・claim 時の device 競合判定」を別の責務として扱う。
 - **wire DTO**（`src/hub/dto.ts`）: `InstanceStatusRow`／`InstanceDetail`（`InstanceStatusRow` を継承し `recent_events[]` を追加）／`DeviceDto`／`PairStartResponse`／`PairClaimPayload`・`PairClaimResponse` など。時刻の ISO8601 ⇄ epoch ms 変換（`parseIso8601ToEpochMs`/`epochMsToIso8601`）と表示状態の小文字化（`toWireStatus`）は Controller/DTO 境界で行う。
+- **`~/.monomi` ホーム・DB ファイルのパーミッション保護**（release-13 FR-01/FR-02、known-issues S1 解決）: home ディレクトリの作成は `ensureMonomiHome()`（`src/config/paths.ts`、定数 `HOME_DIR_MODE = 0o700`）に一本化し、`serve.ts`／`bootstrap.ts`／CLI 側 `pairing-client.ts` の 3 箇所に重複していた `mkdirSync` 呼び出しをこの 1 関数へ集約（DRY）。`mkdirSync` 後に無条件で `chmodSync` するため、新規作成・release-12 以前の既存ディレクトリのどちらでも `0o700` へ揃う（umask 非依存の自動修復）。SQLite DB ファイルは `openDatabase()`（`src/db/database.ts`、定数 `DB_FILE_MODE = 0o600`）が DDL 適用後に無条件で chmod する（`:memory:` は対象外、WAL の `-wal`/`-shm` は親ディレクトリの `0o700` 化で保護される前提）。token/`config.yml` の chmod 600 方針（既存、`ConfigWriter` 参照）と合わせ、`~/.monomi` 配下の機微ファイル・ディレクトリ全体が所有者限定アクセスとなる。
 
 ---
 

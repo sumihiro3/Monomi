@@ -12,9 +12,12 @@
 #   FR-02 (release-7): SessionEnd 高速経路 — outbox flush スキップ(AC-1) /
 #     先頭候補のみ短タイムアウトで送信(AC-2) / 4xx 隔離(AC-5) /
 #     不達時 outbox 退避(AC-4) / ワースト実行時間 <3000ms(AC-7)
+#   known-issues S1 (release-13 相当): reporter が ensureMonomiHome() を経由せず単独で
+#     作る $MONOMI_HOME も、新規・既存(広い権限)の両方で 0700 に揃うこと
 #
 # 前提: macOS bash 3.2 / curl / git / node（実 hub と capture server 用）/ sqlite3 /
-#       perl（Time::HiRes、SessionEnd のミリ秒精度タイミング計測用）。
+#       perl（Time::HiRes、SessionEnd のミリ秒精度タイミング計測用。$MONOMI_HOME の
+#       権限ビット確認にも使う）。
 #       jq はテストハーネス側では使用（reporter 本体は jq 有無を吸収する）。
 #
 # 使い方: bash reporter/monomi-report.test.sh
@@ -137,6 +140,12 @@ make_git_repo() {
   git -C "$1" config user.email test@example.com
   git -C "$1" config user.name test
   git -C "$1" remote add origin "$2"
+}
+
+# ディレクトリの権限ビットを 4 桁 8 進数文字列で返す。macOS `stat -f` と GNU `stat -c` の
+# オプション差異を避けるため perl 経由にする（perl は SessionEnd タイミング計測で既に前提）。
+dir_mode() {
+  perl -e 'printf "%04o\n", (stat($ARGV[0]))[2] & 07777' "$1" 2>/dev/null
 }
 
 hook_json() {
@@ -1207,6 +1216,34 @@ JS
   kill "$hangpid" >/dev/null 2>&1
 }
 
+# =========================================================================
+# Test 17 (known-issues S1 / release-13 相当): reporter が単独で作る $MONOMI_HOME も 0700
+# =========================================================================
+# reporter は Node.js 側の ensureMonomiHome()（release-13 FR-01）を経由せず $home を単独で
+# 作成しうる（child デバイスで `monomi pair` 前に reporter が先に発火する等）。
+#   ケース1: $home が未作成 → umask 既定パーミッション（多くの環境で 0755）で作られないこと。
+#   ケース2: $home が広い権限で事前作成済み → 無条件・毎回の chmod で 0700 へ補正されること。
+test_home_dir_permission_enforced() {
+  local name='S1: reporter creates/repairs $MONOMI_HOME at 0700 without ensureMonomiHome'
+  local repo="$WORK/t17-repo"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  # 誰も listen していないポート（接続拒否）。配信結果ではなく $home の権限だけを見る。
+  local home_fresh="$WORK/t17-home-fresh"
+  hook_json 'Notification' "$repo" 'permission' |
+    MONOMI_HOME="$home_fresh" MONOMI_HUB_URL='http://127.0.0.1:59996' \
+      "$SCRIPT" --subtype permission_prompt >/dev/null 2>&1
+  assert_eq "$name (fresh \$home mode == 0700)" '0700' "$(dir_mode "$home_fresh")"
+
+  local home_existing="$WORK/t17-home-existing"
+  mkdir -p "$home_existing"
+  chmod 755 "$home_existing"
+  hook_json 'Notification' "$repo" 'permission' |
+    MONOMI_HOME="$home_existing" MONOMI_HUB_URL='http://127.0.0.1:59996' \
+      "$SCRIPT" --subtype permission_prompt >/dev/null 2>&1
+  assert_eq "$name (pre-existing wide-permission \$home repaired to 0700)" '0700' "$(dir_mode "$home_existing")"
+}
+
 # --- 実行 ----------------------------------------------------------------
 ensure_build
 test_real_hub_records_event
@@ -1226,6 +1263,7 @@ test_session_end_single_candidate_only
 test_session_end_dead_hub_saves_outbox
 test_session_end_4xx_quarantined
 test_session_end_fast_timeout
+test_home_dir_permission_enforced
 
 echo '----------------------------------------'
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"
