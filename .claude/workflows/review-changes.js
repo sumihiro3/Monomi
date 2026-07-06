@@ -74,7 +74,22 @@ if (!reviewModel || !verifyModel) {
 }
 
 const base = input.base || config.baseBranch || 'main'
-const DIFF = `カレント作業ディレクトリ(=リポジトリルート)でレビューする。レビュー対象は「${base} との差分 + 未コミットの変更」。git diff ${base}... と git status / git diff で対象を確認すること。`
+
+// diffPathScope: args.diffPathScope を最優先、未指定(null/undefined)時は config.diffPathScope を既定、
+// 両方 null/未指定なら全差分。文字列は単一要素配列に正規化する。
+let diffPathScope = input.diffPathScope !== undefined && input.diffPathScope !== null
+  ? input.diffPathScope
+  : config.diffPathScope
+if (typeof diffPathScope === 'string') {
+  diffPathScope = [diffPathScope]
+}
+if (!Array.isArray(diffPathScope) || diffPathScope.length === 0) {
+  diffPathScope = null
+}
+
+const DIFF = diffPathScope
+  ? `カレント作業ディレクトリ(=リポジトリルート)でレビューする。レビュー対象は「${base} との差分 + 未コミットの変更」のうち、次のパスに限定する: ${diffPathScope.join(', ')}。git diff ${base}... -- ${diffPathScope.join(' ')} と、git status / git diff(未コミット分)も同じパスに絞って確認すること。`
+  : `カレント作業ディレクトリ(=リポジトリルート)でレビューする。レビュー対象は「${base} との差分 + 未コミットの変更」。git diff ${base}... と git status / git diff で対象を確認すること。`
 
 const FINDINGS_SCHEMA = {
   type: 'object',
@@ -179,6 +194,7 @@ return {
   confirmed,
   unverifiable,
   dimensionsRun,
+  diffPathScope,
   summary:
     (confirmed.length === 0
       ? '確定した所見はありません'
