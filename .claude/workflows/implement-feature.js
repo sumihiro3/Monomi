@@ -209,7 +209,10 @@ function isJunkDesign(d) {
   })
 }
 
-const designPrompt = `${RULES}\n以下の要件と現状調査をもとに実装計画を設計し、実装順に並べた作業項目に分解してください。各項目は独立して検証できる粒度にすること。依存関係がある場合は、依存される側を先に並べること。\n\n## 要件\n${reqSummary}\n\n## 現状調査\n${codeMap}`
+// advisor(サーバーサイド相談ツール)は応答がストールしたまま5分でタイムアウトする既知障害が
+// あるため使用を禁止する(2026-07-06 release-16 で2回連続再現。設計確定直前の advisor 呼び出しが
+// Response stalled mid-stream で失敗し、パイプライン全体が止まった)
+const designPrompt = `${RULES}\nadvisor 等のサーバーサイド相談ツールは呼び出さず、自身の分析のみで設計を確定すること。\n以下の要件と現状調査をもとに実装計画を設計し、実装順に並べた作業項目に分解してください。各項目は独立して検証できる粒度にすること。依存関係がある場合は、依存される側を先に並べること。\n\n## 要件\n${reqSummary}\n\n## 現状調査\n${codeMap}`
 
 let design = await agent(designPrompt, {
   label: '設計',
