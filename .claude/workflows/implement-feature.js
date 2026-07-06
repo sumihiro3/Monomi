@@ -116,6 +116,21 @@ const target = reqPath
 const conventionsDoc = config.conventionsDoc || 'CLAUDE.md'
 const RULES = `リポジトリはカレント作業ディレクトリ。CLAUDE.md と ${conventionsDoc} の規約に従うこと。`
 
+// 実装完了前の format/lint 自走指示に使う検査コマンド一覧。config.checks (プロジェクト固有値) を
+// そのまま文字列展開するだけで、コマンド文字列自体はソースにハードコードしない。
+// どの key が format/lint に相当するかはエージェント側の判断に委ねる(config.checks の key 命名は
+// プロジェクトごとに異なりうるため、エンジン側で固定の key 名と照合しない)。
+const checksList = Array.isArray(config.checks) ? config.checks : []
+const selfCheckInstruction =
+  checksList.length > 0
+    ? `\n\n## 作業完了前の自走検査\n以下の検査コマンドのうち format・lint に相当するものを自分で判別し、自分が編集したファイルに対して実行すること。自分の変更に起因する失敗があれば、完了報告の前に整形・修正し、再実行してパスすることを確認してから完了とすること(他者の変更に起因する既存の失敗まで修正する必要はない)。\n${checksList
+        .map(
+          (c) =>
+            `- key=${c.key}: \`${c.cmd}\`${c.cwd && c.cwd !== '.' ? `(${c.cwd} 配下で実行)` : ''}`
+        )
+        .join('\n')}`
+    : ''
+
 phase('探索')
 const [reqSummary, codeMap] = await parallel([
   () =>
@@ -275,7 +290,7 @@ function runImplementItem(item, labelPrefix) {
   const model = modelForComplexity(item.complexity)
   log(`${labelPrefix}: ${item.title} (複雑度 ${item.complexity} → ${model})`)
   return agent(
-    `${RULES}\n次の作業項目を実装してください。テストが必要な変更は同時に書くこと。実装後、実際に変更・新規作成したファイルをリポジトリルートからの相対パスで changedFiles に列挙し、実装内容と判断に迷った点を report で報告してください。実際に編集していないファイルを changedFiles に含めてはいけません。\n\n## 実装方針(全体)\n${design.summary}\n\n## 作業項目\n${item.title}\n${item.description}\n対象ファイル目安: ${item.files.join(', ')}\n\n## 要件(参照用)\n${reqSummary}`,
+    `${RULES}\n次の作業項目を実装してください。テストが必要な変更は同時に書くこと。実装後、実際に変更・新規作成したファイルをリポジトリルートからの相対パスで changedFiles に列挙し、実装内容と判断に迷った点を report で報告してください。実際に編集していないファイルを changedFiles に含めてはいけません。\n\n## 実装方針(全体)\n${design.summary}\n\n## 作業項目\n${item.title}\n${item.description}\n対象ファイル目安: ${item.files.join(', ')}\n\n## 要件(参照用)\n${reqSummary}${selfCheckInstruction}`,
     { label: `${labelPrefix}: ${item.title}`, phase: '実装', schema: IMPLEMENT_SCHEMA, model }
   ).then(
     (r) =>
