@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -30,6 +31,14 @@ export interface MonomiPaths {
 export const MONOMI_HOME_ENV = 'MONOMI_HOME'
 
 /**
+ * `~/.monomi` ルートディレクトリのパーミッション（`0o700`）。
+ *
+ * device token・config.yml・SQLite DB など機微ファイルの格納先であるため、所有者以外から
+ * 一切アクセスできないよう固定する（known-issues S1）。
+ */
+export const HOME_DIR_MODE = 0o700
+
+/**
  * Monomi のパス集合を解決する。
  *
  * 優先順位は `home` 引数 → 環境変数 `MONOMI_HOME` → `os.homedir()/.monomi`。
@@ -48,4 +57,19 @@ export function resolvePaths(home?: string): MonomiPaths {
     rejectedDir: path.join(base, 'outbox', 'rejected'),
     tokenFile: path.join(base, 'token'),
   }
+}
+
+/**
+ * `~/.monomi` ルートディレクトリを作成し、パーミッションを `0o700` に固定する。
+ *
+ * hub / bootstrap / pairing-client など `~/.monomi` を作る全箇所が使う共通ヘルパー（known-issues S1）。
+ * `mkdirSync` の `mode` オプションは umask でマスクされ既存ディレクトリには適用されないため、
+ * 新規・既存いずれの場合も呼び出し後に明示的な `chmodSync` で `0o700` へ揃える
+ * （{@link HOME_DIR_MODE}。bootstrap の `writeTokenFile` と同趣旨）。
+ *
+ * @param paths {@link resolvePaths} で解決したパス集合。
+ */
+export function ensureMonomiHome(paths: MonomiPaths): void {
+  fs.mkdirSync(paths.home, { recursive: true })
+  fs.chmodSync(paths.home, HOME_DIR_MODE)
 }

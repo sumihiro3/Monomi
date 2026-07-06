@@ -618,6 +618,12 @@ EOF
   # 送る（AC-2）。他候補への順試行はしない（複数候補×8s だと grace period を超えうる）。
   # SessionEnd 以外は従来通り、先に outbox を流し切ってから複数候補・最大8sで送る（AC-6）。
   mkdir -p "$outbox" 2>/dev/null
+  # reporter は Node.js 側の ensureMonomiHome() を経由せず ~/.monomi を単独で作成しうる
+  # （child デバイスで monomi pair 前に reporter が先に発火する等）。上の mkdir -p は umask
+  # 既定パーミッション（通常 0o755）で親ディレクトリ $home を作ってしまうため、
+  # ensureMonomiHome()（release-13 FR-01）と同じ 0o700 を無条件・毎回明示 chmod で揃える
+  # （known-issues S1 と同じ不変条件: token/DB を格納する $home は常に 0o700 であること）。
+  chmod 700 "$home" 2>/dev/null
   local send_rc
   if [ "$event_type" = 'SessionEnd' ]; then
     post_json "${hub_urls[0]:-}" "$token" "$body_file" 1 2

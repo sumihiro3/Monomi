@@ -1,12 +1,11 @@
-import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { loadConfig } from '../config/config.js'
-import { resolvePaths, type MonomiPaths } from '../config/paths.js'
-import { openDatabase, type Database } from '../db/database.js'
+import { ensureMonomiHome, type MonomiPaths, resolvePaths } from '../config/paths.js'
+import { type Database, openDatabase } from '../db/database.js'
 import type { EpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
 import { bootstrap } from './bootstrap.js'
-import { createHubServer, HttpServer } from './http-server.js'
+import { createHubServer, type HttpServer } from './http-server.js'
 
 /**
  * 既定の待受バインドアドレス（FR-06 AC-1）。`options.host` > config `bind:` > 本既定の順で解決する。
@@ -81,7 +80,7 @@ export async function serve(options: ServeOptions = {}): Promise<HubHandle> {
   const paths = options.paths ?? resolvePaths()
   const log = options.logger ?? ((message: string) => console.log(message))
 
-  fs.mkdirSync(paths.home, { recursive: true })
+  ensureMonomiHome(paths)
   const config = loadConfig(paths)
   const host = options.host ?? config.bind ?? DEFAULT_HOST
 
