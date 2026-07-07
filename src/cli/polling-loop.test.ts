@@ -45,6 +45,7 @@ function makeRow(id: string): InstanceStatusRow {
     },
     pr: { state: 'none' },
     session: { id: `sess-${id}`, last_heartbeat_at: null },
+    running_work: null,
   }
 }
 

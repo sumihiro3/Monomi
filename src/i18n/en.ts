@@ -32,6 +32,10 @@ export const EN = {
   'detail.fetchFailed': 'Failed to fetch details: {error}',
   'detail.loading': 'Loading…',
   'detail.elapsedSuffix': '{age} elapsed',
+  'detail.running': 'Running',
+  'detail.runningKind.workflow': 'workflow',
+  'detail.runningKind.agent': 'agent',
+  'detail.runningKind.skill': 'skill',
 
   // help.*（ヘルプオーバーレイ。8行の説明 + タイトル）
   'help.title': 'Key Bindings',

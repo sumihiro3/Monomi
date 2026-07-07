@@ -1,7 +1,7 @@
 import { Box, Text, useInput, useStdout } from 'ink'
 import { type ReactElement, type ReactNode, useEffect, useMemo, useState } from 'react'
 import type { InstanceDetail, InstanceStatusRow, RecentEventDto } from '../../hub/dto.js'
-import { t } from '../../i18n/index.js'
+import { type TranslationKey, t } from '../../i18n/index.js'
 import { bottomBorderWithLabel, resolveBoxWidth, topBorderWithTitle } from '../box-border.js'
 import {
   clampOffset,
@@ -293,6 +293,15 @@ export function DetailView({
             ({t('detail.elapsedSuffix', { age: formatAge(source.status.elapsed_seconds) })})
           </Text>
         </Field>
+        {/* release-16 FR-03 AC-3: 実行中の作業名（running work）。hub が導出した
+            `running_work`（`kind: workflow|agent|skill` + `name`）を `<name> (<kind>)` 形式で
+            表示し、`null`（非稼働・区切り後・導出対象イベント無し）は他の nullable フィールド
+            （branch 等）と同じ `sanitizeNullableDisplayText(...) ?? '-'` 相当の `-` 表示にする
+            （AC-2）。`name` はレポーター由来の自由記述（tool_summary から抜き出した値）なので
+            他のイベント本文と同じく `sanitizeDisplayText` で除染する（AC-4、CWE-150）。 */}
+        <Field label={t('detail.running')}>
+          <Text>{formatRunningWork(source.running_work)}</Text>
+        </Field>
         <Field label="session_id">
           <Text>{sanitizeDisplayText(source.session.id)}</Text>
         </Field>
@@ -450,6 +459,50 @@ function Field({ label, children }: { label: string; children: ReactNode }): Rea
       {children}
     </Text>
   )
+}
+
+/**
+ * `running_work.kind`（wire は小文字 `workflow`/`agent`/`skill`）→ 翻訳キー（release-16 FR-03 AC-3・AC-6）。
+ *
+ * {@link ../status-display.js#statusLabel} の `STATUS_LABEL_KEYS` と同じ防御的パターン
+ * （`Record<string, TranslationKey>` + 未知値フォールバック）を踏襲する。hub と CLI は別プロセス・
+ * 別バージョンで動きうるため、`RunningWorkKind`（`../../status/running-work-resolver.js`）を型として
+ * 直接 import せず wire の生文字列として扱い、将来 hub が未知の kind を送ってきても
+ * クラッシュせず生値を表示する。
+ */
+const RUNNING_WORK_KIND_KEYS: Record<string, TranslationKey> = {
+  workflow: 'detail.runningKind.workflow',
+  agent: 'detail.runningKind.agent',
+  skill: 'detail.runningKind.skill',
+}
+
+/**
+ * `running_work.kind` を、アクティブロケールで解決したラベルへ写す。
+ *
+ * @param kind wire の `running_work.kind`（小文字）。
+ * @returns アクティブロケールのラベル（`t()` 経由）。未知値は入力をそのまま返す。
+ */
+function runningWorkKindLabel(kind: string): string {
+  const key = RUNNING_WORK_KIND_KEYS[kind]
+  return key ? t(key) : kind
+}
+
+/**
+ * 概要 BOX の `running` フィールド表示文字列を組み立てる（release-16 FR-03 AC-2・AC-3・AC-4）。
+ *
+ * `<name> (<kind>)` 形式（AC-3）。`name` はレポーター由来の自由記述（tool_summary から抜き出した
+ * 値）なので、他のイベント本文と同じく描画直前に {@link ../sanitize-display-text.js#sanitizeDisplayText}
+ * で ANSI エスケープ・制御文字を除染する（AC-4、CWE-150）。`null`（非稼働・区切りイベント後・
+ * 導出対象イベント無し）は `branch` 等の nullable フィールドと同じ `-` 表示にする（AC-2）。
+ *
+ * @param work {@link InstanceStatusRow.running_work}（`null` 可）。
+ * @returns 表示用文字列。
+ */
+function formatRunningWork(work: { kind: string; name: string } | null): string {
+  if (work === null) {
+    return '-'
+  }
+  return `${sanitizeDisplayText(work.name)} (${runningWorkKindLabel(work.kind)})`
 }
 
 /**

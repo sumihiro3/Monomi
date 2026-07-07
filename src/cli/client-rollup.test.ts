@@ -30,6 +30,7 @@ function row(over: {
     },
     pr: { state: 'none' },
     session: { id: `sess-${over.instanceId}`, last_heartbeat_at: null },
+    running_work: null,
   }
 }
 

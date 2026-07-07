@@ -89,6 +89,8 @@ monomi --help, -h               このヘルプを表示
 | `?`              | ヘルプ表示                                                          |
 | `q`              | 終了                                                                |
 
+一覧カードの末尾行には instance が現在実行中の Workflow / Agent / Skill 名を `▶ <name>` 形式で表示する（実行中でなければ `-`）。詳細ビューの概要 BOX にも同じ情報を `<name> (workflow|agent|skill)` 形式で表示する。
+
 ## 設定 (`~/.monomi/config.yml`)
 
 CLI の表示言語は既定で English。日本語表示にするには `locale: ja` を明示的に設定する（旧バージョンから引き継ぐ既存ユーザーは、日本語表示を維持するためにこの設定の追記が必要）。

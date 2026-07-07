@@ -112,9 +112,119 @@ json_get_string() {
     sed -n 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
 }
 
-# tool_input から要約に使う代表フィールドを取り出す（command→file_path→path→pattern→url）。
-extract_tool_summary() {
+# tool_input.<key> の文字列値を取り出す（jq 版。ネスト1段）。
+_tool_input_get_jq() {
+  local json=$1 key=$2
+  printf '%s' "$json" | jq -r --arg k "$key" '(.tool_input // {})[$k] // empty' 2>/dev/null
+}
+
+# tool_input.<key> の文字列値を取り出す（jq 無しフォールバック、command/file_path と同じ
+# best-effort: JSON 全文から `"key": "value"` の最初の一致を拾う。値中のエスケープは非対応）。
+_tool_input_get_sed() {
+  local json=$1 key=$2
+  printf '%s' "$json" | tr '\n' ' ' |
+    sed -n 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
+}
+
+# Workflow ツールの表示名: name → scriptPath の basename（拡張子 .js 除去）→
+# インライン script 内 `name:` の best-effort 抽出 → 固定文言 "workflow"。
+# インライン script の抽出は jq 経路のみ（jq 無し版は AC-7 の対象外）。
+extract_tool_summary_workflow() {
   local json=$1
+  local name script_path base
+  if have_jq; then
+    name=$(_tool_input_get_jq "$json" 'name')
+  else
+    name=$(_tool_input_get_sed "$json" 'name')
+  fi
+  if [ -n "$name" ]; then
+    printf '%s' "$name"
+    return 0
+  fi
+
+  if have_jq; then
+    script_path=$(_tool_input_get_jq "$json" 'scriptPath')
+  else
+    script_path=$(_tool_input_get_sed "$json" 'scriptPath')
+  fi
+  if [ -n "$script_path" ]; then
+    base=$(basename "$script_path")
+    printf '%s' "${base%.js}"
+    return 0
+  fi
+
+  if have_jq; then
+    local script_text meta_name
+    script_text=$(printf '%s' "$json" | jq -r '(.tool_input // {}).script // empty' 2>/dev/null)
+    if [ -n "$script_text" ]; then
+      # script 先頭部の meta.name を想定した best-effort 抽出:
+      # まず最初に現れる `name: '...'` / `name: "..."` の一致を grep -o で拾い（最初の一致
+      # ＝ .* の貪欲マッチで末尾に流れないようにする）、その断片から値だけを sed で取り出す。
+      meta_name=$(printf '%s' "$script_text" | tr '\n' ' ' |
+        grep -oE "name:[[:space:]]*['\"][^'\"]*['\"]" | head -n 1 |
+        sed -n "s/.*['\"]\\([^'\"]*\\)['\"].*/\\1/p")
+      if [ -n "$meta_name" ]; then
+        printf '%s' "$meta_name"
+        return 0
+      fi
+    fi
+  fi
+
+  printf 'workflow'
+}
+
+# Task（Agent）ツールの表示名: "<subagent_type>: <description>"（片方欠落時は残る片方のみ、
+# 両方欠落なら空文字）。
+extract_tool_summary_task() {
+  local json=$1
+  local subagent desc
+  if have_jq; then
+    subagent=$(_tool_input_get_jq "$json" 'subagent_type')
+    desc=$(_tool_input_get_jq "$json" 'description')
+  else
+    subagent=$(_tool_input_get_sed "$json" 'subagent_type')
+    desc=$(_tool_input_get_sed "$json" 'description')
+  fi
+  if [ -n "$subagent" ] && [ -n "$desc" ]; then
+    printf '%s: %s' "$subagent" "$desc"
+  elif [ -n "$subagent" ]; then
+    printf '%s' "$subagent"
+  elif [ -n "$desc" ]; then
+    printf '%s' "$desc"
+  fi
+}
+
+# Skill ツールの表示名: tool_input.skill。
+extract_tool_summary_skill() {
+  local json=$1
+  if have_jq; then
+    _tool_input_get_jq "$json" 'skill'
+  else
+    _tool_input_get_sed "$json" 'skill'
+  fi
+}
+
+# tool_input から要約に使う代表フィールドを取り出す。
+#   $1: フック JSON全文  $2: tool_name
+# tool_name が Workflow/Task(Agent)/Skill のときは専用抽出、それ以外は従来どおり
+# command→file_path→path→pattern→url の優先順（回帰なし・AC-6）。
+extract_tool_summary() {
+  local json=$1 tool_name=$2
+  case "$tool_name" in
+    Workflow)
+      extract_tool_summary_workflow "$json"
+      return 0
+      ;;
+    Task | Agent)
+      extract_tool_summary_task "$json"
+      return 0
+      ;;
+    Skill)
+      extract_tool_summary_skill "$json"
+      return 0
+      ;;
+  esac
+
   if have_jq; then
     printf '%s' "$json" |
       jq -r '(.tool_input // {}) | (.command // .file_path // .path // .pattern // .url // empty)' 2>/dev/null
@@ -485,7 +595,7 @@ main() {
   fi
 
   # tool_summary（tool_input からの要約、切り詰め）。
-  tool_summary=$(extract_tool_summary "$hook_json")
+  tool_summary=$(extract_tool_summary "$hook_json" "$tool_name")
   if [ -n "$tool_summary" ]; then
     tool_summary=${tool_summary:0:$TOOL_SUMMARY_MAX}
   fi

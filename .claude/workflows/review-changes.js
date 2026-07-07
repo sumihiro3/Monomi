@@ -120,11 +120,15 @@ const VERDICT_SCHEMA = {
   },
 }
 
+// advisor(サーバーサイド相談ツール)は応答がストールする既知障害があるため使用を禁止する(2026-07-06 に再現)
+const ADVISOR_BAN =
+  'advisor 等のサーバーサイド相談ツールは呼び出さないこと(応答がストールする既知障害があるため)。自身の分析のみで作業を完結すること。'
+
 phase('レビュー')
 const results = await pipeline(
   DIMENSIONS,
   d =>
-    agent(`${DIFF}\n${d.prompt}`, {
+    agent(`${ADVISOR_BAN}\n${DIFF}\n${d.prompt}`, {
       label: `review:${d.key}`,
       phase: 'レビュー',
       schema: FINDINGS_SCHEMA,
@@ -139,7 +143,7 @@ const results = await pipeline(
       review.findings.map(
         f => () =>
           agent(
-            `カレントリポジトリで次のレビュー所見を敵対的に検証してください。コードを実際に読み、所見が誤りである可能性を積極的に探すこと。誤検出と思われる場合や再現根拠が弱い場合は isReal: false にすること。\n\n## 所見(${d.key})\n${f.title}\n対象: ${f.file}\n${f.detail}`,
+            `${ADVISOR_BAN}\nカレントリポジトリで次のレビュー所見を敵対的に検証してください。コードを実際に読み、所見が誤りである可能性を積極的に探すこと。誤検出と思われる場合や再現根拠が弱い場合は isReal: false にすること。\n\n## 所見(${d.key})\n${f.title}\n対象: ${f.file}\n${f.detail}`,
             { label: `verify:${f.file}`, phase: '検証', schema: VERDICT_SCHEMA, model: verifyModel }
           ).then(v => ({ ...f, dimension: d.key, verdict: v }))
       )

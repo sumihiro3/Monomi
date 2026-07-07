@@ -29,6 +29,10 @@ export const JA = {
   'detail.fetchFailed': '詳細の取得に失敗しました: {error}',
   'detail.loading': '読み込み中…',
   'detail.elapsedSuffix': '{age}経過',
+  'detail.running': '実行中',
+  'detail.runningKind.workflow': 'ワークフロー',
+  'detail.runningKind.agent': 'エージェント',
+  'detail.runningKind.skill': 'スキル',
 
   // help.*
   'help.title': 'キーバインド',

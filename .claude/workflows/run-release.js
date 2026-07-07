@@ -62,6 +62,12 @@ function trackedAgent(key, prompt, opts) {
   return agent(prompt, opts)
 }
 
+// advisor(サーバーサイド相談ツール)は応答がストールする既知障害があるため使用を禁止する(2026-07-06 に再現)。
+// 完了済みエージェント(bootstrap・preflight・notify)のキャッシュを保護するため、trackedAgent での
+// 一律付与はせず、未実行の各呼び出しのプロンプトに個別に付与している
+const ADVISOR_BAN =
+  'advisor 等のサーバーサイド相談ツールは呼び出さないこと(応答がストールする既知障害があるため)。自身の分析のみで作業を完結すること。'
+
 phase('準備')
 
 // config ブートストラップ: args.config 優先、未指定なら .claude/workflow.config.json を読む。
@@ -156,13 +162,18 @@ async function notify(title, message) {
 }
 
 // ---- 起票(AC-6): record-known-issues は新設のため scriptPath 指定で起動する ----
+// 注意: workflow() の相対 scriptPath は「親スクリプトのディレクトリ」基準で解決される
+// (cwd 基準ではない)。'.claude/workflows/record-known-issues.js' と書くと
+// .claude/workflows/.claude/workflows/... に二重解決されて file not found になる
+// (2026-07-07 に run-release を絶対パス起動した際の実障害)。同一ディレクトリの
+// ファイル名のみを指定すること
 const filedIssues = []
 let resolvedLogProposal = null
 
 /** 所見を record-known-issues ワークフローで起票し、結果を filedIssues に集約する。 */
 async function fileKnownIssues(findings) {
   if (!Array.isArray(findings) || findings.length === 0) return
-  const r = await workflow({ scriptPath: '.claude/workflows/record-known-issues.js' }, { config, findings })
+  const r = await workflow({ scriptPath: 'record-known-issues.js' }, { config, findings })
   addConsumption('triage', 1)
   if (!r) {
     log('record-known-issues が結果を返さなかったため、起票結果を確認できませんでした')
@@ -212,7 +223,8 @@ async function fixWithGuard(instruction, phaseName, phaseKey) {
   // fix 前スナップショット参照の取得(git stash create は作業ツリーを変更しない)
   const snap = await trackedAgent(
     phaseKey,
-    'git stash create を実行し、出力されたコミット ID を ref として返してください。出力が空(未コミット変更なし)の場合は git rev-parse HEAD の出力を ref として返すこと。リポジトリの状態を変更するコマンド(stash push/apply/pop、add、checkout 等)は実行禁止。',
+    ADVISOR_BAN +
+      '\ngit stash create を実行し、出力されたコミット ID を ref として返してください。出力が空(未コミット変更なし)の場合は git rev-parse HEAD の出力を ref として返すこと。リポジトリの状態を変更するコマンド(stash push/apply/pop、add、checkout 等)は実行禁止。',
     {
       label: 'fix前スナップショット',
       phase: phaseName,
@@ -228,7 +240,7 @@ async function fixWithGuard(instruction, phaseName, phaseKey) {
 
   const fixed = await trackedAgent(
     phaseKey,
-    `${instruction}\n\n制約:\n- あなたは修正の実施者(maker)であり、修正後の合否判定はしない(再検査は別工程が行う)\n- テストの skip 化・既存期待値の意図的な書き換え・テスト削除によって検査を回避することは禁止\n- 修正は必要最小限にすること`,
+    `${ADVISOR_BAN}\n${instruction}\n\n制約:\n- あなたは修正の実施者(maker)であり、修正後の合否判定はしない(再検査は別工程が行う)\n- テストの skip 化・既存期待値の意図的な書き換え・テスト削除によって検査を回避することは禁止\n- 修正は必要最小限にすること`,
     { label: '修正', phase: phaseName, model: MODELS.fix || 'sonnet' }
   )
 
@@ -243,7 +255,7 @@ async function fixWithGuard(instruction, phaseName, phaseKey) {
 
   const guard = await trackedAgent(
     phaseKey,
-    `テスト不変ガードの検査です。git diff ${snapshotRef} で直前の fix 作業による増分差分を確認し、そのうちテストファイル(プロジェクトのテスト命名規則・テストディレクトリから自分で判別すること)への変更に、検査を通すことだけを目的とした次の改変が含まれていないか検査してください: (a) テストの skip 化(skip/only の付与・無効化) (b) 既存の期待値の改変 (c) テストケースの削除。実装変更に正当に追随する期待値更新や新規テストの追加は違反ではない。判定基準はこの増分差分のみとし、それ以外の差分は対象外。`,
+    `${ADVISOR_BAN}\nテスト不変ガードの検査です。git diff ${snapshotRef} で直前の fix 作業による増分差分を確認し、そのうちテストファイル(プロジェクトのテスト命名規則・テストディレクトリから自分で判別すること)への変更に、検査を通すことだけを目的とした次の改変が含まれていないか検査してください: (a) テストの skip 化(skip/only の付与・無効化) (b) 既存の期待値の改変 (c) テストケースの削除。実装変更に正当に追随する期待値更新や新規テストの追加は違反ではない。判定基準はこの増分差分のみとし、それ以外の差分は対象外。`,
     {
       label: 'テスト不変ガード',
       phase: phaseName,
@@ -273,7 +285,7 @@ async function fixWithGuard(instruction, phaseName, phaseKey) {
       log(`テスト不変ガード違反: ${files.join(', ')} — fix 前の状態に復元します`)
       await trackedAgent(
         phaseKey,
-        `git checkout ${snapshotRef} -- ${files.join(' ')} を実行し、テストファイルを fix 前の状態に復元してください。それ以外のファイルには触れないこと。`,
+        `${ADVISOR_BAN}\ngit checkout ${snapshotRef} -- ${files.join(' ')} を実行し、テストファイルを fix 前の状態に復元してください。それ以外のファイルには触れないこと。`,
         { label: 'テスト復元', phase: phaseName, model: 'haiku' }
       )
     }
@@ -632,7 +644,7 @@ for (let iter = 0; ; iter++) {
   } else {
     const scopeRes = await trackedAgent(
       'gate2',
-      `git diff --name-only ${fixSnapshotRef} と git ls-files --others --exclude-standard の両方を実行し、` +
+      `${ADVISOR_BAN}\ngit diff --name-only ${fixSnapshotRef} と git ls-files --others --exclude-standard の両方を実行し、` +
         'それぞれの出力ファイルパスを結合して重複を除いた一覧を files として返してください。' +
         '前者は直前の修正で変更・削除された追跡ファイル、後者は新規作成の未追跡ファイル(スナップショットに含まれないため必須)です。' +
         'リポジトリの状態を変更するコマンドは実行禁止(読み取り専用)。該当ファイルが無ければ files: [] を返すこと。',
@@ -721,7 +733,7 @@ if (!finalGate.passed) {
 // ---- PR 準備(AC-10): AC 充足検証 checker と PR 本文の生成 ----
 const acCheck = await trackedAgent(
   'pr',
-  `AC 充足検証: 要件ファイル ${reqPath} を読み、各 FR の AC ごとに充足状況を検証してください。\n` +
+  `${ADVISOR_BAN}\nAC 充足検証: 要件ファイル ${reqPath} を読み、各 FR の AC ごとに充足状況を検証してください。\n` +
     '検証は実コードの grep・ファイル内容の実確認・下記の検査出力のみを根拠とし、実装エージェントの自己申告・作業報告文は根拠にしないこと。\n' +
     '要件側で「手動検証必須」と区分されている AC は manualRequired: true とし、自動検証だけで met: true にしないこと。\n' +
     `\n## 直近の検査結果(release-check)\n${JSON.stringify(finalCheck && finalCheck.results ? finalCheck.results : [])}`,
@@ -776,7 +788,8 @@ const prMaterial = {
 }
 const prDraft = await trackedAgent(
   'pr',
-  'リリース PR の本文(Markdown)とタイトルを生成してください。以下の材料 JSON のみを根拠とし、材料にない充足状況を捏造しないこと。本文には次のセクションを含めること:\n' +
+  ADVISOR_BAN +
+    '\nリリース PR の本文(Markdown)とタイトルを生成してください。以下の材料 JSON のみを根拠とし、材料にない充足状況を捏造しないこと。本文には次のセクションを含めること:\n' +
     '1. 概要\n2. FR/AC 充足状況(acVerification の検証結果に基づく表。検証不能な場合はその旨)\n' +
     '3. 最終検査結果(finalCheck)\n4. レビュー所見と対応(reviewFixed / residualFindings / unverifiableDimensions)\n' +
     '5. 起票した known-issues ID(filedIssues)\n6. 更新したドキュメント(syncedDocs / syncFailedTargets)\n' +
@@ -803,7 +816,8 @@ const prBodyDraft = prDraft ? prDraft.body : '(PR 本文の生成に失敗しま
 phase('コミット')
 const planRes = await trackedAgent(
   'commit',
-  'git status --porcelain と git diff で現在の未コミット変更を確認し、論理単位のコミット分割案を作ってください。各コミットは message(このリポジトリの既存コミットの文体に合わせる)と files(対象ファイルのリポジトリルート相対パス)で構成し、全変更ファイルをいずれか 1 つのコミットに割り当てること。この段階では git add / git commit を実行しないこと(読み取り専用)。',
+  ADVISOR_BAN +
+    '\ngit status --porcelain と git diff で現在の未コミット変更を確認し、論理単位のコミット分割案を作ってください。各コミットは message(このリポジトリの既存コミットの文体に合わせる)と files(対象ファイルのリポジトリルート相対パス)で構成し、全変更ファイルをいずれか 1 つのコミットに割り当てること。この段階では git add / git commit を実行しないこと(読み取り専用)。',
   {
     label: 'コミット分割案',
     phase: 'コミット',
@@ -839,7 +853,8 @@ if (!autoApprove) {
 
 const committed = await trackedAgent(
   'commit',
-  '以下のコミット分割案に従って論理単位コミットを実行してください。コミットごとに対象ファイルのみを git add してから git commit すること。push は禁止。分割案が空・不完全な場合は git status で変更を確認し、適切な論理単位で全変更をコミットすること。\n' +
+  ADVISOR_BAN +
+    '\n以下のコミット分割案に従って論理単位コミットを実行してください。コミットごとに対象ファイルのみを git add してから git commit すること。push は禁止。分割案が空・不完全な場合は git status で変更を確認し、適切な論理単位で全変更をコミットすること。\n' +
     `\n## コミット分割案\n${JSON.stringify(commitPlan)}`,
   {
     label: 'コミット実行',
@@ -894,7 +909,8 @@ const prBody = isDraft
 
 const prRes = await trackedAgent(
   'pr',
-  'リリースブランチを push して PR を作成してください。手順:\n' +
+  ADVISOR_BAN +
+    '\nリリースブランチを push して PR を作成してください。手順:\n' +
     `1. git branch --show-current が ${release} であることを確認する(異なれば何もせず pushed: false で報告)\n` +
     `2. \`git push -u origin ${release}\` を実行する。実行してよい push コマンドはこれのみ。${baseBranch} への push・force push は絶対に行わないこと\n` +
     `3. gh pr create --base ${baseBranch}${isDraft ? ' --draft' : ''} で PR を作成する。タイトル: ${prTitle}\n` +

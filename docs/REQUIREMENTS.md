@@ -31,8 +31,9 @@ Claude Code のフック発火時に、bash レポーターが instance／sessio
 - `Notification(permission_prompt)` → 権限待ち、`Notification(idle_prompt)` → 次の指示待ち、といった raw_state をセッション単位で導出する。
 - 状態が閾値（既定: active は 2 時間、config で上書き可）を超えて継続すると「放置（stale）」へ昇格する。
 - instance 配下に複数セッションがある場合、優先度が最も高いセッションの状態を instance の代表ステータスとして返す（ロールアップ）。
+- セッションが稼働中（`active`）の間、`tool_name`/`tool_summary` から「実行中の作業名（`running_work`）」（Workflow／Agent／Skill 名。Workflow を優先）を導出し、一覧・詳細の両 API に返す。稼働中でなくなったら消える。
 
-詳細: [release-1-single-machine-wedge](releases/release-1-single-machine-wedge/requirements.md) / [release-3-multi-device-pairing](releases/release-3-multi-device-pairing/requirements.md)
+詳細: [release-1-single-machine-wedge](releases/release-1-single-machine-wedge/requirements.md) / [release-3-multi-device-pairing](releases/release-3-multi-device-pairing/requirements.md) / [release-16-running-work-display](releases/release-16-running-work-display/requirements.md)
 
 ## マルチデバイスペアリング・認証
 

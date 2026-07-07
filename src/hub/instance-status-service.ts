@@ -10,6 +10,8 @@ import type { EpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
 import { InstanceStatusRollup } from '../status/instance-status-rollup.js'
 import { scanForRunBoundary } from '../status/run-boundary-scanner.js'
+import type { RunningWork } from '../status/running-work-resolver.js'
+import { scanForRunningWork } from '../status/running-work-resolver.js'
 import { StatusDeriver } from '../status/status-deriver.js'
 import type { StatusResult } from '../status/status-result.js'
 import {
@@ -176,6 +178,16 @@ export class InstanceStatusService {
         ? this.prStatus.findByProjectBranch(instance.projectId, instance.branch)
         : null
 
+    // ACTIVE ゲート（release-16 FR-02 line53 確定判断）: 代表 session が非 ACTIVE
+    // （APPROVAL_WAIT/NEXT_WAIT/CLOSED）なら running_work は無条件で null とし、追加のイベント
+    // 読み取りを一切行わない（既知課題 P3 の悪化防止）。承認待ち（APPROVAL_WAIT）中も
+    // ここで null になる——line20（消灯は Stop/idle_prompt/SessionEnd のみ）と見かけ上矛盾するが、
+    // line53 優先で確定済み（requirements.md 未解決事項の解消）。
+    const runningWork =
+      representative.rawState === 'ACTIVE'
+        ? this.loadRunningWorkForCurrentRun(representativeSession.id)
+        : null
+
     return {
       instance_id: instance.id,
       project: {
@@ -196,6 +208,7 @@ export class InstanceStatusService {
         id: representativeSession.id,
         last_heartbeat_at: this.formatHeartbeat(representativeSession),
       },
+      running_work: runningWork,
     }
   }
 
@@ -237,6 +250,54 @@ export class InstanceStatusService {
       cursor = { receivedAt: last.receivedAt, id: last.id }
     }
     return collected
+  }
+
+  /**
+   * session の現在の稼働区間（running work の区切り集合基準）を hub 権威時刻
+   * （received_at）の新しい順にページングしながら走査し、「実行中の作業名」を選定する
+   * （release-16 FR-02）。呼び出し側（{@link buildRow}）が代表 session の
+   * `StatusResult.rawState === 'ACTIVE'` のときだけ呼ぶ ACTIVE ゲートの内側であり、
+   * 非 ACTIVE では呼ばれない（P3 悪化防止）。
+   *
+   * {@link loadEventsForCurrentRun} の姉妹メソッドで、同じ keyset ページング構造
+   * （`EventRepository.recentPageForSession` + `STATUS_EVENT_PAGE_SIZE`）を流用するが、
+   * 区切り判定は raw_state 境界（`scanForRunBoundary`）ではなく running work 専用の区切り集合
+   * （`Stop`/`Notification(idle_prompt)`/`SessionEnd`/`UserPromptSubmit`、
+   * {@link scanForRunningWork} が定義）を使う。`loadEventsForCurrentRun` を再利用しない理由は、
+   * raw_state 境界は `Notification(permission_prompt)`（`APPROVAL_WAIT`）でも区切ってしまうため、
+   * 「Workflow 実行中 → 権限確認 → 承認 → 再開」のケースで承認前に投入された Workflow の
+   * `PreToolUse` を取りこぼすこと（要件確定判断: ACTIVE ゲートが先に非 ACTIVE を弾くので、
+   * この専用ローダ自身は permission_prompt を区切りにしない設計で正しい）。
+   *
+   * Workflow が確定した時点で最新（降順走査の先頭側）と確定するため、それ以上古いページを
+   * 読まずに打ち切る。Workflow が見つからないまま区切りに当たった、または全ページを読み切った
+   * 場合は、それまでに見つけた最新の Task/Agent/Skill 候補（`fallback`）を採用する。
+   *
+   * @param sessionId 対象 session（代表 session）の id。
+   * @returns 導出した {@link RunningWork}。稼働区間内に該当イベントが無ければ null。
+   */
+  private loadRunningWorkForCurrentRun(sessionId: string): RunningWork | null {
+    let fallback: RunningWork | null = null
+    let cursor: EventPageCursor | undefined
+
+    for (;;) {
+      const page = this.events.recentPageForSession(sessionId, STATUS_EVENT_PAGE_SIZE, cursor)
+      if (page.length === 0) break
+
+      const scan = scanForRunningWork(page, fallback)
+      if (scan.workflow !== null) {
+        return scan.workflow
+      }
+      fallback = scan.fallback
+      if (scan.boundaryFound) {
+        return fallback
+      }
+
+      if (page.length < STATUS_EVENT_PAGE_SIZE) break
+      const last = page[page.length - 1]
+      cursor = { receivedAt: last.receivedAt, id: last.id }
+    }
+    return fallback
   }
 
   /**

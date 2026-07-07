@@ -205,6 +205,143 @@ describe('InstanceStatusService.listInstances — derived status (FR-04 / §8.2)
   })
 })
 
+describe('InstanceStatusService.listInstances — running_work (release-16 FR-02 AC-1~AC-6)', () => {
+  it('AC-1: a Workflow PreToolUse in the current run surfaces as kind=workflow', () => {
+    ingestAt(1_000_000, { event_type: 'SessionStart' })
+    ingestAt(2_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Workflow',
+      tool_summary: 'run-release',
+    })
+
+    const rows = statusService.listInstances(toEpochMs(2_100_000))
+    expect(rows[0].status.raw_state).toBe('active')
+    expect(rows[0].running_work).toEqual({ kind: 'workflow', name: 'run-release' })
+  })
+
+  it('AC-2: the Workflow name is kept even after later Task/Skill PreToolUse events in the same run', () => {
+    ingestAt(1_000_000, { event_type: 'SessionStart' })
+    ingestAt(2_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Workflow',
+      tool_summary: 'run-release',
+    })
+    ingestAt(3_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Skill',
+      tool_summary: 'code-review',
+    })
+    ingestAt(4_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Task',
+      tool_summary: 'explore: look around',
+    })
+
+    const rows = statusService.listInstances(toEpochMs(4_100_000))
+    expect(rows[0].running_work).toEqual({ kind: 'workflow', name: 'run-release' })
+  })
+
+  it('AC-3: falls back to the latest Task/Skill as kind=agent/skill when no Workflow is present', () => {
+    ingestAt(1_000_000, { event_type: 'SessionStart' })
+    ingestAt(2_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Skill',
+      tool_summary: 'code-review',
+    })
+    ingestAt(3_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Task',
+      tool_summary: 'explore: look around',
+    })
+
+    const rows = statusService.listInstances(toEpochMs(3_100_000))
+    expect(rows[0].running_work).toEqual({ kind: 'agent', name: 'explore: look around' })
+  })
+
+  it('AC-4: Stop clears running_work (representative session is no longer ACTIVE)', () => {
+    ingestAt(1_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Workflow',
+      tool_summary: 'run-release',
+    })
+    ingestAt(2_000_000, { event_type: 'Stop' })
+
+    const rows = statusService.listInstances(toEpochMs(2_100_000))
+    expect(rows[0].status.raw_state).not.toBe('active')
+    expect(rows[0].running_work).toBeNull()
+  })
+
+  it('AC-4: Notification(idle_prompt) clears running_work', () => {
+    ingestAt(1_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Skill',
+      tool_summary: 'code-review',
+    })
+    ingestAt(2_000_000, { event_type: 'Notification', event_subtype: 'idle_prompt' })
+
+    const rows = statusService.listInstances(toEpochMs(2_100_000))
+    expect(rows[0].running_work).toBeNull()
+  })
+
+  it('AC-4: SessionEnd clears running_work', () => {
+    ingestAt(1_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Task',
+      tool_summary: 'explore: look around',
+    })
+    ingestAt(2_000_000, { event_type: 'SessionEnd' })
+
+    const rows = statusService.listInstances(toEpochMs(2_100_000))
+    expect(rows[0].running_work).toBeNull()
+  })
+
+  it("AC-5: UserPromptSubmit starts a new turn and clears the previous turn's running_work, even though raw_state stays ACTIVE", () => {
+    ingestAt(1_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Workflow',
+      tool_summary: 'run-release',
+    })
+    ingestAt(2_000_000, { event_type: 'UserPromptSubmit' })
+
+    const rows = statusService.listInstances(toEpochMs(2_100_000))
+    // The ACTIVE gate alone would let this through (UserPromptSubmit maps to raw_state ACTIVE);
+    // only the running-work-resolver's own boundary set (which includes UserPromptSubmit) nulls it.
+    expect(rows[0].status.raw_state).toBe('active')
+    expect(rows[0].running_work).toBeNull()
+  })
+
+  it('AC-6: an empty tool_summary on a PreToolUse event yields null without crashing', () => {
+    ingestAt(1_000_000, { event_type: 'PreToolUse', tool_name: 'Workflow', tool_summary: '' })
+
+    const rows = statusService.listInstances(toEpochMs(1_100_000))
+    expect(rows[0].running_work).toBeNull()
+  })
+
+  it('AC-6: a null tool_summary on a PreToolUse event yields null without crashing', () => {
+    ingestAt(1_000_000, { event_type: 'PreToolUse', tool_name: 'Skill', tool_summary: null })
+
+    const rows = statusService.listInstances(toEpochMs(1_100_000))
+    expect(rows[0].running_work).toBeNull()
+  })
+
+  it('regression lock: APPROVAL_WAIT (permission_prompt) clears running_work via the ACTIVE gate, not the resolver boundary set (requirements line53 over line20 — confirmed design decision, not to be relitigated)', () => {
+    // The running-work-resolver deliberately does NOT treat Notification(permission_prompt) as a
+    // boundary (see running-work-resolver.test.ts: "is NOT a boundary"). So this null result must
+    // come entirely from the ACTIVE gate in buildRow — if a future change let APPROVAL_WAIT fall
+    // through to the resolver, this test would catch it (the Workflow would incorrectly reappear).
+    ingestAt(1_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Workflow',
+      tool_summary: 'run-release',
+    })
+    ingestAt(2_000_000, { event_type: 'Notification', event_subtype: 'permission_prompt' })
+
+    const rows = statusService.listInstances(toEpochMs(2_100_000))
+    expect(rows[0].status.raw_state).toBe('approval_wait')
+    expect(rows[0].running_work).toBeNull()
+  })
+})
+
 describe('InstanceStatusService.getInstanceDetail — Agent View Lv.1 (§8.2 / §10.4)', () => {
   it('returns recent_events newest-first plus the derived status', () => {
     ingestAt(1_000_000, { event_type: 'SessionStart' })
