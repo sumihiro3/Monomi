@@ -1,9 +1,11 @@
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync, writeFileSync } from 'node:fs'
+import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import { render } from 'ink'
 import { createElement } from 'react'
 import { AppView } from './cli/components/app-view.js'
 import { createHubApiClient, createHubConnection } from './cli/hub-api-client.js'
+import { ensureHubRunning as ensureHubRunningImpl } from './cli/hub-autostart.js'
 import { type ChildPairOptions, runChildPair, runHubPair } from './cli/pairing-client.js'
 import {
   loadConfig,
@@ -11,7 +13,14 @@ import {
   type MonomiLocale,
   type MonomiRole,
 } from './config/config.js'
+import { ensureMonomiHome, resolvePaths } from './config/paths.js'
 import type { DeviceDto, DeviceRevokeResult } from './hub/dto.js'
+import {
+  hubStatus as hubStatusImpl,
+  hubStop as hubStopImpl,
+  type HubStatusResult,
+  type HubStopResult,
+} from './hub/hub-lifecycle.js'
 import { main as runHubServer } from './hub/serve.js'
 import { resolveLocale, setActiveLocale, t } from './i18n/index.js'
 import { MONOMI_VERSION } from './index.js'
@@ -19,6 +28,7 @@ import {
   type InstallHooksOptions,
   type InstallHooksResult,
   installHooks as installHooksImpl,
+  isMonomiHooksInstalled,
   uninstallHooks as uninstallHooksImpl,
 } from './install-hooks/install-hooks.js'
 
@@ -46,6 +56,13 @@ export interface CliDeps {
   /** このデバイスの role を解決する（`monomi hub` の child ガード用 / FR-01 AC-2）。 */
   loadRole: () => MonomiRole
   /**
+   * hub の疎通を確認し、不在なら自己起動してから起動完了を待つ（`monomi`（引数なし）実行時、
+   * ダッシュボード表示の前段。release-18-npx-quickstart FR-01）。`role: child` では何もせず、
+   * 既に疎通できていれば spawn しない。spawn 後の疎通確認がタイムアウトした場合は例外を投げる
+   * （`runGuarded` が終了コード 1 + メッセージ表示へ変換する）。
+   */
+  ensureHubRunning: () => Promise<void>
+  /**
    * CLI 表示ロケールを解決する（{@link run} 冒頭で `setActiveLocale` に渡す /
    * release-9-i18n FR-02 AC-4）。既定実装は `config.ts` の `loadLocale()`（`locale` フィールドのみを
    * 検証する軽量パス）を使う。`locale` と無関係なフィールドが不正な config.yml でも、--help/--version
@@ -61,8 +78,32 @@ export interface CliDeps {
   hubPair: () => Promise<void>
   /** `monomi pair --code ...` の実体（到達可能 hub で照合 → token+config 保存 / FR-02b）。 */
   childPair: (options: ChildPairOptions) => Promise<void>
+  /** `monomi hub status` の実体（pid/port を突き合わせた3状態判定 / FR-02 AC-1）。 */
+  hubStatus: () => Promise<HubStatusResult>
+  /** `monomi hub stop` の実体（稼働中なら SIGTERM + pid ファイル削除 / FR-02 AC-2）。 */
+  hubStop: () => Promise<HubStopResult>
   /** `monomi`（引数なし）の実体（Ink ダッシュボード、終了まで返らない）。 */
   runDashboard: () => Promise<void>
+  /**
+   * Monomi 起因のフックが `~/.claude/settings.json` へ既に登録済みかを判定する（初回セットアップ
+   * 確認プロンプト / release-18-npx-quickstart FR-03 AC-3）。
+   */
+  isHooksInstalled: () => boolean
+  /** 初回セットアップ確認プロンプトの拒否が既に永続化されているか（FR-03 AC-2）。 */
+  isSetupPromptDeclined: () => boolean
+  /** 初回セットアップ確認プロンプトの拒否を永続化する（FR-03 AC-2）。以後は再プロンプトしない。 */
+  markSetupPromptDeclined: () => void
+  /**
+   * 現在の実行が対話端末（TTY）かどうか（FR-03 AC-4）。既定実装は
+   * `process.stdin.isTTY && process.stdout.isTTY`。非対話（パイプ・CI 等）ではプロンプトを
+   * 出さないための判定に使う。
+   */
+  isInteractive: () => boolean
+  /**
+   * `[Y/n]` 確認を行う（{@link isInteractive} が `true` の場合のみ呼ばれる）。空応答は既定 yes
+   * として `true` を返す。
+   */
+  promptConfirm: (message: string) => Promise<boolean>
   /** 通常出力。 */
   log: (message: string) => void
   /** エラー出力。 */
@@ -77,19 +118,53 @@ async function runDashboard(): Promise<void> {
   await waitUntilExit()
 }
 
+/**
+ * `[Y/n]` 確認を `node:readline/promises` で行う（FR-03。{@link CliDeps.promptConfirm} の既定実装）。
+ *
+ * 呼び出し側（{@link maybePromptInstallHooks}）が既に `deps.isInteractive()` で TTY 判定済みの
+ * ときにのみ呼ぶ前提。空応答（Enter のみ）は既定 yes として `true` を返す。
+ *
+ * @param message 表示する質問文（例: `t('cli.setupPrompt.confirm')`）。
+ * @returns 承諾 `true` / 拒否 `false`。
+ */
+async function promptConfirmDefault(message: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = (await rl.question(message)).trim().toLowerCase()
+    return answer === '' || answer === 'y' || answer === 'yes'
+  } finally {
+    rl.close()
+  }
+}
+
 /** 実プロセスで使う既定の依存（bin 実行時に使う）。 */
 export const defaultCliDeps: CliDeps = {
   installHooks: installHooksImpl,
   uninstallHooks: uninstallHooksImpl,
   runHub: () => runHubServer(),
   loadRole: () => loadConfig().role,
+  ensureHubRunning: () => {
+    const config = loadConfig()
+    return ensureHubRunningImpl(resolvePaths(), config.role, config.port)
+  },
   loadLocale: () => resolveLocale(loadLocaleFromConfig()),
   listDevices: async () => (await createHubApiClient()).listDevices(),
   revokeDevice: async (deviceId: string) => (await createHubApiClient()).revokeDevice(deviceId),
   hubPair: () => runHubPair({ log: (message) => console.log(message) }),
   childPair: (options: ChildPairOptions) =>
     runChildPair(options, { log: (message) => console.log(message) }),
+  hubStatus: () => hubStatusImpl(resolvePaths(), loadConfig().port),
+  hubStop: () => hubStopImpl(resolvePaths()),
   runDashboard,
+  isHooksInstalled: () => isMonomiHooksInstalled(),
+  isSetupPromptDeclined: () => existsSync(resolvePaths().setupPromptStateFile),
+  markSetupPromptDeclined: () => {
+    const paths = resolvePaths()
+    ensureMonomiHome(paths)
+    writeFileSync(paths.setupPromptStateFile, '')
+  },
+  isInteractive: () => Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY),
+  promptConfirm: promptConfirmDefault,
   log: (message: string) => console.log(message),
   error: (message: string) => console.error(message),
 }
@@ -122,6 +197,84 @@ function formatDevicesTable(devices: DeviceDto[]): string {
 }
 
 /**
+ * ダッシュボード表示前に、初回セットアップ（フック未登録）を検知して確認する
+ * (release-18-npx-quickstart FR-03)。`deps.ensureHubRunning()` の後・`deps.runDashboard()` の前に
+ * 呼ぶ（`run()` の `case undefined`）。
+ *
+ * 1. フック登録済みなら何もしない（AC-3）。
+ * 2. 登録状態の判定自体が失敗した場合（`~/.claude/settings.json` が壊れた JSON 等）は、
+ *    プロンプトを出さずダッシュボード表示を継続する（判定不能を「未登録」と誤認してプロンプト
+ *    を出し、承諾時に `installHooks` がさらに壊れた JSON を書き込もうとする事態を避ける。
+ *    `monomi install-hooks` を直接叩けば同じ壊れた JSON でエラーが表示される）。
+ * 3. 過去に拒否が永続化されていれば再プロンプトせず案内1行のみ（AC-2）。
+ * 4. 非対話（`deps.isInteractive()` が `false`）ならプロンプトを出さず案内1行のみで続行する
+ *    （AC-4）。
+ * 5. 対話端末なら確認し、承諾（`true`）で `deps.installHooks()` を実行（AC-1）、拒否（`false`）で
+ *    `deps.markSetupPromptDeclined()` により永続化して案内1行を表示する（AC-2）。
+ * 6. 承諾後の `deps.installHooks()` が失敗した場合（設定ファイルの書き込み権限不足等）も、
+ *    上記の判定失敗・拒否の永続化失敗と同じ方針でダッシュボード表示をブロックせず、警告1行を
+ *    表示して継続する。
+ *
+ * @param deps 差し替え可能な副作用。
+ */
+async function maybePromptInstallHooks(deps: CliDeps): Promise<void> {
+  let hooksInstalled: boolean
+  try {
+    hooksInstalled = deps.isHooksInstalled()
+  } catch {
+    return
+  }
+  if (hooksInstalled) {
+    return
+  }
+
+  if (deps.isSetupPromptDeclined()) {
+    deps.log(t('cli.setupPrompt.notice'))
+    return
+  }
+
+  if (!deps.isInteractive()) {
+    deps.log(t('cli.setupPrompt.notice'))
+    return
+  }
+
+  const accepted = await deps.promptConfirm(t('cli.setupPrompt.confirm'))
+  if (!accepted) {
+    // 永続化の失敗（書き込み権限等）はダッシュボード表示をブロックしない。次回また
+    // プロンプトされるだけで済む（`isHooksInstalled` の判定失敗と同じ degrade-gracefully 方針）。
+    try {
+      deps.markSetupPromptDeclined()
+    } catch {
+      // 次回再プロンプトされる可能性を許容し、ここでは無視する。
+    }
+    deps.log(t('cli.setupPrompt.notice'))
+    return
+  }
+
+  // 承諾後の書き込み失敗（パーミッション不足・ディスクフル等）も、判定失敗・拒否の永続化失敗と
+  // 同じ degrade-gracefully 方針でダッシュボード表示をブロックしない。`monomi install-hooks` を
+  // 直接叩けば同じ失敗が通常のエラー終了として報告される。
+  let result: InstallHooksResult
+  try {
+    result = deps.installHooks()
+  } catch (err) {
+    deps.log(
+      t('cli.setupPrompt.installFailure', {
+        message: err instanceof Error ? err.message : String(err),
+      })
+    )
+    return
+  }
+  deps.log(
+    t('cli.installHooks.success', {
+      added: result.added,
+      settingsPath: result.settingsPath,
+      removed: result.removed,
+    })
+  )
+}
+
+/**
  * `monomi` の引数を最小限のディスパッチで解決する（サブコマンドパーサ）。
  *
  * `install-hooks`/`uninstall-hooks`（FR-01）・`hub`（FR-03）・引数なし（FR-05 のダッシュボード）
@@ -149,7 +302,11 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
 
   switch (command) {
     case undefined:
-      return runGuarded(deps, () => deps.runDashboard())
+      return runGuarded(deps, async () => {
+        await deps.ensureHubRunning()
+        await maybePromptInstallHooks(deps)
+        await deps.runDashboard()
+      })
 
     case 'hub':
       return runGuarded(deps, () => handleHubCommand(argv.slice(1), deps))
@@ -198,10 +355,11 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
 
 /**
  * `monomi hub ...` のサブディスパッチ。引数なしは hub サーバ起動（child ガード付き / FR-01 AC-2）、
- * `devices ...` はデバイス管理（FR-03）へ振り分ける。
+ * `devices ...` はデバイス管理（FR-03）、`stop`/`status` はライフサイクル管理（FR-02）へ振り分ける。
  *
- * `devices` 系は localhost の hub API をローカルトークンで叩くクライアントであり、サーバを
- * 起動しないため child ガードは掛けない（hub 未起動なら API クライアントが明瞭なエラーで落ちる）。
+ * `devices`/`pair`/`stop`/`status` はいずれも localhost の hub をローカルトークンや pid ファイル越しに
+ * 管理するだけのクライアント/管理コマンドであり、自身がサーバを起動しないため child ガードは掛けない
+ * （hub 未起動なら各実体が明瞭なエラーで落ちる、または「停止済み/稼働中」を正しく報告する）。
  *
  * @param args `hub` の後続引数（`process.argv.slice(2).slice(1)` 相当）。
  * @param deps 差し替え可能な副作用。
@@ -212,11 +370,21 @@ async function handleHubCommand(args: string[], deps: CliDeps): Promise<void> {
     if (deps.loadRole() === 'child') {
       throw new Error(t('cli.hub.childRoleGuard'))
     }
-    await deps.runHub()
+    await runHubGuardingAddrInUse(deps)
     return
   }
   if (sub === 'pair') {
     await deps.hubPair()
+    return
+  }
+  if (sub === 'status') {
+    const result = await deps.hubStatus()
+    deps.log(formatHubStatus(result))
+    return
+  }
+  if (sub === 'stop') {
+    const result = await deps.hubStop()
+    deps.log(formatHubStop(result))
     return
   }
   if (sub === 'devices') {
@@ -224,6 +392,63 @@ async function handleHubCommand(args: string[], deps: CliDeps): Promise<void> {
     return
   }
   throw new Error(`${t('cli.hub.unknownSubcommand', { sub })}\n\n${usage()}`)
+}
+
+/**
+ * `deps.runHub()` を実行し、`EADDRINUSE`（port 使用中）で失敗した場合だけ「既に稼働中の可能性」を
+ * 示す i18n メッセージへ変換する（FR-02。`monomi hub status` の案内を含める）。他の例外はそのまま
+ * 上位（{@link runGuarded}）へ伝播させ、終了コード 1 + 元のメッセージ表示に委ねる。
+ *
+ * @param deps `runHub` を提供する差し替え可能な副作用。
+ * @throws {Error} `deps.runHub()` が投げた例外（EADDRINUSE のみ文言を差し替える）。
+ */
+async function runHubGuardingAddrInUse(deps: CliDeps): Promise<void> {
+  try {
+    await deps.runHub()
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('EADDRINUSE')) {
+      throw new Error(t('cli.hub.addrInUse', { message: err.message }))
+    }
+    throw err
+  }
+}
+
+/**
+ * `monomi hub status` の表示整形（FR-02 AC-1）。
+ *
+ * @param result {@link HubStatusResult}。
+ * @returns 表示用の1行文字列。
+ */
+function formatHubStatus(result: HubStatusResult): string {
+  switch (result.state) {
+    case 'running':
+      return result.pid !== undefined
+        ? t('cli.hubStatus.running', { pid: result.pid, port: result.port ?? '' })
+        : t('cli.hubStatus.runningPidUnknown', { port: result.port ?? '' })
+    case 'stale':
+      return t('cli.hubStatus.stale', { pid: result.pid ?? '' })
+    case 'stopped':
+      return t('cli.hubStatus.stopped')
+  }
+}
+
+/**
+ * `monomi hub stop` の表示整形（FR-02 AC-2）。停止済みでもエラーにせず案内のみ表示する。
+ *
+ * `timedOut`（SIGTERM を送ったが `waitMs` 内に終了確認できず、pid ファイルも維持されたまま生存継続中）
+ * を「既に停止済み」と混同しない。混同すると実際にはまだ稼働中の hub を「停止不要」と誤案内してしまう。
+ *
+ * @param result {@link HubStopResult}。
+ * @returns 表示用の1行文字列。
+ */
+function formatHubStop(result: HubStopResult): string {
+  if (result.stopped) {
+    return t('cli.hubStop.stopped', { pid: result.pid ?? '' })
+  }
+  if (result.timedOut) {
+    return t('cli.hubStop.timedOut', { pid: result.pid ?? '' })
+  }
+  return t('cli.hubStop.alreadyStopped')
 }
 
 /**
