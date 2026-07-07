@@ -58,6 +58,8 @@ export const JA = {
 使い方:
   monomi                          稼働中 instance をダッシュボード表示（Ink）
   monomi hub                       hub API サーバを起動（DB 初期化 + bootstrap + HTTP）
+  monomi hub stop                  稼働中の hub を停止（SIGTERM・終了確認後 pid ファイル削除）
+  monomi hub status                hub の状態を表示（稼働中(pid/port)・停止中・stale pid）
   monomi hub pair                  6桁ペアリングコードを発行し到達先候補 URL を表示（hub 側）
   monomi hub devices list          登録デバイス一覧を表示（トークン有効/失効つき）
   monomi hub devices revoke <id>   device のトークンを失効（以後その token は 401）
@@ -71,6 +73,19 @@ export const JA = {
   'cli.hub.unknownSubcommand': 'monomi hub: 不明なサブコマンドです: "{sub}"',
   'cli.hub.childRoleGuard':
     'monomi hub: このデバイスは role:child として設定されています。`monomi hub` は hub デバイス上でのみ実行するか、~/.monomi/config.yml に role:hub を設定してください。',
+  'cli.hub.addrInUse':
+    'monomi hub: 起動に失敗しました — ポートが既に使用されています (EADDRINUSE)。hub が既に稼働中の可能性があります。`monomi hub status` で確認してください。\n\n元のエラー: {message}',
+  'cli.hubAutostart.timeout':
+    'monomi: hub の自動起動に失敗しました — タイムアウト内に疎通確認できませんでした。{hubLogFile} を確認するか、`monomi hub status` で状態を確認、または `monomi hub` で手動起動してください。',
+  'cli.hubStatus.running': 'hub は稼働中です（pid {pid}, port {port}）。',
+  'cli.hubStatus.runningPidUnknown': 'hub は稼働中です（port {port}。pid は不明）。',
+  'cli.hubStatus.stopped': 'hub は稼働していません。',
+  'cli.hubStatus.stale':
+    'hub は稼働していません — stale な pid ファイルが見つかりました（pid {pid}）。次回 hub 起動時に自動的に上書きされます。',
+  'cli.hubStop.stopped': 'hub を停止しました（pid {pid}）。',
+  'cli.hubStop.timedOut':
+    'hub（pid {pid}）へ SIGTERM を送信しましたが、待機時間内に終了しませんでした。まだ稼働中の可能性があります。`monomi hub status` で確認するか、再度お試しください。',
+  'cli.hubStop.alreadyStopped': 'hub は稼働していません。停止処理は不要です。',
   'cli.pair.unknownOption': 'monomi pair: 不明なオプションです: "{option}"',
   'cli.pair.valueRequired': 'monomi pair: {flag} には値が必要です',
   'cli.pair.codeRequired':
@@ -86,4 +101,9 @@ export const JA = {
     'Monomi のフックをインストールしました: {settingsPath} に {added} 件追加（陳腐化した {removed} 件を置き換え）',
   'cli.uninstallHooks.success':
     'Monomi のフックを削除しました: {settingsPath} から {removed} 件除去',
+  'cli.setupPrompt.confirm': 'install-hooks を実行しますか? [Y/n] ',
+  'cli.setupPrompt.notice':
+    'ステータスレポート用のフックがまだ登録されていません。有効にするには `monomi install-hooks` を実行してください。',
+  'cli.setupPrompt.installFailure':
+    'フックの自動インストールに失敗しました（{message}）。再試行するには `monomi install-hooks` を実行してください。',
 } satisfies Record<TranslationKey, string>
