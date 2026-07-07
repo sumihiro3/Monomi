@@ -217,20 +217,23 @@ classDiagram
     skill
   }
   class RunningWork {
-    <<interface (value object), release-16>>
+    <<interface (value object), release-16. release-18 FR-05: startedAt 追加>>
     +RunningWorkKind kind
     +string name
+    +EpochMs startedAt
   }
   class RunningWorkScanResult {
-    <<interface (value object), release-16>>
-    +bool boundaryFound
+    <<interface (value object), release-16. release-18 FR-04: 非対称境界へ再設計>>
     +RunningWork|null workflow
+    +bool sessionEndFound
     +RunningWork|null fallback
+    +bool fallbackBoundaryReached
   }
   class RunningWorkResolver {
-    <<module (running-work-resolver.ts), release-16>>
-    +scanForRunningWork(page: Event[], carriedFallback: RunningWork|null) RunningWorkScanResult$
-    -isRunningWorkBoundaryEvent(event: Event) bool$
+    <<module (running-work-resolver.ts), release-16. release-18 FR-04: Workflow候補はSessionEndのみで消灯する非対称境界>>
+    +scanForRunningWork(page: Event[], carriedFallback: RunningWork|null, carriedFallbackBoundaryReached: bool) RunningWorkScanResult$
+    -isSessionEndEvent(event: Event) bool$
+    -isFallbackBoundaryEvent(event: Event) bool$
     -runningWorkCandidateOf(event: Event) RunningWork|null$
   }
   class EscalationThresholdValues {
@@ -413,6 +416,16 @@ classDiagram
     <<module (loopback.ts)>>
     +isLoopbackAddress(address: string|null) bool$
   }
+  class HubLifecycle {
+    <<module (hub-lifecycle.ts), release-18 FR-02>>
+    +writeHubPidFile(paths: MonomiPaths, pid: int) void$
+    +readHubPidFile(paths: MonomiPaths) int$
+    +removeHubPidFile(paths: MonomiPaths) void$
+    +isProcessAlive(pid: int, options: ProcessAliveOptions) bool$
+    +isPortReachable(port: int, options: PortReachableOptions) Promise$
+    +hubStatus(paths: MonomiPaths, port: int, options: HubStatusOptions) Promise$
+    +hubStop(paths: MonomiPaths, options: HubStopOptions) Promise$
+  }
 
   class HttpServer {
     <<infrastructure>>
@@ -501,9 +514,10 @@ classDiagram
 - **UseCase**（`EventIngestionService` / `InstanceStatusService`）が複数リポジトリ・ドメインサービスを束ねる。`EventIngestionService` は「reporter は生 remote を送り hub が正規化」「初出自動登録の冪等性」をここで実現する。`InstanceStatusService` は `StatusDeriver`/`InstanceStatusRollup` で状態を導出し、`RunBoundaryScanner` 経由でイベントページングを現在 run 分に絞る。
 - **Repository** は SQL とスキーマ制約（`ARCHITECTURE.md` §7.3 ＋ `tokens` テーブル）にのみ責任を持つ。イベントは `NewEvent`、PR は `NewPrStatus` を受けて採番済みエンティティを返す。ハートビートは専用ルートを持たず、`POST /api/v1/events`（ハートビート系イベント）として ingest 経路に集約する（旧図の `HeartbeatController` は存在しない）。
 - **TokenService / PairingService** を分離し、「token のハッシュ化（SHA-256）・検証・（device 単位の一括）revoke・有効 device 集合の列挙」と「6 桁コードの発行・TTL・失敗カウント・claim 時の device 競合判定」を別の責務として扱う。
-- **wire DTO**（`src/hub/dto.ts`）: `InstanceStatusRow`／`InstanceDetail`（`InstanceStatusRow` を継承し `recent_events[]` を追加）／`DeviceDto`／`PairStartResponse`／`PairClaimPayload`・`PairClaimResponse` など。時刻の ISO8601 ⇄ epoch ms 変換（`parseIso8601ToEpochMs`/`epochMsToIso8601`）と表示状態の小文字化（`toWireStatus`）は Controller/DTO 境界で行う。`InstanceStatusRow` は release-16 で `running_work: RunningWork | null`（`status`／`session` と同じ直下の階層。`SessionDto` へは内包しない）を追加した（一覧・詳細の両方に伝播、`InstanceDetail` は継承のため個別対応不要）。要件定義時点の未解決事項（配置を `InstanceStatusRow` 直下にするか `SessionDto` 内包にするか）はこの直下配置で確定。型 `RunningWork`/`RunningWorkKind` 自体は `dto.ts` ではなく `src/status/running-work-resolver.ts`（status レイヤ）で定義し、`dto.ts` 側がそれを import する。これは「wire 型は `dto.ts` が定義する」という他の DTO の一般則に対する明示的な例外で、`StatusDto`/`StatusResult` の関係と同様に **hub→status の既存の依存方向を保つため**（status レイヤの型を hub レイヤが import する側に倒し、domain→wire の変換ステップを別途設けない）。
+- **wire DTO**（`src/hub/dto.ts`）: `InstanceStatusRow`／`InstanceDetail`（`InstanceStatusRow` を継承し `recent_events[]` を追加）／`DeviceDto`／`PairStartResponse`／`PairClaimPayload`・`PairClaimResponse` など。時刻の ISO8601 ⇄ epoch ms 変換（`parseIso8601ToEpochMs`/`epochMsToIso8601`）と表示状態の小文字化（`toWireStatus`）は Controller/DTO 境界で行う。`InstanceStatusRow` は release-16 で `running_work`（`status`／`session` と同じ直下の階層。`SessionDto` へは内包しない）を追加した（一覧・詳細の両方に伝播、`InstanceDetail` は継承のため個別対応不要）。要件定義時点の未解決事項（配置を `InstanceStatusRow` 直下にするか `SessionDto` 内包にするか）はこの直下配置で確定。型 `RunningWork`/`RunningWorkKind` 自体は `dto.ts` ではなく `src/status/running-work-resolver.ts`（status レイヤ）で定義する。release-16 時点では `dto.ts` がこの status レイヤ型をそのまま `InstanceStatusRow.running_work` の wire 型として import し変換ステップを持たなかった（既知課題 A6: `StatusDto`/`StatusResult` の関係と同様の例外と当初文書化していたが、実際には `StatusDto` 側は変換ステップを持つ点で逆のパターンだった）。release-18 FR-05 でこれを解消し、`dto.ts` に wire 型 `RunningWorkDto`（`kind`/`name`/`started_at: string|null`）と変換関数 `toRunningWorkDto(work: RunningWork | null): RunningWorkDto | null` を新設、`InstanceStatusRow.running_work` の型を `RunningWorkDto | null` に変更した。これにより `running_work` も `StatusDto`/`StatusResult` と同じ「status レイヤの型→薄い変換→wire DTO」のパターンに揃い、hub→status の依存方向自体（`dto.ts` が status レイヤの `RunningWork`/`RunningWorkKind` を import する側）は変更していない。`started_at` は {@link RunningWork.startedAt}（採用イベントの `occurredAt`）を `epochMsToIso8601` で ISO8601 化した値で、旧 hub（release-16/17。`started_at` を含まない応答を返す）との混在時の後方互換のため wire 型は `string | null` を許容する。
 - **性能（既知課題 P3 との関係）**: `running_work` の導出は `buildRow` が既に算出済みの `StatusResult`（`rawState`）を再利用してゲートするため、非 ACTIVE の instance では追加のイベント読み取りが発生しない（一覧のポーリングごとに全 instance で走る導出処理が P3 を悪化させないための設計判断）。ACTIVE な instance のみ `RunningWorkResolver.scanForRunningWork` 用の専用ページングが走る。
 - **`~/.monomi` ホーム・DB ファイルのパーミッション保護**（release-13 FR-01/FR-02、known-issues S1 解決）: home ディレクトリの作成は `ensureMonomiHome()`（`src/config/paths.ts`、定数 `HOME_DIR_MODE = 0o700`）に一本化し、`serve.ts`／`bootstrap.ts`／CLI 側 `pairing-client.ts` の 3 箇所に重複していた `mkdirSync` 呼び出しをこの 1 関数へ集約（DRY）。`mkdirSync` 後に無条件で `chmodSync` するため、新規作成・release-12 以前の既存ディレクトリのどちらでも `0o700` へ揃う（umask 非依存の自動修復）。SQLite DB ファイルは `openDatabase()`（`src/db/database.ts`、定数 `DB_FILE_MODE = 0o600`）が DDL 適用後に無条件で chmod する（`:memory:` は対象外、WAL の `-wal`/`-shm` は親ディレクトリの `0o700` 化で保護される前提）。token/`config.yml` の chmod 600 方針（既存、`ConfigWriter` 参照）と合わせ、`~/.monomi` 配下の機微ファイル・ディレクトリ全体が所有者限定アクセスとなる。
+- **hub ライフサイクル管理**（`HubLifecycle`、`src/hub/hub-lifecycle.ts`、release-18 FR-02、既知課題 A7 解消）: `~/.monomi/hub.pid` の書込・削除（`writeHubPidFile`/`removeHubPidFile`）と、pid 生存確認（`isProcessAlive`）＋ port 疎通確認（`isPortReachable`）を突き合わせた3状態判定（`hubStatus`: `running`/`stopped`/`stale`）・生存確認済み pid への SIGTERM 送信＋終了ポーリング（`hubStop`）を1モジュールに集約する。呼び出し元は2方向: (1) `hub/serve.ts` の `serve()`/`close()` が起動成功時・正常終了時に `writeHubPidFile`/`removeHubPidFile` を直接呼ぶ（同一 hub レイヤー内の依存）。(2) `monomi hub status`/`monomi hub stop`（`cli.ts`）が `hubStatus`/`hubStop` を呼ぶ（cli.ts は本図の対象外の起動エントリ、既存の `serve.ts`/`bootstrap.ts` と同様に扱う）。`isPortReachable` は cli-ink 層の `HubEndpointResolver.isReachable`/`HubEndpointOps.localhostEndpoint`（§4）と同じ「GET して応答があれば（ステータス不問で）到達」という判定パターンだが、hub レイヤーが cli レイヤーへ依存しない方針（hub→status の依存方向を保つのと同じ理由）のためこのモジュール内に意図的な別実装として持つ（ロジックの二重実装より依存方向の一貫性を優先）。この `isPortReachable` は cli-ink 層 `HubAutostart`（§4）が唯一 import するクロスレイヤー依存（cli→hub の一方向、hub→cli は無い）。
 
 ---
 
@@ -591,6 +605,7 @@ classDiagram
     +statusGlyph(display: string) string$
     +filterForKey(input: string) StatusFilter$
     +formatAge(seconds: int) string$
+    +formatRunningWorkAge(startedAt: string|null) string|null$
     +FILTER_ORDER StatusFilter[]$
   }
   class I18n {
@@ -635,6 +650,11 @@ classDiagram
     +runHubPair(deps: HubPairDeps) Promise
     +runChildPair(options: ChildPairOptions, deps: ChildPairDeps) Promise
     +normalizeEndpointUrl(input: string, defaultPort: int) string$
+  }
+  class HubAutostart {
+    <<module (hub-autostart.ts), release-18 FR-01>>
+    +ensureHubRunning(paths: MonomiPaths, role: MonomiRole, port: int, options: EnsureHubRunningOptions) Promise$
+    -spawnHub(paths: MonomiPaths, options: EnsureHubRunningOptions) void$
   }
   class AppView {
     <<ui component (container)>>
@@ -754,6 +774,7 @@ classDiagram
   HelpOverlay ..> I18n : t() (help lines)
   InstanceTable ..> I18n : t() (empty-state label)
   WatchingIndicator ..> I18n : t() (app.watching label)
+  HubAutostart ..> I18n : t() (timeout error message)
 
   note for InstanceTable "既知バックログ A4: 名前が実体（カードグリッド）と不一致、かつ useStdout+columnsForWidth のレイアウト計算を持ち presentational 規約を逸脱。release-5 では解消せず（InstanceCardGrid への改名等は別作業）。"
   note for WatchingIndicator "release-10 FR-02: components/* の慣例（状態を持たない presentational）に対する意図的な例外。1000ms 点滅トグル用の visible state と setInterval をここに閉じ込め、AppView 本体の再レンダーを誘発しない（既知の P4 悪化防止）。"
@@ -765,6 +786,7 @@ classDiagram
 - `HubApiClient` は `baseUrl` 非依存の読み取り/管理クライアント（一覧・詳細・devices 一覧/revoke・pair start/claim）。到達先の選定は持たず、`createHubApiClient`/`createHubConnection`（factory）が `HubEndpointResolver` で候補を優先順にプローブして配線する。`createHubConnection` は再解決ファクトリ同梱の `HubConnection` を返し、`PollingLoop` の watch 中フォールバックに供給する。
 - `HubEndpointResolver` と `HubEndpointOps`／`Network` がマルチエンドポイント方針（Tailscale `100.64.0.0/10` 優先 → LAN の順、到達可否は HTTP 応答有無で判定）を実装する。`Network` は `monomi hub pair` の候補 URL 提示（`buildCandidateUrls`）にも使う。reporter（bash）側は同等ロジックをシェルで別実装する。
 - `PairingClient`（`runHubPair`/`runChildPair`）が §9 のペアリング CLI を実装し、`HubApiClient`（pair start/claim）・`Network`（候補 URL）・`ConfigWriter`（`role`/`hub_endpoints`/`device_id` の部分書き込み、`chmod 600`）を束ねる。
+- `HubAutostart`（`ensureHubRunning`、release-18 FR-01、既知課題 A7 解消）は `monomi`（引数なし）実行時にダッシュボード表示前で呼ばれる自己修復自動起動の実体。`role: child` では何もせず（`role` が `child` 以外なら hub 起動対象と見なす）、既に `port` へ疎通できれば何もしない。疎通できなければ自パッケージ内 `dist/bin.js` を `process.execPath` で `hub` サブコマンド付き detached spawn（`unref()` 済み、`spawnHub` private helper）し、stdout/stderr を `~/.monomi/hub.log` へ追記リダイレクトしてリトライ付きで起動完了を待つ（既定 10 秒でタイムアウトし `hub.log` 参照を含む例外を投げる）。疎通確認そのものは hub-api 層 `HubLifecycle.isPortReachable`（§3 参照）を直接 import して使う——これが本図中で唯一の cli-ink→hub-api のクロスレイヤー依存（逆方向の hub→cli 依存は無い）。タイムアウト時のエラーメッセージ整形は他の cli-ink モジュールと同様 `I18n.t()` 経由（`hubLogFile` 参照を含む）。Ink コンポーネント・`HubApiClient` には依存しない（ダッシュボード起動より前段で完結する処理のため）。
 - `KeyBindingController` はキー → アクションの薄い写像に徹する。ビュー状態（選択位置・`ViewMode`）は持たず、`handleKey(input, KeyFlags, viewMode)` の引数で受け取り、画面遷移・選択移動は `KeyBindingHost`（`AppView` が React state で実装）へ委譲する。フィルタキー解決だけ `StatusDisplay.filterForKey` を使う。**`PollingLoop` には依存しない**（watch は常時 ON でトグルを持たないため、旧図の依存エッジは削除）。
 - `InstanceListStore` は取得結果とフィルタ状態のみを保持し、`filtered()`/`projectRows()`（`ClientRollup` 委譲）を提供する。`ClientRollup` は hub が返す numeric priority を `max()` するだけで、優先順位の意味は解釈しない。
 - View は Container（`AppView`／`DetailView`: 状態と API 呼び出しを持つ）と Presentational（`InstanceCard`／`StatusFilterBar`／`HelpOverlay`: props を描くだけ）に分離。`AppView` は 1 instance = 1 枚の `InstanceCard` を `InstanceTable`（列数は `CardGrid.columnsForWidth` が端末幅と TTY 判定で決定）で並べる。`DetailView` は自前で `PollingLoop<InstanceDetail>` を張り、`pollIntervalMs` 間隔で `getInstanceDetail` を呼び直して status/イベントタイムラインを自動更新し、アンマウントで確実に停止する。`WatchingIndicator`（release-10 FR-02、`app-view.tsx` から分離）は見た目は presentational だが、この分離規約に対する唯一の意図的な例外として `visible` state と 1000ms `setInterval` を自身に閉じ込める。理由は `AppView` がすでに抱える再レンダー過多（既知バックログ P4）を、点滅の再描画トリガーで悪化させないため（React は子の `setState` だけでは親を再レンダーしない性質を利用）。`isRunning: boolean` を props に取り、`AppView` 本体の state は増やさない。
@@ -810,6 +832,7 @@ classDiagram
 | PairingService                                                              | hub-api       | domain service                                  | 6 桁コードの発行・TTL・失敗カウント・device 競合判定                                                                                                                                               |
 | AuthResolver                                                                | hub-api       | middleware                                      | Bearer token → device 解決（HttpServer 前段で全ルートに適用）                                                                                                                                      |
 | Loopback                                                                    | hub-api       | module (loopback.ts)                            | 送信元が loopback かの判定（pair/start・devices 管理の共有ガード）                                                                                                                                 |
+| HubLifecycle                                                                | hub-api       | module (hub-lifecycle.ts), release-18           | pid ファイル管理（書込/削除）・生存確認＋port 疎通の3状態判定（`hubStatus`）・検証済み SIGTERM 停止（`hubStop`）                                                                                   |
 | Router                                                                      | hub-api       | infrastructure                                  | メソッド＋パターンのルート照合（public フラグ付き）                                                                                                                                                |
 | createHubServer                                                             | hub-api       | factory                                         | Repository→Service→Controller→Router→HttpServer の DI 配線                                                                                                                                         |
 | HttpServer                                                                  | hub-api       | infrastructure                                  | HTTP 入出力・認証ゲート・JSON 変換の薄い層                                                                                                                                                         |
@@ -826,6 +849,7 @@ classDiagram
 | KeyBindingController                                                        | cli-ink       | controller                                      | キー入力 → アクションの薄い写像（PollingLoop に非依存）                                                                                                                                            |
 | ConfigWriter                                                                | cli-ink       | module (config/config-writer.ts)                | child ペアリング設定の部分書き込み（chmod 600）                                                                                                                                                    |
 | PairingClient                                                               | cli-ink       | module (pairing-client.ts)                      | `monomi hub pair` / `monomi pair` のフロー実装                                                                                                                                                     |
+| HubAutostart                                                                | cli-ink       | module (hub-autostart.ts), release-18           | `monomi` 起動時の hub 自己修復自動起動（疎通確認→不在なら detached spawn→リトライ疎通待ち）                                                                                                        |
 | AppView / DetailView                                                        | cli-ink       | ui component (container)                        | 状態と API を持つコンテナ（DetailView は詳細を自動更新）                                                                                                                                           |
 | InstanceTable                                                               | cli-ink       | ui component (grid container)                   | カードグリッド描画（A4: 命名不一致・レイアウト計算保持の逸脱あり）                                                                                                                                 |
 | InstanceCard / StatusFilterBar / HelpOverlay                                | cli-ink       | ui component (presentational)                   | props を描くだけ                                                                                                                                                                                   |
