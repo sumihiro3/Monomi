@@ -11,6 +11,7 @@ import {
 } from './hook-definitions.js'
 import {
   installHooks,
+  isMonomiHooksInstalled,
   mergeMonomiHooks,
   removeMonomiHooks,
   uninstallHooks,
@@ -464,5 +465,60 @@ describe('installHooks reporter deployment (FR-02)', () => {
     // フック登録まで進んでいない → settings.json は作られない。
     expect(fs.existsSync(settingsPath)).toBe(false)
     expect(fs.existsSync(path.join(paths.home, 'monomi-report.sh'))).toBe(false)
+  })
+})
+
+describe('isMonomiHooksInstalled (release-18-npx-quickstart FR-03 AC-3)', () => {
+  const tmpDirs: string[] = []
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  function tmpSettingsPath(initial?: ClaudeSettings): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-hooks-installed-'))
+    tmpDirs.push(dir)
+    const p = path.join(dir, '.claude', 'settings.json')
+    if (initial) {
+      fs.mkdirSync(path.dirname(p), { recursive: true })
+      fs.writeFileSync(p, JSON.stringify(initial, null, 2))
+    }
+    return p
+  }
+
+  it('returns false when settings.json does not exist yet', () => {
+    const settingsPath = tmpSettingsPath()
+    expect(isMonomiHooksInstalled(settingsPath)).toBe(false)
+  })
+
+  it('returns false when settings.json has no Monomi-marked hooks', () => {
+    const settingsPath = tmpSettingsPath(fixtureSettings())
+    expect(isMonomiHooksInstalled(settingsPath)).toBe(false)
+  })
+
+  it('returns true after installHooks has registered the Monomi hooks', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-home-installed-'))
+    tmpDirs.push(dir)
+    const settingsPath = tmpSettingsPath(fixtureSettings())
+    installHooks({ settingsPath, paths: resolvePaths(path.join(dir, '.monomi')) })
+    expect(isMonomiHooksInstalled(settingsPath)).toBe(true)
+  })
+
+  it('returns false again after uninstallHooks removes them', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-home-uninstalled-'))
+    tmpDirs.push(dir)
+    const settingsPath = tmpSettingsPath(fixtureSettings())
+    installHooks({ settingsPath, paths: resolvePaths(path.join(dir, '.monomi')) })
+    uninstallHooks({ settingsPath })
+    expect(isMonomiHooksInstalled(settingsPath)).toBe(false)
+  })
+
+  it('throws on malformed JSON instead of silently reporting "not installed"', () => {
+    const settingsPath = tmpSettingsPath()
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
+    fs.writeFileSync(settingsPath, '{ not valid json')
+    expect(() => isMonomiHooksInstalled(settingsPath)).toThrow(/malformed JSON/)
   })
 })
