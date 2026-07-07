@@ -76,10 +76,6 @@ const CHECK_SCHEMA = {
   },
 }
 
-// advisor(サーバーサイド相談ツール)は応答がストールする既知障害があるため使用を禁止する(2026-07-06 に再現)
-const ADVISOR_BAN =
-  'advisor 等のサーバーサイド相談ツールは呼び出さないこと(応答がストールする既知障害があるため)。自身の分析のみで作業を完結すること。'
-
 phase('検査')
 const checkModel = config.models?.check ?? 'haiku'
 const results = await parallel(
@@ -88,7 +84,7 @@ const results = await parallel(
       c.cwd && c.cwd !== '.' ? `カレント作業ディレクトリ配下の ${c.cwd} で` : 'カレント作業ディレクトリ(リポジトリルート)で'
     return () =>
       agent(
-        `${ADVISOR_BAN}\n${where} \`${c.cmd}\` を実行し、結果を報告してください。失敗しても修正せず、check="${c.key}" として成否のみ返すこと。` +
+        `${where} \`${c.cmd}\` を実行し、結果を報告してください。失敗しても修正せず、check="${c.key}" として成否のみ返すこと。` +
           `成否は必ずコマンドの exit code で判定すること (exit 0=成功。警告が出ていても exit 0 なら成功とする。自分の品質判断を混ぜない)。` +
           `失敗時は failedItems に失敗箇所 (ファイル:行・テスト名・エラーコード等) を文字列配列で必ず列挙し、detail にエラーの要点を書くこと。` +
           `成功時は failedItems を空配列にすること。コマンド自体が実行できない場合 (コマンド不存在・起動失敗等) も passed=false とし、failedItems にその旨を含めること。`,
