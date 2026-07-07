@@ -5,6 +5,7 @@ import { type Database, openDatabase } from '../db/database.js'
 import type { EpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
 import { bootstrap } from './bootstrap.js'
+import { removeHubPidFile, writeHubPidFile } from './hub-lifecycle.js'
 import { createHubServer, type HttpServer } from './http-server.js'
 
 /**
@@ -40,7 +41,7 @@ export interface HubHandle {
   deviceId: string
   /** ローカル用の生トークン（reporter/CLI へ渡す値。§0.3/§9）。 */
   rawToken: string
-  /** サーバ停止 + DB クローズ。 */
+  /** サーバ停止 + DB クローズ + `~/.monomi/hub.pid` 削除（FR-02。SIGINT/SIGTERM 経路で呼ばれる正常終了）。 */
   close(): Promise<void>
 }
 
@@ -72,6 +73,8 @@ function thresholdsFromConfig(paths: MonomiPaths): EscalationThresholds {
  *    ローカルトークン発行（FR-03 AC-3/AC-4）を冪等に済ませる。
  * 3. config 由来の閾値で DI 配線した {@link HttpServer} を待ち受ける。バインド先は
  *    `options.host` > config `bind:` > 既定 `0.0.0.0` の優先順で解決する（FR-06 AC-1）。
+ * 4. 待受成功後、自 pid を `~/.monomi/hub.pid` へ書き込む（FR-02。`monomi hub status`/`stop` の
+ *    管理対象になる。既存ファイルがあっても無条件に上書きし stale pid を自己回復する）。
  *
  * @param options 依存の上書き（省略可）。
  * @returns 起動済み hub の {@link HubHandle}。
@@ -92,6 +95,7 @@ export async function serve(options: ServeOptions = {}): Promise<HubHandle> {
     thresholds: thresholdsFromConfig(paths),
   })
   const port = await server.listen(options.port ?? config.port, host)
+  writeHubPidFile(paths, process.pid)
 
   log(`Monomi hub listening on http://${host}:${port} (device: ${boot.deviceId})`)
 
@@ -104,6 +108,7 @@ export async function serve(options: ServeOptions = {}): Promise<HubHandle> {
     close: async () => {
       await server.close()
       db.close()
+      removeHubPidFile(paths)
     },
   }
 }
