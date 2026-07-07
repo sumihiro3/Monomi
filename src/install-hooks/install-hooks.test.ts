@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { MONOMI_HOME_ENV, resolvePaths, type MonomiPaths } from '../config/paths.js'
 import {
   buildHookCommand,
   buildHookDefinitions,
@@ -199,13 +200,24 @@ describe('installHooks / uninstallHooks (filesystem)', () => {
     return p
   }
 
+  /**
+   * reporter 配置先を隔離するための `~/.monomi` 相当の一時ディレクトリを用意する（未作成のまま返す。
+   * `installHooks` 内の `ensureMonomiHome` が作成する）。実 home を汚さないため、reporter 配置を
+   * 伴う `installHooks` 呼び出しには必ずこれを渡す。
+   */
+  function tmpMonomiPaths(): MonomiPaths {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-home-'))
+    tmpDirs.push(dir)
+    return resolvePaths(path.join(dir, '.monomi'))
+  }
+
   function read(p: string): ClaudeSettings {
     return JSON.parse(fs.readFileSync(p, 'utf8')) as ClaudeSettings
   }
 
   it('AC-1: registers all 7 hook events with the Monomi marker', () => {
     const settingsPath = tmpSettingsPath(fixtureSettings())
-    const result = installHooks({ settingsPath })
+    const result = installHooks({ settingsPath, paths: tmpMonomiPaths() })
     expect(result.added).toBe(8)
 
     const after = read(settingsPath)
@@ -219,7 +231,7 @@ describe('installHooks / uninstallHooks (filesystem)', () => {
 
   it('AC-2: preserves foreign hooks and unrelated settings', () => {
     const settingsPath = tmpSettingsPath(fixtureSettings())
-    installHooks({ settingsPath })
+    installHooks({ settingsPath, paths: tmpMonomiPaths() })
     const after = read(settingsPath)
 
     expect(countForeign(after)).toBe(3)
@@ -235,9 +247,10 @@ describe('installHooks / uninstallHooks (filesystem)', () => {
 
   it('AC-3: running twice does not duplicate Monomi hooks', () => {
     const settingsPath = tmpSettingsPath(fixtureSettings())
-    installHooks({ settingsPath })
+    const paths = tmpMonomiPaths()
+    installHooks({ settingsPath, paths })
     const first = read(settingsPath)
-    const second = installHooks({ settingsPath })
+    const second = installHooks({ settingsPath, paths })
     const after = read(settingsPath)
 
     expect(second.removed).toBe(8)
@@ -249,7 +262,7 @@ describe('installHooks / uninstallHooks (filesystem)', () => {
 
   it('AC-4: uninstall removes only Monomi hooks, foreign hooks remain', () => {
     const settingsPath = tmpSettingsPath(fixtureSettings())
-    installHooks({ settingsPath })
+    installHooks({ settingsPath, paths: tmpMonomiPaths() })
     const result = uninstallHooks({ settingsPath })
     const after = read(settingsPath)
 
@@ -263,22 +276,67 @@ describe('installHooks / uninstallHooks (filesystem)', () => {
   it('creates settings.json (and parent dir) when it does not exist', () => {
     const settingsPath = tmpSettingsPath()
     expect(fs.existsSync(settingsPath)).toBe(false)
-    installHooks({ settingsPath })
+    installHooks({ settingsPath, paths: tmpMonomiPaths() })
     expect(fs.existsSync(settingsPath)).toBe(true)
     expect(countMonomi(read(settingsPath))).toBe(8)
   })
 
   it('honors a custom reporter script path in the written command', () => {
     const settingsPath = tmpSettingsPath()
-    installHooks({ settingsPath, reporterScript: '/opt/monomi/report.sh' })
+    installHooks({
+      settingsPath,
+      paths: tmpMonomiPaths(),
+      reporterScript: '/opt/monomi/report.sh',
+    })
     const after = read(settingsPath)
     const cmd = after.hooks?.SessionStart?.[0]?.hooks?.[0]?.command
     expect(cmd).toBe(`bash /opt/monomi/report.sh ${MONOMI_HOOK_MARKER}`)
   })
 
+  it('derives the hook command path from a non-default paths.home (e.g. MONOMI_HOME) without an explicit reporterScript', () => {
+    // reporterScript を省略した場合でも、フック command が指すパスは実際に reporter を
+    // 配置した paths.home と一致しなければならない（ズレるとフックがサイレントに失敗する）。
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+    installHooks({ settingsPath, paths })
+
+    const after = read(settingsPath)
+    const cmd = after.hooks?.SessionStart?.[0]?.hooks?.[0]?.command
+    const expectedReporterPath = path.join(paths.home, 'monomi-report.sh')
+    expect(cmd).toBe(`bash ${expectedReporterPath} ${MONOMI_HOOK_MARKER}`)
+    // 導出したパスは実際に reporter が配置された場所と一致する。
+    expect(fs.existsSync(expectedReporterPath)).toBe(true)
+  })
+
+  it('honors MONOMI_HOME end-to-end: hook command matches the actual reporter deployment path', () => {
+    // paths / reporterScript のどちらも明示指定せず、環境変数 MONOMI_HOME 経由の切り替えだけで
+    // reporter 配置先とフック command のパスが一致し続けることを確認する（本件の再発防止）。
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-envhome-'))
+    tmpDirs.push(dir)
+    const monomiHome = path.join(dir, '.monomi')
+    const prevEnv = process.env[MONOMI_HOME_ENV]
+    process.env[MONOMI_HOME_ENV] = monomiHome
+    try {
+      const settingsPath = tmpSettingsPath()
+      installHooks({ settingsPath })
+
+      const after = read(settingsPath)
+      const cmd = after.hooks?.SessionStart?.[0]?.hooks?.[0]?.command
+      const expectedReporterPath = path.join(monomiHome, 'monomi-report.sh')
+      expect(cmd).toBe(`bash ${expectedReporterPath} ${MONOMI_HOOK_MARKER}`)
+      expect(fs.existsSync(expectedReporterPath)).toBe(true)
+    } finally {
+      if (prevEnv === undefined) {
+        delete process.env[MONOMI_HOME_ENV]
+      } else {
+        process.env[MONOMI_HOME_ENV] = prevEnv
+      }
+    }
+  })
+
   it('writes atomically and leaves no temp file behind', () => {
     const settingsPath = tmpSettingsPath(fixtureSettings())
-    installHooks({ settingsPath })
+    installHooks({ settingsPath, paths: tmpMonomiPaths() })
     const leftovers = fs
       .readdirSync(path.dirname(settingsPath))
       .filter((name) => name.includes('.tmp'))
@@ -289,7 +347,7 @@ describe('installHooks / uninstallHooks (filesystem)', () => {
     const settingsPath = tmpSettingsPath()
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
     fs.writeFileSync(settingsPath, '{ this is not json ')
-    expect(() => installHooks({ settingsPath })).toThrow(/malformed JSON/)
+    expect(() => installHooks({ settingsPath, paths: tmpMonomiPaths() })).toThrow(/malformed JSON/)
     // 元ファイルは無傷。
     expect(fs.readFileSync(settingsPath, 'utf8')).toBe('{ this is not json ')
   })
@@ -298,14 +356,113 @@ describe('installHooks / uninstallHooks (filesystem)', () => {
     const settingsPath = tmpSettingsPath()
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
     fs.writeFileSync(settingsPath, '[1, 2, 3]')
-    expect(() => installHooks({ settingsPath })).toThrow(/expected a JSON object/)
+    expect(() => installHooks({ settingsPath, paths: tmpMonomiPaths() })).toThrow(
+      /expected a JSON object/
+    )
   })
 
   it('treats an empty settings.json file as an empty object', () => {
     const settingsPath = tmpSettingsPath()
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
     fs.writeFileSync(settingsPath, '')
-    installHooks({ settingsPath })
+    installHooks({ settingsPath, paths: tmpMonomiPaths() })
     expect(countMonomi(read(settingsPath))).toBe(8)
+  })
+})
+
+describe('installHooks reporter deployment (FR-02)', () => {
+  const tmpDirs: string[] = []
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  function tmpSettingsPath(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-hooks-'))
+    tmpDirs.push(dir)
+    return path.join(dir, '.claude', 'settings.json')
+  }
+
+  function tmpMonomiPaths(): MonomiPaths {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-home-'))
+    tmpDirs.push(dir)
+    return resolvePaths(path.join(dir, '.monomi'))
+  }
+
+  function tmpReporterSource(content: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-reporter-src-'))
+    tmpDirs.push(dir)
+    const p = path.join(dir, 'monomi-report.sh')
+    fs.writeFileSync(p, content, { mode: 0o755 })
+    return p
+  }
+
+  function tmpMissingReporterSource(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-reporter-missing-'))
+    tmpDirs.push(dir)
+    return path.join(dir, 'monomi-report.sh')
+  }
+
+  it('AC-1: deploys the bundled reporter with exec permission before registering hooks', () => {
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+    const source = tmpReporterSource('#!/usr/bin/env bash\necho packaged-reporter\n')
+
+    const result = installHooks({ settingsPath, paths, reporterSourcePath: source })
+
+    const deployedPath = path.join(paths.home, 'monomi-report.sh')
+    expect(fs.existsSync(deployedPath)).toBe(true)
+    expect(fs.readFileSync(deployedPath, 'utf8')).toBe(fs.readFileSync(source, 'utf8'))
+    expect(fs.statSync(deployedPath).mode & 0o777).toBe(0o755)
+    // ~/.monomi 自体も 0o700 で用意される（既存の paths.test.ts と同じ規約）。
+    expect(fs.statSync(paths.home).mode & 0o777).toBe(0o700)
+    // reporter 配置に続けて 7 フック（8 エントリ）も登録される。
+    expect(result.added).toBe(8)
+  })
+
+  it('resolves the real packaged reporter/monomi-report.sh by default (no override)', () => {
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+
+    installHooks({ settingsPath, paths })
+
+    const deployedPath = path.join(paths.home, 'monomi-report.sh')
+    // install-hooks.ts と同じ相対位置（2階層上 → reporter/monomi-report.sh）を
+    // このテストファイル（同一ディレクトリ）からも解決し、内容が一致することを確認する。
+    const realSource = new URL('../../reporter/monomi-report.sh', import.meta.url)
+    expect(fs.readFileSync(deployedPath, 'utf8')).toBe(fs.readFileSync(realSource, 'utf8'))
+  })
+
+  it('AC-2: overwrites an existing reporter file that differs from the bundled version', () => {
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+    fs.mkdirSync(paths.home, { recursive: true })
+    const deployedPath = path.join(paths.home, 'monomi-report.sh')
+    fs.writeFileSync(deployedPath, '#!/usr/bin/env bash\necho old-hand-edited-version\n', {
+      mode: 0o644,
+    })
+
+    const source = tmpReporterSource('#!/usr/bin/env bash\necho packaged-reporter-v2\n')
+    installHooks({ settingsPath, paths, reporterSourcePath: source })
+
+    expect(fs.readFileSync(deployedPath, 'utf8')).toContain('packaged-reporter-v2')
+    expect(fs.readFileSync(deployedPath, 'utf8')).not.toContain('old-hand-edited-version')
+    expect(fs.statSync(deployedPath).mode & 0o777).toBe(0o755)
+  })
+
+  it('AC-3: aborts before registering hooks when reporter deployment fails', () => {
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+    const missingSource = tmpMissingReporterSource()
+
+    expect(() => installHooks({ settingsPath, paths, reporterSourcePath: missingSource })).toThrow(
+      /failed to deploy reporter script/
+    )
+
+    // フック登録まで進んでいない → settings.json は作られない。
+    expect(fs.existsSync(settingsPath)).toBe(false)
+    expect(fs.existsSync(path.join(paths.home, 'monomi-report.sh'))).toBe(false)
   })
 })

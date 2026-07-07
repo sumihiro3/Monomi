@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { render } from 'ink'
 import { createElement } from 'react'
@@ -322,9 +322,32 @@ async function runGuarded(deps: CliDeps, action: () => Promise<void>): Promise<n
   }
 }
 
-// `node dist/cli.js`（= `monomi` bin）として直接起動されたときだけ実行する。
-// vitest からの import では発火しない（hub/serve.ts と同じガード方式、§class-diagram §4）。
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+/**
+ * 直接起動判定用に `process.argv[1]` を実体パス（realpath）へ解決する。
+ *
+ * `npm install -g` / `npm link` は bin をシンボリックリンクとして配置するため、
+ * `process.argv[1]` はシンボリックリンクのパスのままだが、`import.meta.url` は
+ * Node がシンボリックリンクを解決した実体パスの URL になる。両者を素の文字列比較すると
+ * シンボリックリンク経由の起動を「直接起動ではない」と誤判定し、以降の `run()` が
+ * 発火しない（= npm 経由でグローバルインストールした `monomi` コマンドが無反応になる）。
+ * `realpathSync` が失敗するケース（存在しないパス等）は起動判定に倒さず、素のパスへ
+ * フォールバックする（例外で起動処理全体を止めないため）。
+ */
+export function resolveInvokedPath(argvPath: string | undefined): string | undefined {
+  if (!argvPath) return undefined
+  try {
+    return realpathSync(argvPath)
+  } catch {
+    return argvPath
+  }
+}
+
+// `node dist/cli.js` として直接起動されたときだけ実行する（`monomi` bin は release-17 以降
+// `dist/bin.js` を指し、そこから Node バージョン検査後にこのモジュールを dynamic import して
+// `run()` を明示的に呼ぶため、このガードは発火しない。`process.argv[1]` は `dist/bin.js` の
+// パスであり、このファイル自身の `import.meta.url` とは一致しないため）。
+// vitest からの import でも発火しない（hub/serve.ts と同じガード方式、§class-diagram §4）。
+if (resolveInvokedPath(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void run(process.argv.slice(2)).then((code) => {
     process.exitCode = code
   })

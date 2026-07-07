@@ -1,5 +1,7 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { ensureMonomiHome, resolvePaths, type MonomiPaths } from '../config/paths.js'
 import {
   buildHookDefinitions,
   defaultSettingsPath,
@@ -7,6 +9,70 @@ import {
   isMonomiCommand,
   type MonomiHookDefinition,
 } from './hook-definitions.js'
+
+/**
+ * npm パッケージ同梱の reporter スクリプト（配置元）の既定パス。
+ *
+ * `import.meta.url`（このファイル自身の URL）起点で解決するため、`src/install-hooks/install-hooks.ts`
+ * （vitest 実行時）・`dist/install-hooks/install-hooks.js`（pack 後）のいずれのツリーでも
+ * 「install-hooks から見て2階層上 → `reporter/monomi-report.sh`」という同一の相対位置を指す
+ * （src・dist はどちらもリポジトリ/パッケージルート直下に配置されるため）。
+ */
+const DEFAULT_REPORTER_SOURCE = new URL('../../reporter/monomi-report.sh', import.meta.url)
+
+/** 配置後の reporter スクリプトに付与するパーミッション（owner rwx・group/other rx）。 */
+const REPORTER_SCRIPT_MODE = 0o755
+
+/**
+ * 同梱の reporter スクリプトを `paths.home` 配下の `monomi-report.sh`（絶対パス）へ配置する（FR-02）。
+ *
+ * `paths.home` を {@link ensureMonomiHome} で用意してから常に上書きコピーし、実行権限
+ * （{@link REPORTER_SCRIPT_MODE}）を付与する。既存ファイルの内容がどうであれ同梱版を正として
+ * 上書きする（手動配置していた既存ユーザーの改変も含めて上書きされる仕様）。
+ *
+ * ここで解決する絶対パスは、フック command 文字列に埋め込む reporterScript の既定値
+ * （{@link defaultReporterScriptFor} が導出する）と常に一致させる必要がある。両者が乖離すると
+ * reporter は配置されるのにフックが別パスを呼び出し、状態レポートがサイレントに失敗する
+ * （known-issues 参照）。
+ *
+ * @param paths `~/.monomi` のパス集合（テスト時は隔離用の一時ディレクトリを渡す）。
+ * @param source 配置元スクリプトのパス（既定 {@link DEFAULT_REPORTER_SOURCE}。テスト用に上書き可能）。
+ * @throws {Error} ディレクトリ作成・コピー・chmod のいずれかが失敗した場合（原因を `cause` に保持）。
+ */
+function deployReporterScript(
+  paths: MonomiPaths,
+  source: string | URL = DEFAULT_REPORTER_SOURCE
+): void {
+  const dest = path.join(paths.home, 'monomi-report.sh')
+  try {
+    ensureMonomiHome(paths)
+    fs.copyFileSync(source, dest)
+    fs.chmodSync(dest, REPORTER_SCRIPT_MODE)
+  } catch (cause) {
+    throw new Error(`failed to deploy reporter script to ${dest}: ${(cause as Error).message}`, {
+      cause,
+    })
+  }
+}
+
+/**
+ * フック command 文字列に埋め込む reporter パスの既定値を `paths.home` から導出する。
+ *
+ * `paths.home` が既定値（`~/.monomi`、`resolvePaths()` を無指定で呼んだ場合と同じ）と一致する
+ * ときは、シェル展開前提の {@link DEFAULT_REPORTER_SCRIPT}（`~/.monomi/monomi-report.sh`）を
+ * そのまま使う。`MONOMI_HOME` 環境変数などで `paths.home` が既定と異なる場所に変更されている
+ * 場合は、{@link deployReporterScript} の実際の配置先と一致させるため `paths.home` 起点の絶対
+ * パスを使う。これにより reporter の配置先とフックが呼び出すパスが常に一致する。
+ *
+ * @param paths `~/.monomi` のパス集合。
+ * @returns フック command に埋め込む reporter パス。
+ */
+function defaultReporterScriptFor(paths: MonomiPaths): string {
+  const defaultHome = path.join(os.homedir(), '.monomi')
+  return paths.home === defaultHome
+    ? DEFAULT_REPORTER_SCRIPT
+    : path.join(paths.home, 'monomi-report.sh')
+}
 
 /** settings.json 内の 1 command エントリ（`hooks[event][i].hooks[j]`）。 */
 export interface HookCommandEntry {
@@ -37,8 +103,16 @@ export interface ClaudeSettings {
 export interface InstallHooksOptions {
   /** settings.json のパス（既定 `~/.claude/settings.json`）。 */
   settingsPath?: string
-  /** reporter スクリプトのパス（既定 `~/.monomi/monomi-report.sh`）。 */
+  /**
+   * フック command 文字列に埋め込む reporter パス（省略時は {@link defaultReporterScriptFor} が
+   * `paths`（実際の reporter 配置先）から導出する。`paths` も省略時は `~/.monomi/monomi-report.sh`
+   * のシェル展開前提の表記になる）。
+   */
   reporterScript?: string
+  /** `~/.monomi` のパス集合（既定 {@link resolvePaths}）。reporter 配置先の解決に使う。テスト用。 */
+  paths?: MonomiPaths
+  /** 同梱 reporter スクリプトの配置元パス（既定はパッケージ同梱パス）。テストでの隔離用。 */
+  reporterSourcePath?: string | URL
 }
 
 /** install/uninstall の結果サマリ（bin がユーザーへ表示するのに使う）。 */
@@ -184,16 +258,27 @@ function writeSettingsAtomic(settingsPath: string, settings: ClaudeSettings): vo
 }
 
 /**
- * Monomi の 7 フックを `~/.claude/settings.json` へ冪等に登録する（FR-01 AC-1〜AC-3）。
+ * 同梱 reporter の配置 → Monomi の 7 フックを `~/.claude/settings.json` へ冪等に登録する
+ * （FR-02 AC-1〜AC-3 / FR-01 AC-1〜AC-3）。
  *
- * read→merge→atomic write の順で行い、他ツール由来のフック・設定は保持する。
+ * 先に {@link deployReporterScript} で `paths.home` 配下（既定 `~/.monomi/monomi-report.sh`）に
+ * 配置し（失敗時はここで例外が伝播し、フック登録には進まない = AC-3）、成功したら read→merge→
+ * atomic write の順でフックを登録する。フック command に埋め込む reporter パスは
+ * {@link defaultReporterScriptFor} で同じ `paths` から導出するため、`MONOMI_HOME` 等で配置先を
+ * 変えても reporter の実配置先とフックの呼び出し先は常に一致する。他ツール由来のフック・設定は
+ * 保持する。
  *
- * @param options settings.json / reporter スクリプトのパス上書き（省略可）。
+ * @param options settings.json / reporter 関連パスの上書き（省略可）。
  * @returns 追加・除去件数を含む結果。
+ * @throws {Error} reporter の配置に失敗した場合（権限エラー等。原因は `cause` に保持）。
  */
 export function installHooks(options: InstallHooksOptions = {}): InstallHooksResult {
   const settingsPath = options.settingsPath ?? defaultSettingsPath()
-  const reporterScript = options.reporterScript ?? DEFAULT_REPORTER_SCRIPT
+  const paths = options.paths ?? resolvePaths()
+  const reporterScript = options.reporterScript ?? defaultReporterScriptFor(paths)
+
+  deployReporterScript(paths, options.reporterSourcePath)
+
   const current = readSettings(settingsPath)
   const { settings, removed, added } = mergeMonomiHooks(
     current,

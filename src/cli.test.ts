@@ -1,5 +1,8 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { run, type CliDeps } from './cli.js'
+import { resolveInvokedPath, run, type CliDeps } from './cli.js'
 import { MONOMI_VERSION } from './index.js'
 import { setActiveLocale } from './i18n/index.js'
 import type { InstallHooksResult } from './install-hooks/install-hooks.js'
@@ -298,5 +301,45 @@ describe('run locale wiring (release-9-i18n FR-02 AC-4 / AC-6)', () => {
     expect(code).toBe(1)
     expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('invalid locale'))
     expect(deps.runDashboard).not.toHaveBeenCalled()
+  })
+})
+
+// `npm install -g` / `npm link` は bin をシンボリックリンクとして配置するため、
+// `process.argv[1]` の直接起動判定はシンボリックリンクを実体パス（realpath）へ解決してから
+// 比較する必要がある（解決しないと npm 経由でグローバルインストールした `monomi` が無反応になる）。
+describe('resolveInvokedPath', () => {
+  let tmpDir: string
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('resolves a symlinked bin path to the target file realpath (npm install -g / npm link layout)', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-cli-invoke-'))
+    const targetFile = path.join(tmpDir, 'cli.js')
+    fs.writeFileSync(targetFile, '')
+    const symlinkPath = path.join(tmpDir, 'monomi')
+    fs.symlinkSync(targetFile, symlinkPath)
+
+    expect(resolveInvokedPath(symlinkPath)).toBe(fs.realpathSync(targetFile))
+  })
+
+  it('returns the path unchanged when it is already a real (non-symlink) path', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-cli-invoke-'))
+    const realFile = path.join(tmpDir, 'cli.js')
+    fs.writeFileSync(realFile, '')
+
+    expect(resolveInvokedPath(realFile)).toBe(fs.realpathSync(realFile))
+  })
+
+  it('falls back to the given path without throwing when it does not exist', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-cli-invoke-'))
+    const missingPath = path.join(tmpDir, 'does-not-exist.js')
+
+    expect(resolveInvokedPath(missingPath)).toBe(missingPath)
+  })
+
+  it('returns undefined when argv[1] is undefined', () => {
+    expect(resolveInvokedPath(undefined)).toBeUndefined()
   })
 })

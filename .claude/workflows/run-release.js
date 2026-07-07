@@ -156,18 +156,28 @@ async function notify(title, message) {
 }
 
 // ---- 起票(AC-6): record-known-issues は新設のため scriptPath 指定で起動する ----
-// 注意: workflow() の相対 scriptPath は「親スクリプトのディレクトリ」基準で解決される
-// (cwd 基準ではない)。'.claude/workflows/record-known-issues.js' と書くと
-// .claude/workflows/.claude/workflows/... に二重解決され file not found になる
-// (run-release を絶対パスで resume 起動した際に顕在化する実障害)。親と同じ
-// ディレクトリのファイル名のみを指定すること
+// 注意: workflow() の相対 scriptPath の解決基準は起動方法により揺れる実績がある。
+// 親を相対パスで起動した場合は親ディレクトリ基準('record-known-issues.js' が通り、
+// フルパス指定は .claude/workflows/.claude/workflows/... に二重解決)、親を絶対パスで
+// resume 起動した場合は cwd 基準('record-known-issues.js' が <repo>/record-known-issues.js
+// に解決され file not found。2026-07-07 release-17 で実測)。どちらの規則でも動くよう、
+// cwd 基準のフルパスを先に試し、not found のときのみファイル名単独へフォールバックする
 const filedIssues = []
 let resolvedLogProposal = null
 
 /** 所見を record-known-issues ワークフローで起票し、結果を filedIssues に集約する。 */
 async function fileKnownIssues(findings) {
   if (!Array.isArray(findings) || findings.length === 0) return
-  const r = await workflow({ scriptPath: 'record-known-issues.js' }, { config, findings })
+  let r
+  try {
+    r = await workflow(
+      { scriptPath: '.claude/workflows/record-known-issues.js' },
+      { config, findings }
+    )
+  } catch (e) {
+    if (!String(e && e.message).includes('not found')) throw e
+    r = await workflow({ scriptPath: 'record-known-issues.js' }, { config, findings })
+  }
   addConsumption('triage', 1)
   if (!r) {
     log('record-known-issues が結果を返さなかったため、起票結果を確認できませんでした')

@@ -21,11 +21,19 @@ import path from 'node:path'
 export const MONOMI_HOOK_MARKER = '#monomi:v1'
 
 /**
- * install-hooks が登録する reporter スクリプトの既定パス。
+ * install-hooks が登録する reporter スクリプトの既定パス（**`resolvePaths()` を無指定で呼んだ
+ * ときの既定 home、`~/.monomi` に reporter を配置する場合専用**）。
  *
  * reporter/README.md の「install-hooks からの登録」契約に合わせ `~/.monomi/monomi-report.sh` を
  * 既定にする。`~` は Claude Code がフックを実行するシェルで語頭展開されるため、そのまま使える。
  * テストや配置換えのため {@link buildHookDefinitions} の引数で上書きできる。
+ *
+ * install-hooks.ts の配置ロジック（`fs.copyFileSync`/`fs.chmodSync`）は `~` を展開できない Node の
+ * `fs` API を直接使うため絶対パスの `paths.home`（`resolvePaths()`、`MONOMI_HOME` 環境変数を反映）
+ * で配置先を解決する。`MONOMI_HOME` などで `paths.home` が既定と異なる場合、フック command 文字列
+ * にはこの定数ではなく `paths.home` 起点の絶対パスを使う必要がある（`installHooks` 内の
+ * `defaultReporterScriptFor` が担う）。両者が乖離すると reporter は配置されるのにフックが別パス
+ * を呼び出し、状態レポートがサイレントに失敗する（FR-02）。
  */
 export const DEFAULT_REPORTER_SCRIPT = '~/.monomi/monomi-report.sh'
 

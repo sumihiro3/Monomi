@@ -42,6 +42,10 @@
       {
         "path": "docs/design/class-diagram.md",
         "instruction": "docs/design/class-diagram.md をクラス構成の実装差分に同期してください。乖離がなければ変更しないこと。"
+      },
+      {
+        "path": "CHANGELOG.md",
+        "instruction": "利用者に見える変更のみを Keep a Changelog 形式で Unreleased セクションへ追記する。乖離がなければ変更しない。"
       }
     ],
     "frozen": ["docs/monomi-handoff.md"],
