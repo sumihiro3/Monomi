@@ -117,3 +117,23 @@ export function formatAge(seconds: number): string {
   if (h < 24) return `${h}h`
   return `${Math.floor(h / 24)}d`
 }
+
+/**
+ * `running_work.started_at`（ISO8601 文字列）から現在までの経過時間を、{@link formatAge} と
+ * 同じ短い表記（`3s`/`30m`/`2h`）で整形する（release-18 FR-05）。
+ *
+ * `started_at` は wire の後方互換フィールドで、旧 hub（release-16/17）との混在時は欠落しうる
+ * （`RunningWorkDto.started_at` は型上 `string | null` だが、旧 hub の応答には JSON プロパティ自体が
+ * 無く実行時に `undefined` になる）。`null`/`undefined`/解釈不能な文字列はいずれも `null` を返し、
+ * 呼び出し側（`instance-card.tsx`/`detail-view.tsx`）は経過時間なしの従来表示にフォールバックする
+ * （NFR: 後方互換）。
+ *
+ * @param startedAt ISO8601(Z) 文字列。`null`/`undefined` も許容する。
+ * @returns 整形済みの経過時間。算出できなければ `null`。
+ */
+export function formatRunningWorkAge(startedAt: string | null | undefined): string | null {
+  if (startedAt == null) return null
+  const startedAtMs = Date.parse(startedAt)
+  if (!Number.isFinite(startedAtMs)) return null
+  return formatAge((Date.now() - startedAtMs) / 1000)
+}

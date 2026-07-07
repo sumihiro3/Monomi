@@ -1355,7 +1355,7 @@ describe('DetailView — 概要 BOX の running フィールド（release-16-run
   ])('AC-3: running_work.kind=%s → running フィールドに "<name> (%s)" 形式で表示される', async (kind, kindLabel) => {
     const row: InstanceStatusRow = {
       ...makeRow(),
-      running_work: { kind, name: 'run-release' },
+      running_work: { kind, name: 'run-release', started_at: null },
     }
     const fake = new FakeDetailClient(() => makeDetail(row, []))
     const { lastFrame } = renderDetail(fake, row)
@@ -1382,7 +1382,7 @@ describe('DetailView — 概要 BOX の running フィールド（release-16-run
     const ESC = String.fromCharCode(27)
     const row: InstanceStatusRow = {
       ...makeRow(),
-      running_work: { kind: 'agent', name: `deploy${ESC}[2J` },
+      running_work: { kind: 'agent', name: `deploy${ESC}[2J`, started_at: null },
     }
     const fake = new FakeDetailClient(() => makeDetail(row, []))
     const { lastFrame } = renderDetail(fake, row)
@@ -1398,7 +1398,7 @@ describe('DetailView — 概要 BOX の running フィールド（release-16-run
     setActiveLocale('ja')
     const row: InstanceStatusRow = {
       ...makeRow(),
-      running_work: { kind: 'workflow', name: 'run-release' },
+      running_work: { kind: 'workflow', name: 'run-release', started_at: null },
     }
     const fake = new FakeDetailClient(() => makeDetail(row, []))
     const { lastFrame } = renderDetail(fake, row)
@@ -1411,7 +1411,7 @@ describe('DetailView — 概要 BOX の running フィールド（release-16-run
   it('ポーリングで running_work が更新される（次ターンで null に戻る、AC-5 相当）', async () => {
     const row: InstanceStatusRow = {
       ...makeRow(),
-      running_work: { kind: 'workflow', name: 'run-release' },
+      running_work: { kind: 'workflow', name: 'run-release', started_at: null },
     }
     const fake = new FakeDetailClient(() => makeDetail(row, []))
     const { lastFrame } = renderDetail(fake, row, 20)
@@ -1425,6 +1425,70 @@ describe('DetailView — 概要 BOX の running フィールド（release-16-run
     fake.setResponder(() => makeDetail({ ...row, running_work: null }, []))
     await vi.waitFor(() => {
       expect(findRunningLine(lastFrame() ?? '')).toBe('Running     -')
+    })
+  })
+
+  it('FR-06 AC-1: 未知の kind（ANSI エスケープを含む）がサニタイズされて描画される（CWE-150）', async () => {
+    const ESC = String.fromCharCode(27)
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      running_work: { kind: `unknown${ESC}[2J`, name: 'some-work', started_at: null },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      // kind の未知値（エスケープシーケンス含む）がサニタイズされて "unknown" だけが表示される。
+      expect(frame).toContain('some-work (unknown)')
+      // インジェクションされたシーケンス自体は削除されている。
+      expect(frame).not.toContain(`${ESC}[2J`)
+    })
+  })
+})
+
+describe('DetailView — running フィールドの経過時間表示（release-18 FR-05 AC-1）', () => {
+  /**
+   * running フィールドの行だけを取り出し、ANSI エスケープ（dimColor 等）と罫線（│）・
+   * paddingX の空白を取り除いた「ラベル+値」部分だけに整形する（他フィールドの "-"／
+   * 同名文字列と混同しないための専用抽出）。
+   */
+  function findRunningLine(frame: string): string {
+    const esc = String.fromCharCode(27)
+    const ansi = new RegExp(`${esc}\\[[0-9;?]*[a-zA-Z]`, 'g')
+    const line =
+      frame
+        .replace(ansi, '')
+        .split('\n')
+        .find((l) => l.includes('Running') || l.includes('実行中')) ?? ''
+    return line.replace(/^│\s*/, '').replace(/\s*│$/, '')
+  }
+
+  it('running_work.started_at があるとき "<name> (<kind>) <経過時間>" 形式で表示される', async () => {
+    // 12分5秒前（60秒バケットの境界から離した安全マージン）。
+    const startedAt = new Date(Date.now() - (12 * 60 + 5) * 1000).toISOString()
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      running_work: { kind: 'workflow', name: 'run-release', started_at: startedAt },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      expect(findRunningLine(lastFrame() ?? '')).toBe('Running     run-release (workflow) 12m')
+    })
+  })
+
+  it('running_work.started_at が null（旧 hub との混在）のときは経過時間を省き従来表示にフォールバックする', async () => {
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      running_work: { kind: 'workflow', name: 'run-release', started_at: null },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      expect(findRunningLine(lastFrame() ?? '')).toBe('Running     run-release (workflow)')
     })
   })
 })

@@ -1,6 +1,11 @@
 import { Box, Text, useInput, useStdout } from 'ink'
 import { type ReactElement, type ReactNode, useEffect, useMemo, useState } from 'react'
-import type { InstanceDetail, InstanceStatusRow, RecentEventDto } from '../../hub/dto.js'
+import type {
+  InstanceDetail,
+  InstanceStatusRow,
+  RecentEventDto,
+  RunningWorkDto,
+} from '../../hub/dto.js'
 import { type TranslationKey, t } from '../../i18n/index.js'
 import { bottomBorderWithLabel, resolveBoxWidth, topBorderWithTitle } from '../box-border.js'
 import {
@@ -15,7 +20,13 @@ import {
 import type { HubApiClient } from '../hub-api-client.js'
 import { PollingLoop } from '../polling-loop.js'
 import { sanitizeDisplayText, sanitizeNullableDisplayText } from '../sanitize-display-text.js'
-import { formatAge, statusColor, statusGlyph, statusLabel } from '../status-display.js'
+import {
+  formatAge,
+  formatRunningWorkAge,
+  statusColor,
+  statusGlyph,
+  statusLabel,
+} from '../status-display.js'
 
 /**
  * イベント行の表示モード（FR-08）。`truncate-end` は 1 行に切り詰め（既定）、`wrap` は全文折り返し。
@@ -480,29 +491,35 @@ const RUNNING_WORK_KIND_KEYS: Record<string, TranslationKey> = {
  * `running_work.kind` を、アクティブロケールで解決したラベルへ写す。
  *
  * @param kind wire の `running_work.kind`（小文字）。
- * @returns アクティブロケールのラベル（`t()` 経由）。未知値は入力をそのまま返す。
+ * @returns アクティブロケールのラベル（`t()` 経由）。未知値はサニタイズして返す。
  */
 function runningWorkKindLabel(kind: string): string {
   const key = RUNNING_WORK_KIND_KEYS[kind]
-  return key ? t(key) : kind
+  return key ? t(key) : sanitizeDisplayText(kind)
 }
 
 /**
- * 概要 BOX の `running` フィールド表示文字列を組み立てる（release-16 FR-03 AC-2・AC-3・AC-4）。
+ * 概要 BOX の `running` フィールド表示文字列を組み立てる（release-16 FR-03 AC-2・AC-3・AC-4。
+ * release-18 FR-05 で経過時間を追加）。
  *
- * `<name> (<kind>)` 形式（AC-3）。`name` はレポーター由来の自由記述（tool_summary から抜き出した
- * 値）なので、他のイベント本文と同じく描画直前に {@link ../sanitize-display-text.js#sanitizeDisplayText}
- * で ANSI エスケープ・制御文字を除染する（AC-4、CWE-150）。`null`（非稼働・区切りイベント後・
- * 導出対象イベント無し）は `branch` 等の nullable フィールドと同じ `-` 表示にする（AC-2）。
+ * `<name> (<kind>)` 形式（AC-3）に、`started_at` から算出できる経過時間があれば末尾へ
+ * ` <経過時間>` を追記する（`<name> (<kind>) <経過時間>`）。`name` はレポーター由来の自由記述
+ * （tool_summary から抜き出した値）なので、他のイベント本文と同じく描画直前に
+ * {@link ../sanitize-display-text.js#sanitizeDisplayText} で ANSI エスケープ・制御文字を除染する
+ * （AC-4、CWE-150）。`null`（非稼働・区切りイベント後・導出対象イベント無し）は `branch` 等の
+ * nullable フィールドと同じ `-` 表示にする（AC-2）。`started_at` が無い（旧 hub との混在）場合は
+ * 経過時間を省き、従来通り `<name> (<kind>)` のまま表示する（NFR: 後方互換）。
  *
  * @param work {@link InstanceStatusRow.running_work}（`null` 可）。
  * @returns 表示用文字列。
  */
-function formatRunningWork(work: { kind: string; name: string } | null): string {
+function formatRunningWork(work: RunningWorkDto | null): string {
   if (work === null) {
     return '-'
   }
-  return `${sanitizeDisplayText(work.name)} (${runningWorkKindLabel(work.kind)})`
+  const base = `${sanitizeDisplayText(work.name)} (${runningWorkKindLabel(work.kind)})`
+  const age = formatRunningWorkAge(work.started_at)
+  return age === null ? base : `${base} ${age}`
 }
 
 /**
