@@ -12,6 +12,18 @@ import type { StatusResult } from './status-result.js'
  * ライブネス検知（PID 監視・`session_lost`）が未実装（§6）なため、最新イベント時刻（`lastEventAt`）
  * による「鮮度優先」判定へ全面移行する。完全同一 `lastEventAt` の場合のみ {@link StatusPriority}
  * でタイブレークする（AC-2）が、ms 精度のため実運用ではほぼ発生しない。
+ *
+ * release-19 FR-01: 上記の recency 優先化がもたらした副作用（既知課題 B9）に対処する孤立
+ * （zombie）live session 除外ロジックを追加。異常終了（クラッシュ等）で `CLOSED` イベントを
+ * 送れなかった live session は、指標上ずっと `lastEventAt` が更新されないまま残り続け、放置閾値
+ * を超えると `STALE`（放置）表示に昇格する。そこへ同一 instance 内の別 session が正常に
+ * `SessionEnd` を送って `CLOSED` になった直後、この孤立 `STALE` session が recency 優先化の
+ * せいで（実際には新しい activity が無いのに）代表の座を奪い、ダッシュボード上「正常終了した
+ * はずの instance が放置表示のまま」に見えるバグを引き起こす。ライブネス検知の本実装（heartbeat・
+ * `session_lost`）が未着手（§6）なため、「同一 instance に `CLOSED` が存在するなら、それより
+ * 古い `STALE` な live session は孤立とみなして候補から除外する」という表示上の対症療法
+ * （heuristic）で対応する。真に `ACTIVE`（非 `STALE`）な live session は、`CLOSED` がどれだけ
+ * 新しくても除外しない（B8 の recency 優先化を壊さないため）。
  */
 
 /**
@@ -51,6 +63,13 @@ function maxLastEventAt(entries: RollupEntry[]): EpochMs {
  * 適用する。instance 内の全 session が `CLOSED` の場合のみ closed 自身が候補となり代表になる
  * （instance 全体が終了しているケースで、FR-01 の既定非表示化と組み合わさる想定）。project レベル
  * のロールアップは CLI 側の `ClientRollup` が担うため、ここは instance レベルに限定する。
+ *
+ * **release-19 FR-01 孤立（zombie）live session 除外**：instance 内に `CLOSED` session が
+ * 1 件以上存在する場合に限り（`CLOSED` が皆無なら適用範囲外。AC-6）、live session のうち
+ * 「`STALE`（放置）表示に昇格しており、かつ `lastEventAt` が最新 `CLOSED` の `lastEventAt` より
+ * 古い」ものを孤立とみなして候補から除外する。真に `ACTIVE` な（`STALE` に昇格していない）
+ * live session は除外対象にならない（AC-4・B8 不変条件維持）。除外の結果 live 候補が 0 件に
+ * なった場合は最新 `CLOSED` session を代表として返す（AC-2）。
  */
 export class InstanceStatusRollup {
   private readonly priority = new StatusPriority()
@@ -72,8 +91,10 @@ export class InstanceStatusRollup {
     }
 
     // §0.5: live な (非 closed) session が 1 つでもあれば、closed は候補から除外する。
+    const closed = entries.filter((entry) => entry.status.display === 'CLOSED')
     const live = entries.filter((entry) => entry.status.display !== 'CLOSED')
-    const candidates = live.length > 0 ? live : entries
+
+    const candidates = this.selectCandidates(live, closed, entries)
 
     // AC-1: 候補の中で最も新しい lastEventAt を持つ entry を探す。
     const freshest = maxLastEventAt(candidates)
@@ -83,5 +104,39 @@ export class InstanceStatusRollup {
     return tied
       .map((entry) => entry.status)
       .reduce((representative, current) => this.priority.higherOf(representative, current))
+  }
+
+  /**
+   * §0.5 の closed 除外と release-19 FR-01 の孤立 live session 除外を適用し、
+   * recency 比較（`rollup` 本体）に渡す候補集合を決める。
+   *
+   * - live が 0 件（全件 `CLOSED`）: `closed` は候補から除外できないため `entries` 全体を返す。
+   * - `closed` が 0 件（`CLOSED` が皆無）: FR-01 の適用範囲外（AC-6）。従来どおり `live` のみ。
+   * - どちらも 1 件以上ある場合: 最新 `CLOSED` の `lastEventAt` より古い `STALE` な live entry を
+   *   孤立とみなして除外する（AC-1・AC-4）。除外後に live が 0 件になれば `closed`（＝最新
+   *   `CLOSED` が recency 比較の結果として選ばれる）にフォールバックする（AC-2）。
+   *
+   * @param live `CLOSED` 以外（live）の entries。
+   * @param closed `CLOSED` の entries。
+   * @param entries 呼び出し元が受け取った全 entries（live が空のときのフォールバック用）。
+   * @returns 後続の recency 比較に渡す候補集合。
+   */
+  private selectCandidates(
+    live: RollupEntry[],
+    closed: RollupEntry[],
+    entries: RollupEntry[]
+  ): RollupEntry[] {
+    if (live.length === 0) {
+      return entries
+    }
+    if (closed.length === 0) {
+      return live
+    }
+
+    const latestClosedLastEventAt = maxLastEventAt(closed)
+    const nonOrphanedLive = live.filter(
+      (entry) => !(entry.status.isStale && entry.lastEventAt < latestClosedLastEventAt)
+    )
+    return nonOrphanedLive.length > 0 ? nonOrphanedLive : closed
   }
 }
