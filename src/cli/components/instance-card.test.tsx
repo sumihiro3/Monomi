@@ -119,7 +119,7 @@ describe('InstanceCard — running_work（release-16-running-work-display FR-03 
   it('AC-1: running_work があるとき "▶ <name>" 行を描画する', () => {
     const { lastFrame } = render(
       <InstanceCard
-        row={makeRow({ runningWork: { kind: 'workflow', name: 'run-release' } })}
+        row={makeRow({ runningWork: { kind: 'workflow', name: 'run-release', started_at: null } })}
         selected={false}
         width={36}
       />
@@ -130,7 +130,7 @@ describe('InstanceCard — running_work（release-16-running-work-display FR-03 
   it('AC-2: running_work が null のとき "-" を描画し、行数（カード高さ）は running_work あり/なしで変わらない', () => {
     const withWork = render(
       <InstanceCard
-        row={makeRow({ runningWork: { kind: 'skill', name: 'code-review' } })}
+        row={makeRow({ runningWork: { kind: 'skill', name: 'code-review', started_at: null } })}
         selected={false}
         width={36}
       />
@@ -148,7 +148,11 @@ describe('InstanceCard — running_work（release-16-running-work-display FR-03 
     const { lastFrame } = render(
       <InstanceCard
         row={makeRow({
-          runningWork: { kind: 'agent', name: `explorer${ESC}]0;PWNED${String.fromCharCode(7)}` },
+          runningWork: {
+            kind: 'agent',
+            name: `explorer${ESC}]0;PWNED${String.fromCharCode(7)}`,
+            started_at: null,
+          },
         })}
         selected={false}
         width={40}
@@ -163,7 +167,7 @@ describe('InstanceCard — running_work（release-16-running-work-display FR-03 
     const longName = `run-release-with-a-very-long-workflow-name-that-overflows-the-card-width-${'x'.repeat(60)}`
     const { lastFrame } = render(
       <InstanceCard
-        row={makeRow({ runningWork: { kind: 'workflow', name: longName } })}
+        row={makeRow({ runningWork: { kind: 'workflow', name: longName, started_at: null } })}
         selected={false}
         width={24}
       />
@@ -177,5 +181,35 @@ describe('InstanceCard — running_work（release-16-running-work-display FR-03 
       const visible = line.replace(/\u001b\[[0-9;]*m/g, '')
       expect(visible.length).toBeLessThanOrEqual(24)
     }
+  })
+})
+
+describe('InstanceCard — running_work の経過時間表示（release-18 FR-05 AC-1）', () => {
+  it('running_work.started_at があるとき "▶ <name> (<経過時間>)" 行を描画する', () => {
+    // 12分5秒前（60秒バケットの境界から離した安全マージン）。
+    const startedAt = new Date(Date.now() - (12 * 60 + 5) * 1000).toISOString()
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({
+          runningWork: { kind: 'workflow', name: 'run-release', started_at: startedAt },
+        })}
+        selected={false}
+        width={40}
+      />
+    )
+    expect(lastFrame() ?? '').toContain('▶ run-release (12m)')
+  })
+
+  it('running_work.started_at が null（旧 hub との混在）のときは経過時間を省き従来表示にフォールバックする', () => {
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({ runningWork: { kind: 'workflow', name: 'run-release', started_at: null } })}
+        selected={false}
+        width={40}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('▶ run-release')
+    expect(frame).not.toMatch(/▶ run-release \(/)
   })
 })

@@ -37,6 +37,9 @@ describe('resolvePaths', () => {
       outboxDir: '/custom/root/outbox',
       rejectedDir: '/custom/root/outbox/rejected',
       tokenFile: '/custom/root/token',
+      hubPidFile: '/custom/root/hub.pid',
+      hubLogFile: '/custom/root/hub.log',
+      setupPromptStateFile: '/custom/root/setup-prompt-declined',
     })
   })
 

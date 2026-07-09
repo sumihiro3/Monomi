@@ -112,7 +112,40 @@ export interface InstanceStatusRow {
   status: StatusDto
   pr: PrDto
   session: SessionDto
-  running_work: RunningWork | null
+  running_work: RunningWorkDto | null
+}
+
+/**
+ * 「実行中の作業名」の wire 表現（§8.4 の `running_work`、release-18 FR-05）。
+ *
+ * status レイヤーの {@link RunningWork} をそのまま wire DTO として露出していた設計
+ * （既知課題 A6）を解消し、`StatusDto`/`StatusResult` と同じ「ドメイン型→薄い変換→wire DTO」の
+ * パターンに揃える（{@link toRunningWorkDto}）。`started_at` は ISO8601(Z) 文字列（§0.5）で、
+ * 旧 hub（release-16/17。`started_at` を含まない応答を返す）との混在時の後方互換のため
+ * `null` を許容する（CLI 側は `null`/欠落のいずれでも「経過時間なし」の従来表示にフォールバックする）。
+ */
+export interface RunningWorkDto {
+  kind: string
+  name: string
+  started_at: string | null
+}
+
+/**
+ * status レイヤーの {@link RunningWork} を wire の {@link RunningWorkDto} へ写す
+ * （`toStatusDto`（instance-status-service.ts）と同型の明示的変換ステップ、既知課題 A6 解消）。
+ *
+ * @param work 導出済みの running work（`null` 可）。
+ * @returns wire 形の {@link RunningWorkDto}。`work` が `null` ならそのまま `null`。
+ */
+export function toRunningWorkDto(work: RunningWork | null): RunningWorkDto | null {
+  if (work === null) {
+    return null
+  }
+  return {
+    kind: work.kind,
+    name: work.name,
+    started_at: epochMsToIso8601(work.startedAt),
+  }
 }
 
 /** 直近イベント 1 件（§10.4 Agent View Lv.1 の生ログ）。 */

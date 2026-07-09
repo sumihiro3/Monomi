@@ -238,6 +238,37 @@ function readSettings(settingsPath: string): ClaudeSettings {
 }
 
 /**
+ * `settingsPath` に Monomi 起因のフックが1件以上登録されているかを判定する
+ * (release-18-npx-quickstart FR-03 AC-3)。
+ *
+ * ダッシュボード起動時の初回セットアップ確認プロンプト（`cli.ts` の `maybePromptInstallHooks`）が
+ * フック未登録を検知するために使う。{@link readSettings} と同じ規約: ファイル不在/空/`hooks`
+ * キー無しは「未登録」（`false`）。settings.json が壊れた JSON の場合は {@link readSettings} が
+ * 投げる例外がそのまま伝播する（呼び出し側で「判定できない＝プロンプトを出さない」扱いにする
+ * かどうかを決める。壊れた設定を黙って「未登録」と誤判定し、承諾時に `installHooks` がさらに
+ * 壊れた JSON を書き込もうとする事態を避けるため、ここでは例外を握り潰さない）。
+ *
+ * @param settingsPath settings.json のパス（既定 {@link defaultSettingsPath}）。
+ * @returns Monomi マーカーを含む command エントリが1件以上あれば `true`。
+ */
+export function isMonomiHooksInstalled(settingsPath: string = defaultSettingsPath()): boolean {
+  const settings = readSettings(settingsPath)
+  if (!settings.hooks || typeof settings.hooks !== 'object') {
+    return false
+  }
+  for (const groups of Object.values(settings.hooks)) {
+    if (!Array.isArray(groups)) continue
+    for (const group of groups) {
+      const entries = Array.isArray(group?.hooks) ? group.hooks : []
+      if (entries.some((entry) => isMonomiCommand(entry?.command))) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
  * settings.json をアトミックに書き込む（同ディレクトリの一時ファイル→rename）。
  *
  * 途中クラッシュしても元ファイルは無傷（rename は同一ボリューム上でアトミック）。

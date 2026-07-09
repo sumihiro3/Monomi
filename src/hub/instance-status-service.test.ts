@@ -216,7 +216,11 @@ describe('InstanceStatusService.listInstances — running_work (release-16 FR-02
 
     const rows = statusService.listInstances(toEpochMs(2_100_000))
     expect(rows[0].status.raw_state).toBe('active')
-    expect(rows[0].running_work).toEqual({ kind: 'workflow', name: 'run-release' })
+    expect(rows[0].running_work).toEqual({
+      kind: 'workflow',
+      name: 'run-release',
+      started_at: new Date(2_000_000).toISOString(),
+    })
   })
 
   it('AC-2: the Workflow name is kept even after later Task/Skill PreToolUse events in the same run', () => {
@@ -238,7 +242,13 @@ describe('InstanceStatusService.listInstances — running_work (release-16 FR-02
     })
 
     const rows = statusService.listInstances(toEpochMs(4_100_000))
-    expect(rows[0].running_work).toEqual({ kind: 'workflow', name: 'run-release' })
+    // The Workflow's own started_at (2_000_000) is kept, not the later Skill/Task timestamps —
+    // the running work is still the same Workflow instance, not a re-adoption of a new one.
+    expect(rows[0].running_work).toEqual({
+      kind: 'workflow',
+      name: 'run-release',
+      started_at: new Date(2_000_000).toISOString(),
+    })
   })
 
   it('AC-3: falls back to the latest Task/Skill as kind=agent/skill when no Workflow is present', () => {
@@ -255,7 +265,11 @@ describe('InstanceStatusService.listInstances — running_work (release-16 FR-02
     })
 
     const rows = statusService.listInstances(toEpochMs(3_100_000))
-    expect(rows[0].running_work).toEqual({ kind: 'agent', name: 'explore: look around' })
+    expect(rows[0].running_work).toEqual({
+      kind: 'agent',
+      name: 'explore: look around',
+      started_at: new Date(3_000_000).toISOString(),
+    })
   })
 
   it('AC-4: Stop clears running_work (representative session is no longer ACTIVE)', () => {
@@ -295,7 +309,12 @@ describe('InstanceStatusService.listInstances — running_work (release-16 FR-02
     expect(rows[0].running_work).toBeNull()
   })
 
-  it("AC-5: UserPromptSubmit starts a new turn and clears the previous turn's running_work, even though raw_state stays ACTIVE", () => {
+  it("release-18 FR-04 AC-1: a background Workflow survives a UserPromptSubmit — the previous turn's Workflow name is NOT cleared, even though a new turn starts", () => {
+    // This is the U8 incident at the integration level: a background Workflow's own tool call
+    // completes and the turn ends, but the Workflow keeps running (raw_state stays ACTIVE via
+    // subagent activity) across a new UserPromptSubmit. Pre-FR-04 this incorrectly nulled
+    // running_work (see the now-superseded "AC-5" assertion this test replaces); FR-04 makes
+    // SessionEnd the only Workflow boundary, so the Workflow name must still surface here.
     ingestAt(1_000_000, {
       event_type: 'PreToolUse',
       tool_name: 'Workflow',
@@ -304,8 +323,23 @@ describe('InstanceStatusService.listInstances — running_work (release-16 FR-02
     ingestAt(2_000_000, { event_type: 'UserPromptSubmit' })
 
     const rows = statusService.listInstances(toEpochMs(2_100_000))
-    // The ACTIVE gate alone would let this through (UserPromptSubmit maps to raw_state ACTIVE);
-    // only the running-work-resolver's own boundary set (which includes UserPromptSubmit) nulls it.
+    expect(rows[0].status.raw_state).toBe('active')
+    expect(rows[0].running_work).toEqual({
+      kind: 'workflow',
+      name: 'run-release',
+      started_at: new Date(1_000_000).toISOString(),
+    })
+  })
+
+  it('release-18 FR-04 AC-4: a Task/Skill fallback (no Workflow present) is still cleared by UserPromptSubmit — the traditional fallback boundary is unchanged', () => {
+    ingestAt(1_000_000, {
+      event_type: 'PreToolUse',
+      tool_name: 'Skill',
+      tool_summary: 'code-review',
+    })
+    ingestAt(2_000_000, { event_type: 'UserPromptSubmit' })
+
+    const rows = statusService.listInstances(toEpochMs(2_100_000))
     expect(rows[0].status.raw_state).toBe('active')
     expect(rows[0].running_work).toBeNull()
   })

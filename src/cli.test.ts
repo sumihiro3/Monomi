@@ -32,6 +32,7 @@ function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     ),
     runHub: vi.fn(async () => {}),
     loadRole: vi.fn(() => 'hub' as const),
+    ensureHubRunning: vi.fn(async () => {}),
     loadLocale: vi.fn(() => 'en' as const),
     listDevices: vi.fn(async () => []),
     revokeDevice: vi.fn(async (deviceId: string) => ({
@@ -41,7 +42,17 @@ function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     })),
     hubPair: vi.fn(async () => {}),
     childPair: vi.fn(async () => {}),
+    hubStatus: vi.fn(async () => ({ state: 'stopped' as const })),
+    hubStop: vi.fn(async () => ({ stopped: false })),
     runDashboard: vi.fn(async () => {}),
+    // 既定は「登録済み」にしておく — FR-03 のセットアップ確認プロンプトに関心のない既存テストが
+    // 意図せずプロンプト分岐（案内ログ等）に迷い込まないようにする(FR-03 専用の describe で
+    // 個別に上書きする)。
+    isHooksInstalled: vi.fn(() => true),
+    isSetupPromptDeclined: vi.fn(() => false),
+    markSetupPromptDeclined: vi.fn(),
+    isInteractive: vi.fn(() => true),
+    promptConfirm: vi.fn(async () => true),
     log: vi.fn(),
     error: vi.fn(),
     ...overrides,
@@ -55,6 +66,35 @@ describe('run (CLI dispatch)', () => {
     expect(code).toBe(0)
     expect(deps.runDashboard).toHaveBeenCalledTimes(1)
     expect(deps.runHub).not.toHaveBeenCalled()
+  })
+
+  it('ensures the hub is running before showing the dashboard (release-18-npx-quickstart FR-01 AC-1/AC-2)', async () => {
+    const calls: string[] = []
+    const deps = makeDeps({
+      ensureHubRunning: vi.fn(async () => {
+        calls.push('ensureHubRunning')
+      }),
+      runDashboard: vi.fn(async () => {
+        calls.push('runDashboard')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.ensureHubRunning).toHaveBeenCalledTimes(1)
+    // 自動起動の疎通確認を終えてからダッシュボードへ進む(順序保証)。
+    expect(calls).toEqual(['ensureHubRunning', 'runDashboard'])
+  })
+
+  it('aborts with exit code 1 and never shows the dashboard when hub autostart times out (FR-01 AC-4)', async () => {
+    const deps = makeDeps({
+      ensureHubRunning: vi.fn(async () => {
+        throw new Error('could not reach hub; see ~/.monomi/hub.log')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(1)
+    expect(deps.runDashboard).not.toHaveBeenCalled()
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('hub.log'))
   })
 
   it('routes "hub" to the hub server entrypoint (FR-03)', async () => {
@@ -234,11 +274,16 @@ describe('run (CLI dispatch)', () => {
     expect(deps.installHooks).not.toHaveBeenCalled()
   })
 
-  it.each(['--help', '-h'])('%s prints usage', async (flag) => {
+  it.each([
+    '--help',
+    '-h',
+  ])('%s prints usage, including hub stop/status (FR-02 AC-4)', async (flag) => {
     const deps = makeDeps()
     const code = await run([flag], deps)
     expect(code).toBe(0)
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('monomi'))
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('hub stop'))
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('hub status'))
   })
 
   it('reports unknown commands as exit code 1 without dispatching anything', async () => {
@@ -263,7 +308,7 @@ describe('run (CLI dispatch)', () => {
     expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('Start the hub first'))
   })
 
-  it('converts a thrown error from "hub" into exit code 1 (e.g. port already in use)', async () => {
+  it('converts a thrown EADDRINUSE error from "hub" into an "already running" message (FR-02)', async () => {
     const deps = makeDeps({
       runHub: vi.fn(async () => {
         throw new Error('listen EADDRINUSE: address already in use 127.0.0.1:47632')
@@ -271,7 +316,207 @@ describe('run (CLI dispatch)', () => {
     })
     const code = await run(['hub'], deps)
     expect(code).toBe(1)
+    // 元の EADDRINUSE メッセージを含みつつ、「既に稼働中の可能性」と `hub status` への案内へ変換される。
     expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('EADDRINUSE'))
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('monomi hub status'))
+  })
+
+  it('passes through a non-EADDRINUSE error from "hub" unchanged', async () => {
+    const deps = makeDeps({
+      runHub: vi.fn(async () => {
+        throw new Error('boom: something else went wrong')
+      }),
+    })
+    const code = await run(['hub'], deps)
+    expect(code).toBe(1)
+    expect(deps.error).toHaveBeenCalledWith(expect.stringContaining('boom: something else'))
+  })
+
+  it.each([
+    ['running', { state: 'running' as const, pid: 4242, port: 47632 }],
+    ['stale', { state: 'stale' as const, pid: 4242 }],
+    ['stopped', { state: 'stopped' as const }],
+  ])('routes "hub status" to hubStatus and prints the %s state (FR-02 AC-1)', async (_label, result) => {
+    const deps = makeDeps({ hubStatus: vi.fn(async () => result) })
+    const code = await run(['hub', 'status'], deps)
+    expect(code).toBe(0)
+    expect(deps.hubStatus).toHaveBeenCalledTimes(1)
+    expect(deps.runHub).not.toHaveBeenCalled()
+    if (result.state === 'running') {
+      expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('4242'))
+    }
+    if (result.state === 'stale') {
+      expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('4242'))
+    }
+  })
+
+  it('reports "running" without a pid when the hub answers but no pid file is tracked (e.g. pm2/launchd)', async () => {
+    const deps = makeDeps({
+      hubStatus: vi.fn(async () => ({ state: 'running' as const, port: 47632 })),
+    })
+    const code = await run(['hub', 'status'], deps)
+    expect(code).toBe(0)
+    const message = (deps.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+    expect(message).toContain('47632')
+    expect(message).not.toMatch(/pid \d/)
+  })
+
+  it('does not apply the child guard to "hub status" (management command, not a server)', async () => {
+    const deps = makeDeps({ loadRole: vi.fn(() => 'child' as const) })
+    const code = await run(['hub', 'status'], deps)
+    expect(code).toBe(0)
+    expect(deps.hubStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('routes "hub stop" to hubStop and reports a stopped hub (FR-02 AC-2)', async () => {
+    const deps = makeDeps({ hubStop: vi.fn(async () => ({ stopped: true, pid: 4242 })) })
+    const code = await run(['hub', 'stop'], deps)
+    expect(code).toBe(0)
+    expect(deps.hubStop).toHaveBeenCalledTimes(1)
+    expect(deps.runHub).not.toHaveBeenCalled()
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('4242'))
+  })
+
+  it('routes "hub stop" to hubStop and reports an already-stopped hub without erroring (FR-02 AC-2)', async () => {
+    const deps = makeDeps({ hubStop: vi.fn(async () => ({ stopped: false })) })
+    const code = await run(['hub', 'stop'], deps)
+    expect(code).toBe(0)
+    expect(deps.hubStop).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a distinct "timed out" message (not "already stopped") when the hub did not exit in time', async () => {
+    const deps = makeDeps({
+      hubStop: vi.fn(async () => ({ stopped: false, pid: 4242, timedOut: true })),
+    })
+    const code = await run(['hub', 'stop'], deps)
+    expect(code).toBe(0)
+    const message = (deps.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
+    expect(message).toContain('4242')
+    expect(message).not.toContain('not running')
+  })
+
+  it('does not apply the child guard to "hub stop" (management command, not a server)', async () => {
+    const deps = makeDeps({ loadRole: vi.fn(() => 'child' as const) })
+    const code = await run(['hub', 'stop'], deps)
+    expect(code).toBe(0)
+    expect(deps.hubStop).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('run — first-run install-hooks setup prompt (release-18-npx-quickstart FR-03)', () => {
+  it('prompts on the interactive first run and installs hooks when accepted (AC-1)', async () => {
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => false),
+      isSetupPromptDeclined: vi.fn(() => false),
+      isInteractive: vi.fn(() => true),
+      promptConfirm: vi.fn(async () => true),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.promptConfirm).toHaveBeenCalledTimes(1)
+    expect(deps.promptConfirm).toHaveBeenCalledWith(expect.stringContaining('install-hooks'))
+    expect(deps.installHooks).toHaveBeenCalledTimes(1)
+    expect(deps.markSetupPromptDeclined).not.toHaveBeenCalled()
+    expect(deps.runDashboard).toHaveBeenCalledTimes(1)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('/fake/settings.json'))
+  })
+
+  it('persists a decline so the next run does not reprompt, and shows guidance instead (AC-2)', async () => {
+    let declined = false
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => false),
+      isSetupPromptDeclined: vi.fn(() => declined),
+      markSetupPromptDeclined: vi.fn(() => {
+        declined = true
+      }),
+      isInteractive: vi.fn(() => true),
+      promptConfirm: vi.fn(async () => false),
+    })
+
+    const firstCode = await run([], deps)
+    expect(firstCode).toBe(0)
+    expect(deps.promptConfirm).toHaveBeenCalledTimes(1)
+    expect(deps.markSetupPromptDeclined).toHaveBeenCalledTimes(1)
+    expect(deps.installHooks).not.toHaveBeenCalled()
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('install-hooks'))
+
+    const secondCode = await run([], deps)
+    expect(secondCode).toBe(0)
+    // 拒否が永続化された後は再プロンプトしない。
+    expect(deps.promptConfirm).toHaveBeenCalledTimes(1)
+    expect(deps.installHooks).not.toHaveBeenCalled()
+  })
+
+  it('shows nothing when the hooks are already registered (AC-3)', async () => {
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => true),
+      promptConfirm: vi.fn(async () => true),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.promptConfirm).not.toHaveBeenCalled()
+    expect(deps.installHooks).not.toHaveBeenCalled()
+    expect(deps.log).not.toHaveBeenCalled()
+  })
+
+  it('skips the prompt on a non-interactive run and only shows guidance (AC-4)', async () => {
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => false),
+      isSetupPromptDeclined: vi.fn(() => false),
+      isInteractive: vi.fn(() => false),
+      promptConfirm: vi.fn(async () => true),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.promptConfirm).not.toHaveBeenCalled()
+    expect(deps.installHooks).not.toHaveBeenCalled()
+    expect(deps.markSetupPromptDeclined).not.toHaveBeenCalled()
+    expect(deps.log).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not block the dashboard when hooks-installed detection throws (e.g. malformed settings.json)', async () => {
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => {
+        throw new Error('refusing to modify malformed JSON at /fake/settings.json')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.promptConfirm).not.toHaveBeenCalled()
+    expect(deps.runDashboard).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not block the dashboard when persisting a decline fails (e.g. unwritable ~/.monomi)', async () => {
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => false),
+      isSetupPromptDeclined: vi.fn(() => false),
+      isInteractive: vi.fn(() => true),
+      promptConfirm: vi.fn(async () => false),
+      markSetupPromptDeclined: vi.fn(() => {
+        throw new Error('EACCES: permission denied')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.runDashboard).toHaveBeenCalledTimes(1)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('install-hooks'))
+  })
+
+  it('does not block the dashboard when installHooks fails after acceptance (e.g. unwritable settings.json)', async () => {
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => false),
+      isSetupPromptDeclined: vi.fn(() => false),
+      isInteractive: vi.fn(() => true),
+      promptConfirm: vi.fn(async () => true),
+      installHooks: vi.fn(() => {
+        throw new Error('EACCES: permission denied')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.installHooks).toHaveBeenCalledTimes(1)
+    expect(deps.runDashboard).toHaveBeenCalledTimes(1)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('install-hooks'))
   })
 })
 
@@ -282,6 +527,8 @@ describe('run locale wiring (release-9-i18n FR-02 AC-4 / AC-6)', () => {
     expect(code).toBe(0)
     expect(deps.loadLocale).toHaveBeenCalledTimes(1)
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('使い方'))
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('hub stop'))
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('hub status'))
   })
 
   it('still uses the English default when deps.loadLocale resolves "en"', async () => {

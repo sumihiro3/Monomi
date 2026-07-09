@@ -61,6 +61,8 @@ export const EN = {
 Usage:
   monomi                          show running instances as a dashboard (Ink)
   monomi hub                       start the hub API server (DB init + bootstrap + HTTP)
+  monomi hub stop                  stop the running hub (SIGTERM, wait for exit, remove pid file)
+  monomi hub status                show hub state: running (pid/port), stopped, or stale pid
   monomi hub pair                  issue a 6-digit pairing code and show reachable URLs (hub side)
   monomi hub devices list          list registered devices (with token active/revoked status)
   monomi hub devices revoke <id>   revoke a device's token (that token becomes 401 afterwards)
@@ -74,6 +76,19 @@ Usage:
   'cli.hub.unknownSubcommand': 'monomi hub: unknown subcommand "{sub}"',
   'cli.hub.childRoleGuard':
     "monomi hub: this device is configured as role:child. Run 'monomi hub' only on the hub device, or set role:hub in ~/.monomi/config.yml.",
+  'cli.hub.addrInUse':
+    'monomi hub: failed to start — the port is already in use (EADDRINUSE). A hub may already be running; check with `monomi hub status`.\n\nOriginal error: {message}',
+  'cli.hubAutostart.timeout':
+    'monomi: could not start the hub automatically — it did not become reachable in time. Check {hubLogFile} for details, then try `monomi hub status` or start it manually with `monomi hub`.',
+  'cli.hubStatus.running': 'Hub is running (pid {pid}, port {port}).',
+  'cli.hubStatus.runningPidUnknown': 'Hub is running (port {port}; pid unknown).',
+  'cli.hubStatus.stopped': 'Hub is not running.',
+  'cli.hubStatus.stale':
+    'Hub is not running — found a stale pid file (pid {pid}) from a process that is no longer alive. It will be replaced automatically the next time the hub starts.',
+  'cli.hubStop.stopped': 'Hub stopped (was pid {pid}).',
+  'cli.hubStop.timedOut':
+    'Sent SIGTERM to the hub (pid {pid}), but it did not exit within the grace period. It may still be running; check with `monomi hub status` or try again.',
+  'cli.hubStop.alreadyStopped': 'Hub is not running; nothing to stop.',
   'cli.pair.unknownOption': 'monomi pair: unknown option "{option}"',
   'cli.pair.valueRequired': 'monomi pair: {flag} requires a value',
   'cli.pair.codeRequired':
@@ -89,6 +104,11 @@ Usage:
   'cli.installHooks.success':
     'Monomi hooks installed: {added} entry(ies) in {settingsPath} ({removed} stale entry(ies) replaced)',
   'cli.uninstallHooks.success': 'Monomi hooks removed: {removed} entry(ies) from {settingsPath}',
+  'cli.setupPrompt.confirm': 'Run install-hooks now? [Y/n] ',
+  'cli.setupPrompt.notice':
+    'Status reporting hooks are not installed yet. Run `monomi install-hooks` anytime to enable them.',
+  'cli.setupPrompt.installFailure':
+    'Could not install hooks automatically ({message}). Run `monomi install-hooks` anytime to retry.',
 } as const
 
 /** 翻訳キーの型。{@link EN} のキー集合から導出する（release-9-i18n FR-01 AC-4）。 */

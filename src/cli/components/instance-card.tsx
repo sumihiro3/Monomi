@@ -2,7 +2,13 @@ import { Box, Text } from 'ink'
 import type { ReactElement } from 'react'
 import type { InstanceStatusRow } from '../../hub/dto.js'
 import { sanitizeDisplayText, sanitizeNullableDisplayText } from '../sanitize-display-text.js'
-import { formatAge, statusColor, statusGlyph, statusLabel } from '../status-display.js'
+import {
+  formatAge,
+  formatRunningWorkAge,
+  statusColor,
+  statusGlyph,
+  statusLabel,
+} from '../status-display.js'
 
 /** {@link InstanceCard} の props（presentational）。 */
 export interface InstanceCardProps {
@@ -41,6 +47,9 @@ export interface InstanceCardProps {
  * ANSI エスケープ・制御文字を含み得るため、`device.name`・`branch` と同様に
  * {@link ../sanitize-display-text.js} で除染してから描画する（FR-03 AC-4）。`wrap="truncate-end"`
  * によりカード幅（`width` prop）に収まらない名前は切り詰め、レイアウトは崩れない（FR-03 AC-5）。
+ * release-18 FR-05: `running_work.started_at` があるとき `▶ <name> (<経過時間>)` 形式で経過時間を
+ * 付記する（{@link ../status-display.js#formatRunningWorkAge}）。`started_at` が無い（旧 hub との
+ * 混在）場合は経過時間を省き、従来通り `▶ <name>` のまま表示する（NFR: 後方互換）。
  *
  * @param props {@link InstanceCardProps}。
  * @returns 1 instance を表す カードの要素。
@@ -73,8 +82,21 @@ export function InstanceCard({ row, selected, width }: InstanceCardProps): React
         </Text>
       </Text>
       <Text dimColor wrap="truncate-end">
-        {row.running_work ? `▶ ${sanitizeDisplayText(row.running_work.name)}` : '-'}
+        {row.running_work ? formatRunningWorkLine(row.running_work) : '-'}
       </Text>
     </Box>
   )
+}
+
+/**
+ * 末尾行の `running_work` 表示文字列を組み立てる（release-16 FR-03 AC-3、release-18 FR-05 で
+ * 経過時間を追加）。
+ *
+ * @param work {@link InstanceCardProps.row}.`running_work`（non-null。呼び出し側で null チェック済み）。
+ * @returns `▶ <name>`、または経過時間が算出できるときは `▶ <name> (<経過時間>)`。
+ */
+function formatRunningWorkLine(work: NonNullable<InstanceStatusRow['running_work']>): string {
+  const name = sanitizeDisplayText(work.name)
+  const age = formatRunningWorkAge(work.started_at)
+  return age === null ? `▶ ${name}` : `▶ ${name} (${age})`
 }

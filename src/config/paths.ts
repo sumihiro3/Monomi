@@ -21,6 +21,19 @@ export interface MonomiPaths {
   rejectedDir: string
   /** ローカル用 device token の保存ファイル (`~/.monomi/token`, §0.3/§9)。 */
   tokenFile: string
+  /** hub プロセスの pid ファイル (`~/.monomi/hub.pid`, FR-02)。自動起動・stop/status の管理に使う。 */
+  hubPidFile: string
+  /** hub の起動ログ追記先 (`~/.monomi/hub.log`, FR-01/FR-02)。detached spawn の stdout/stderr 受け皿。 */
+  hubLogFile: string
+  /**
+   * 初回セットアップ確認プロンプト（install-hooks）の拒否を永続化するマーカーファイル
+   * (`~/.monomi/setup-prompt-declined`, release-18-npx-quickstart FR-03)。
+   *
+   * 存在すれば「過去に拒否済み」を意味する（内容は見ない。空ファイルで足りる）。`config.yml` の
+   * キーにはしない — config.yml は bash reporter が行単位で読むため、無関係なキーを増やして
+   * その読み取りに影響を与えないようにする（設計判断）。
+   */
+  setupPromptStateFile: string
 }
 
 /**
@@ -56,6 +69,9 @@ export function resolvePaths(home?: string): MonomiPaths {
     outboxDir: path.join(base, 'outbox'),
     rejectedDir: path.join(base, 'outbox', 'rejected'),
     tokenFile: path.join(base, 'token'),
+    hubPidFile: path.join(base, 'hub.pid'),
+    hubLogFile: path.join(base, 'hub.log'),
+    setupPromptStateFile: path.join(base, 'setup-prompt-declined'),
   }
 }
 

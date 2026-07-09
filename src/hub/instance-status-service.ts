@@ -20,6 +20,7 @@ import {
   type InstanceDetail,
   type InstanceStatusRow,
   type RecentEventDto,
+  toRunningWorkDto,
   toWireStatus,
 } from './dto.js'
 
@@ -208,7 +209,7 @@ export class InstanceStatusService {
         id: representativeSession.id,
         last_heartbeat_at: this.formatHeartbeat(representativeSession),
       },
-      running_work: runningWork,
+      running_work: toRunningWorkDto(runningWork),
     }
   }
 
@@ -255,41 +256,51 @@ export class InstanceStatusService {
   /**
    * session の現在の稼働区間（running work の区切り集合基準）を hub 権威時刻
    * （received_at）の新しい順にページングしながら走査し、「実行中の作業名」を選定する
-   * （release-16 FR-02）。呼び出し側（{@link buildRow}）が代表 session の
+   * （release-18 FR-04 導出規則）。呼び出し側（{@link buildRow}）が代表 session の
    * `StatusResult.rawState === 'ACTIVE'` のときだけ呼ぶ ACTIVE ゲートの内側であり、
-   * 非 ACTIVE では呼ばれない（P3 悪化防止）。
+   * 非 ACTIVE では呼ばれない（P3 悪化防止。この駆動ループ自体が呼ばれないので、以下の
+   * 挙動は ACTIVE な instance にのみ影響する）。
    *
    * {@link loadEventsForCurrentRun} の姉妹メソッドで、同じ keyset ページング構造
    * （`EventRepository.recentPageForSession` + `STATUS_EVENT_PAGE_SIZE`）を流用するが、
-   * 区切り判定は raw_state 境界（`scanForRunBoundary`）ではなく running work 専用の区切り集合
-   * （`Stop`/`Notification(idle_prompt)`/`SessionEnd`/`UserPromptSubmit`、
-   * {@link scanForRunningWork} が定義）を使う。`loadEventsForCurrentRun` を再利用しない理由は、
+   * 区切り判定は raw_state 境界（`scanForRunBoundary`）ではなく running work 専用の
+   * 非対称な区切り集合（{@link scanForRunningWork} が定義。Workflow 候補は `SessionEnd`
+   * のみ、fallback 候補は `Stop`/`Notification(idle_prompt)`/`SessionEnd`/
+   * `UserPromptSubmit`）を使う。`loadEventsForCurrentRun` を再利用しない理由は、
    * raw_state 境界は `Notification(permission_prompt)`（`APPROVAL_WAIT`）でも区切ってしまうため、
    * 「Workflow 実行中 → 権限確認 → 承認 → 再開」のケースで承認前に投入された Workflow の
    * `PreToolUse` を取りこぼすこと（要件確定判断: ACTIVE ゲートが先に非 ACTIVE を弾くので、
    * この専用ローダ自身は permission_prompt を区切りにしない設計で正しい）。
    *
-   * Workflow が確定した時点で最新（降順走査の先頭側）と確定するため、それ以上古いページを
-   * 読まずに打ち切る。Workflow が見つからないまま区切りに当たった、または全ページを読み切った
-   * 場合は、それまでに見つけた最新の Task/Agent/Skill 候補（`fallback`）を採用する。
+   * **駆動ループの終了条件（release-18 FR-04）**: `scanForRunningWork` が Workflow を確定した
+   * 時点（最新＝降順走査の先頭側で確定するため、それ以上古いページを読む必要がない）、
+   * `sessionEndFound`（`SessionEnd` 検出）、またはページ枯渇（`recentPageForSession` が空配列を
+   * 返す／取得件数がページサイズ未満）——のいずれかでのみ打ち切る。fallback 側の区切り
+   * （`Stop`/`UserPromptSubmit`/`idle_prompt`）だけがページ内に見つかった場合はページングを
+   * 打ち切らず、`fallback`/`fallbackBoundaryReached` をキャリーして次の（より古い）ページの
+   * 走査に進む——`SessionEnd` を送らない限り Workflow を探し続けるのが FR-04 の意図であり、
+   * これが長時間 ACTIVE ランでの読み取り量増加（既知課題 P8、意図的に受容したトレードオフ）
+   * の直接の原因になる。
    *
    * @param sessionId 対象 session（代表 session）の id。
    * @returns 導出した {@link RunningWork}。稼働区間内に該当イベントが無ければ null。
    */
   private loadRunningWorkForCurrentRun(sessionId: string): RunningWork | null {
     let fallback: RunningWork | null = null
+    let fallbackBoundaryReached = false
     let cursor: EventPageCursor | undefined
 
     for (;;) {
       const page = this.events.recentPageForSession(sessionId, STATUS_EVENT_PAGE_SIZE, cursor)
       if (page.length === 0) break
 
-      const scan = scanForRunningWork(page, fallback)
+      const scan = scanForRunningWork(page, fallback, fallbackBoundaryReached)
       if (scan.workflow !== null) {
         return scan.workflow
       }
       fallback = scan.fallback
-      if (scan.boundaryFound) {
+      fallbackBoundaryReached = scan.fallbackBoundaryReached
+      if (scan.sessionEndFound) {
         return fallback
       }
 
