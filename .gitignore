@@ -6,3 +6,4 @@ dist/
 .monomi/
 *.log
 .DS_Store
+*.tgz
