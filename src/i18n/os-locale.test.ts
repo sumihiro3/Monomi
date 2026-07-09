@@ -30,6 +30,14 @@ describe('detectLocaleFromEnv (release-19 FR-02)', () => {
     expect(detectLocaleFromEnv({ LANG: 'de_DE.UTF-8' })).toBeUndefined()
   })
 
+  it('ja@calendar=japanese のような @ 修飾子付きも ja に解決する（B10）', () => {
+    expect(detectLocaleFromEnv({ LANG: 'ja@calendar=japanese' })).toBe('ja')
+  })
+
+  it('en@euro のような @ 修飾子付きも en に解決する（B10）', () => {
+    expect(detectLocaleFromEnv({ LANG: 'en@euro' })).toBe('en')
+  })
+
   it('空文字は undefined', () => {
     expect(detectLocaleFromEnv({ LANG: '' })).toBeUndefined()
   })

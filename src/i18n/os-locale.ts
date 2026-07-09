@@ -1,11 +1,11 @@
 import type { MonomiLocale } from '../config/config.js'
 
 /**
- * `LANG` の値から言語部分を抽出するための区切り文字（`_` = 地域、`.` = エンコーディング）。
+ * `LANG` の値から言語部分を抽出するための区切り文字（`_` = 地域、`.` = エンコーディング、`@` = 修飾子）。
  *
- * 例: `ja_JP.UTF-8` → `_` の手前 `ja` を取り出す。
+ * 例: `ja_JP.UTF-8` → `_` の手前 `ja` を取り出す。`ja@calendar=japanese` → `@` の手前 `ja` を取り出す。
  */
-const LANG_DELIMITER_RE = /[_.]/
+const LANG_DELIMITER_RE = /[_.@]/
 
 /**
  * OS ロケール環境変数 `LANG` から Monomi がサポートするロケール（`ja`/`en`）を判定する
