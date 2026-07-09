@@ -8,17 +8,34 @@ afterEach(() => {
   setActiveLocale('en')
 })
 
-describe('resolveLocale (FR-01 AC-2)', () => {
-  it('undefined は en に解決する', () => {
+describe('resolveLocale (FR-01 AC-2 / release-19 FR-02 AC-5: configLocale ?? osLocale ?? en)', () => {
+  it('第2引数省略・configLocale が undefined なら en に解決する（後方互換）', () => {
     expect(resolveLocale(undefined)).toBe('en')
   })
 
-  it('ja はそのまま ja に解決する', () => {
+  it('第2引数省略・configLocale が ja ならそのまま ja に解決する（後方互換）', () => {
     expect(resolveLocale('ja')).toBe('ja')
   })
 
-  it('en はそのまま en に解決する', () => {
+  it('第2引数省略・configLocale が en ならそのまま en に解決する（後方互換）', () => {
     expect(resolveLocale('en')).toBe('en')
+  })
+
+  it('configLocale と osLocale の両方が指定されていれば configLocale を優先する', () => {
+    expect(resolveLocale('ja', 'en')).toBe('ja')
+    expect(resolveLocale('en', 'ja')).toBe('en')
+  })
+
+  it('configLocale が無く osLocale があれば osLocale を採用する', () => {
+    expect(resolveLocale(undefined, 'ja')).toBe('ja')
+  })
+
+  it('configLocale も osLocale も無ければ en に解決する', () => {
+    expect(resolveLocale(undefined, undefined)).toBe('en')
+  })
+
+  it('osLocale が未対応（undefined）なら en にフォールバックする', () => {
+    expect(resolveLocale(undefined, undefined)).toBe('en')
   })
 })
 

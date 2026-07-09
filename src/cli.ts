@@ -22,6 +22,7 @@ import {
   type HubStopResult,
 } from './hub/hub-lifecycle.js'
 import { main as runHubServer } from './hub/serve.js'
+import { detectLocaleFromEnv } from './i18n/os-locale.js'
 import { resolveLocale, setActiveLocale, t } from './i18n/index.js'
 import { MONOMI_VERSION } from './index.js'
 import {
@@ -147,7 +148,7 @@ export const defaultCliDeps: CliDeps = {
     const config = loadConfig()
     return ensureHubRunningImpl(resolvePaths(), config.role, config.port)
   },
-  loadLocale: () => resolveLocale(loadLocaleFromConfig()),
+  loadLocale: () => resolveLocale(loadLocaleFromConfig(), detectLocaleFromEnv()),
   listDevices: async () => (await createHubApiClient()).listDevices(),
   revokeDevice: async (deviceId: string) => (await createHubApiClient()).revokeDevice(deviceId),
   hubPair: () => runHubPair({ log: (message) => console.log(message) }),
