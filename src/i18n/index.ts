@@ -49,16 +49,20 @@ export function getActiveLocale(): MonomiLocale {
 }
 
 /**
- * `config.locale`（未設定なら `undefined`）から実際に使うロケールを解決する（FR-01 AC-2）。
+ * `config.locale` と OS ロケール判定結果から実際に使うロケールを解決する
+ * （FR-01 AC-2 / release-19 FR-02 AC-5）。
  *
+ * 優先順位は `configLocale ?? osLocale ?? 'en'`（config 明示設定 > OS 自動判定 > 既定 `en`）。
  * 既定解決をここに集約することで、config 側は「未設定時 `undefined` のまま通す」だけでよく
- * （`config.ts` 側のコメント参照）、"既定は en" という決定はこの 1 箇所にしか存在しない。
+ * （`config.ts` 側のコメント参照）、"未設定時は en を既定にする" という決定はこの 1 箇所にしか存在しない。
  *
- * @param locale `MonomiConfig.locale`。省略/`undefined` なら `en`。
+ * @param configLocale `MonomiConfig.locale`。省略/`undefined` なら `osLocale` を見る。
+ * @param osLocale OS 環境（macOS の `AppleLocale`／`LANG` 等）から判定したロケール（例:
+ *   `detectOsLocale()` の結果）。省略/`undefined` なら `en` にフォールバックする。
  * @returns 解決済みロケール。
  */
-export function resolveLocale(locale?: MonomiLocale): MonomiLocale {
-  return locale ?? 'en'
+export function resolveLocale(configLocale?: MonomiLocale, osLocale?: MonomiLocale): MonomiLocale {
+  return configLocale ?? osLocale ?? 'en'
 }
 
 /**
