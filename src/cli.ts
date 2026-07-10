@@ -22,6 +22,7 @@ import {
   type HubStopResult,
 } from './hub/hub-lifecycle.js'
 import { main as runHubServer } from './hub/serve.js'
+import { detectOsLocale } from './i18n/os-locale.js'
 import { resolveLocale, setActiveLocale, t } from './i18n/index.js'
 import { MONOMI_VERSION } from './index.js'
 import {
@@ -68,6 +69,10 @@ export interface CliDeps {
    * 検証する軽量パス）を使う。`locale` と無関係なフィールドが不正な config.yml でも、--help/--version
    * のようなロケール解決だけで足りるコマンドが巻き込まれて落ちないようにするため
    * （review-changes 修正。{@link loadRole} のようなフルスキーマ検証とは意図的に非対称）。
+   * `config.yml` の `locale` が未設定の場合は `detectOsLocale()`（release-19 FR-02）で OS 判定に
+   * フォールバックする。macOS では `AppleLocale`（システムの実際の言語設定）を `LANG` より優先する
+   * （`LANG` はシステム言語設定と連動する保証がなく、古い値のまま残っているケースが実機で確認された
+   * ため）。
    */
   loadLocale: () => MonomiLocale
   /** `monomi hub devices list` の実体（localhost hub API をローカルトークンで叩く / FR-03 AC-1）。 */
@@ -147,7 +152,7 @@ export const defaultCliDeps: CliDeps = {
     const config = loadConfig()
     return ensureHubRunningImpl(resolvePaths(), config.role, config.port)
   },
-  loadLocale: () => resolveLocale(loadLocaleFromConfig()),
+  loadLocale: () => resolveLocale(loadLocaleFromConfig(), detectOsLocale()),
   listDevices: async () => (await createHubApiClient()).listDevices(),
   revokeDevice: async (deviceId: string) => (await createHubApiClient()).revokeDevice(deviceId),
   hubPair: () => runHubPair({ log: (message) => console.log(message) }),

@@ -4,6 +4,16 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/) にもとづき、[Semantic Versioning](https://semver.org/lang/ja/) に準拠する。
 
+## [Unreleased]
+
+### Changed
+
+- CLI の表示言語判定に OS 設定からの自動判定を追加。`config.yml` に `locale:` を明示しない場合、macOS ではシステムの言語設定（`AppleLocale`）を優先し、取得できない場合のみ `LANG` 環境変数（例: `ja_JP.UTF-8`）から日本語/英語を自動判定するようになった（macOS 以外は `LANG` のみ。`config.yml` の明示設定は引き続き最優先で、後方互換）
+
+### Fixed
+
+- セッションが正常終了した直後に、無関係な孤立セッションの「放置」表示が代表として浮上する不具合を修正
+
 ## [0.1.0] - 2026-07-09
 
 ### Added

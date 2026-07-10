@@ -143,3 +143,34 @@ describe('InstanceStatusRollup.rollup — recency prioritization (release-8 FR-0
     expect(rollup.rollup([olderClosed, fresherClosed]).display).toBe('CLOSED')
   })
 })
+
+describe('InstanceStatusRollup.rollup — orphaned (zombie) live session exclusion (release-19 FR-01, B9)', () => {
+  it('AC-4: a truly ACTIVE (non-stale) session is never excluded, even with a fresher CLOSED sibling (B8 invariant)', () => {
+    // ACTIVE は isStale===false なので、CLOSED がどれだけ新しくても除外対象にならない。
+    const olderActive = entry('ACTIVE', 0, toEpochMs(NOW - 10 * 60_000)) // 10分前・非stale
+    const freshestClosed = entry('CLOSED', 0, toEpochMs(NOW - 1_000)) // 1秒前
+    expect(rollup.rollup([olderActive, freshestClosed]).display).toBe('ACTIVE')
+    expect(rollup.rollup([freshestClosed, olderActive]).display).toBe('ACTIVE')
+  })
+
+  it('AC-1/AC-2 (B9 repro & fix): a STALE live session older than the latest CLOSED is excluded as orphaned, so the latest CLOSED becomes representative', () => {
+    // B9 再現: 異常終了で CLOSED になれなかった孤立 session が放置(STALE)閾値を超えて残り、
+    // 別 session が正常終了(CLOSED)した直後もこの孤立 STALE が代表を乗っ取っていた。
+    const orphanedStale = entry('STALE', 0, toEpochMs(NOW - 10 * 60_000)) // 10分前・STALE
+    const latestClosed = entry('CLOSED', 0, toEpochMs(NOW - 1_000)) // 1秒前
+    const rep = rollup.rollup([orphanedStale, latestClosed])
+    expect(rep.display).toBe('CLOSED')
+    // instance-status-service.ts:173 の indexOf 逆引き契約: 合成せず入力の status を参照同一で返す。
+    expect(rep).toBe(latestClosed.status)
+    expect(rollup.rollup([latestClosed, orphanedStale]).display).toBe('CLOSED')
+  })
+
+  it('AC-6: with no CLOSED session in the instance at all, orphan exclusion does not apply (out of scope; pure recency as before)', () => {
+    // AC-5 のテストと同じ STALE entry を使うが、CLOSED が instance に存在しないため除外は
+    // 発動せず、release-8 の recency 優先化どおり「最も新しい lastEventAt」が代表になる。
+    const staleButFreshest = entry('STALE', 0, toEpochMs(NOW - 10 * 60_000)) // 10分前
+    const olderNextWait = entry('NEXT_WAIT', 0, toEpochMs(NOW - 20 * 60_000)) // 20分前・より古い
+    expect(rollup.rollup([staleButFreshest, olderNextWait]).display).toBe('STALE')
+    expect(rollup.rollup([olderNextWait, staleButFreshest]).display).toBe('STALE')
+  })
+})
