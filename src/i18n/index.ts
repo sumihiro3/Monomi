@@ -57,8 +57,8 @@ export function getActiveLocale(): MonomiLocale {
  * （`config.ts` 側のコメント参照）、"未設定時は en を既定にする" という決定はこの 1 箇所にしか存在しない。
  *
  * @param configLocale `MonomiConfig.locale`。省略/`undefined` なら `osLocale` を見る。
- * @param osLocale OS 環境（`LANG` 等）から判定したロケール（例: {@link detectLocaleFromEnv} の結果）。
- *   省略/`undefined` なら `en` にフォールバックする。
+ * @param osLocale OS 環境（macOS の `AppleLocale`／`LANG` 等）から判定したロケール（例:
+ *   `detectOsLocale()` の結果）。省略/`undefined` なら `en` にフォールバックする。
  * @returns 解決済みロケール。
  */
 export function resolveLocale(configLocale?: MonomiLocale, osLocale?: MonomiLocale): MonomiLocale {

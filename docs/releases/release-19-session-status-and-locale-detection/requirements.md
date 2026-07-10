@@ -20,8 +20,8 @@
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | B9 の修正方式                  | rollup の「`CLOSED` 以外は live 候補」判定に、「同一 instance 内で最新の `CLOSED` セッションより `lastEventAt` が古い live セッション（zombie）は候補から除外する」を追加する。除外の結果 live 候補が0件になった場合は、その最新 `CLOSED` セッションを代表として採用する（表示が「終了」になる）。既存の B7/B8 修正（recency 優先化）には影響しない（真に `ACTIVE` なセッションは `lastEventAt` が常に最新のため除外対象にならない） |
 | B9 の適用範囲                  | 「`CLOSED` セッションより古い live 孤立セッション」のみを対象とする。`CLOSED` セッションが1件も無い instance（孤立セッションのみ、または現在進行形で放置中のセッションのみ）は対象外とし、従来どおりの挙動（そのセッションが代表になり `STALE` へ昇格しうる）を維持する                                                                                                                                                              |
-| ロケール解決の優先順位         | `config.yml` の `locale:` 明示設定 > OS 環境変数（`LANG`）による自動判定 > 既定 `en`（release-9 の優先順位に OS 自動判定を1段追加する後方互換な変更）                                                                                                                                                                                                                                                                                |
-| OS ロケールの取得元            | `LANG` のみ。`LANGUAGE`/`LC_ALL`/`LC_MESSAGES` は今回対応しない（将来の拡張課題として残す）                                                                                                                                                                                                                                                                                                                                          |
+| ロケール解決の優先順位         | `config.yml` の `locale:` 明示設定 > OS 自動判定（macOS では `AppleLocale` > `LANG`、非 macOS では `LANG` のみ） > 既定 `en`（release-9 の優先順位に OS 自動判定を1段追加する後方互換な変更）                                                                                                                                                                                                                                        |
+| OS ロケールの取得元            | macOS: `defaults read -g AppleLocale` を最優先し、取得できない場合のみ `LANG` へフォールバックする（実装中に、このMac自身で `LANG=en_US.UTF-8` のまま `AppleLocale=ja_JP`（システム言語は日本語）という不一致が実機で見つかったため、`LANG` のみの当初設計を修正）。非 macOS（Linux/WSL2）: `LANG` のみ。`LANGUAGE`/`LC_ALL`/`LC_MESSAGES` は今回対応しない（将来の拡張課題として残す）                                              |
 | 未対応ロケールのフォールバック | `LANG` が `ja`/`en` 以外（例: `fr_FR.UTF-8`、`zh_CN.UTF-8`）、未設定、空文字、`C`/`POSIX`（大文字小文字無視）の場合はすべて自動判定「なし」（`undefined`）とし、既定 `en` にフォールバックする                                                                                                                                                                                                                                       |
 
 ## 機能要件
@@ -37,19 +37,23 @@
 - AC-5: 新規回帰テストを追加する: 「`CLOSED` セッションの直後、それより古い `lastEventAt` を持つ孤立 live セッションのみが残る instance」では、代表が最新の `CLOSED` セッション（`display: 'CLOSED'`）になる（B9 の再現条件そのものの回帰テスト。2026-07-09 に実機の `monomi.db` で確認した状況（孤立セッション → 正常終了セッション → `SessionEnd`）を模したフィクスチャで検証する）
 - AC-6: 新規回帰テストを追加する: 「`CLOSED` セッションが1件も存在せず、孤立 live セッションのみの instance」では、従来どおりそのセッションが代表になり `STALE`（放置）へ昇格しうる（適用範囲外ケースでの挙動不変の確認）
 
-### FR-02: OS ロケール（`LANG` 環境変数）からの CLI 表示言語自動判定（優先度: 必須）
+### FR-02: OS ロケール（macOS `AppleLocale` / `LANG` 環境変数）からの CLI 表示言語自動判定（優先度: 必須）
 
-- 場所: `src/i18n/index.ts`（`resolveLocale`）、新規 `src/i18n/os-locale.ts`（`LANG` 解析）、`src/cli.ts:150`（`loadLocale` の配線）
+- 場所: `src/i18n/index.ts`（`resolveLocale`）、新規 `src/i18n/os-locale.ts`（`AppleLocale`/`LANG` 解析）、`src/cli.ts:151`（`loadLocale` の配線）
 - 対応: release-9-i18n のスコープ外決定（`docs/ARCHITECTURE.md:477,525`、`docs/releases/release-9-i18n/requirements.md:23,57`）を本リリースで見直す
 - AC-1: 新規関数 `detectLocaleFromEnv(env: NodeJS.ProcessEnv = process.env): MonomiLocale | undefined` を `src/i18n/os-locale.ts` に追加する。`env.LANG` の値から `_`/`.`/`@` より前の言語サブタグを抽出し、大文字小文字を無視して判定する
 - AC-2: `LANG` の言語サブタグが `ja`（大文字小文字無視。例: `ja`、`ja_JP`、`ja_JP.UTF-8`、`JA_JP.UTF-8`）の場合は `'ja'` を返す
 - AC-3: `LANG` の言語サブタグが `en`（大文字小文字無視）の場合は `'en'` を返す
 - AC-4: `LANG` が未設定、空文字、`C`、`POSIX`（大文字小文字無視）、または `ja`/`en` 以外の言語サブタグ（例: `fr_FR.UTF-8`、`zh_CN.UTF-8`）の場合は `undefined` を返す
 - AC-5: `resolveLocale` のシグネチャを `resolveLocale(configLocale?: MonomiLocale, osLocale?: MonomiLocale): MonomiLocale` へ拡張し、`configLocale ?? osLocale ?? 'en'` の優先順位で解決する
-- AC-6: `src/cli.ts:150` の `loadLocale` 実装を、`loadLocaleFromConfig()` に加えて `detectLocaleFromEnv()` の結果も `resolveLocale()` へ渡すよう配線する
+- AC-6: `src/cli.ts:151` の `loadLocale` 実装を、`loadLocaleFromConfig()` に加えて OS 判定結果（AC-10 の `detectOsLocale()`）も `resolveLocale()` へ渡すよう配線する
 - AC-7: 回帰テスト: (a) `LANG=ja_JP.UTF-8` かつ `config.yml` 未設定 → `ja` 解決、(b) `config.yml` に `locale: en` が明示され `LANG=ja_JP.UTF-8` でも → config 優先で `en` 解決、(c) `LANG=fr_FR.UTF-8` かつ `config.yml` 未設定 → 既定 `en` へフォールバック、(d) `LANG` 未設定かつ `config.yml` 未設定 → 従来どおり `en`
 - AC-8(手動検証必須): 実際に `LANG=ja_JP.UTF-8` を設定した端末（`config.yml` の `locale` は未設定）で `monomi` を起動し、日本語表示になることを目視確認する
-- AC-9: `README.md` の表示言語に関する説明箇所に、`config.yml` の明示設定に加えて `LANG` 環境変数からの自動判定にも対応した旨を追記する（`sync-docs` 工程で実施）
+- AC-9: `README.md` の表示言語に関する説明箇所に、`config.yml` の明示設定に加えて OS 自動判定（macOS は `AppleLocale`、非 macOS は `LANG`）にも対応した旨を追記する（`sync-docs` 工程で実施）
+- AC-10（追加、実装中の実機検証で発覚した設計修正）: 新規関数 `detectMacOsLocale(platform: NodeJS.Platform = process.platform, readLocale: () => string | undefined = <defaults read -g AppleLocale の実装>): MonomiLocale | undefined` と、両者を束ねる `detectOsLocale(env, platform, readLocale): MonomiLocale | undefined` を `src/i18n/os-locale.ts` に追加する。`platform === 'darwin'` のときのみ `defaults read -g AppleLocale` を実行し、その言語サブタグ（`ja`/`en`、大文字小文字無視）を返す。取得失敗（コマンド不在・キー未設定・非対応言語）時は `undefined` を返し、呼び出し元（`detectOsLocale`）が `detectLocaleFromEnv` の結果へフォールバックする。非 darwin では `readLocale` を呼ばずに即 `undefined`（CI の `ubuntu-latest` で `defaults` 不在によるエラーを避けるため）
+  - 背景: 実装完了後の実機（macOS、システム言語=日本語）での動作確認で、`echo $LANG` が `en_US.UTF-8` を返す一方 `defaults read -g AppleLocale` は `ja_JP` を返すという不一致が見つかった。macOS は `LANG` がシステムの実際の言語設定と自動連動する保証がなく（ターミナルアプリの設定やシェルプロファイルに依存し、初期セットアップ時の値のまま残ることがある）、`LANG` のみに依存する当初の AC-1〜AC-7 の設計では、この Mac のようにシステム言語が日本語でも英語表示になってしまう。README.md がこの CLI の動作確認環境を「macOS のみ」としていることもあり、`AppleLocale` を優先するよう修正した
+- AC-11: 回帰テスト: (a) darwin かつ `AppleLocale=ja_JP`・`LANG=en_US.UTF-8` でも `AppleLocale` 優先で `ja` に解決する（実機で見つかった不一致そのものの再現）、(b) darwin かつ `AppleLocale` 取得不可なら `LANG` へフォールバックする、(c) 非 darwin（linux）では `AppleLocale` を無視し `LANG` のみで判定する
+- AC-12(手動検証実施済み): 実際にこの不一致状態（`LANG=en_US.UTF-8` かつ macOS システム言語=日本語）の実機で、`config.yml` の `locale` を未設定にした状態で `monomi --help` を実行し、日本語表示になることを確認した
 
 ## 非機能要件
 

@@ -8,7 +8,7 @@
 
 ### Changed
 
-- CLI の表示言語判定に OS の `LANG` 環境変数からの自動判定を追加。`config.yml` に `locale:` を明示しない場合、`LANG`（例: `ja_JP.UTF-8`）から日本語/英語を自動判定するようになった（`config.yml` の明示設定は引き続き最優先で、後方互換）
+- CLI の表示言語判定に OS 設定からの自動判定を追加。`config.yml` に `locale:` を明示しない場合、macOS ではシステムの言語設定（`AppleLocale`）を優先し、取得できない場合のみ `LANG` 環境変数（例: `ja_JP.UTF-8`）から日本語/英語を自動判定するようになった（macOS 以外は `LANG` のみ。`config.yml` の明示設定は引き続き最優先で、後方互換）
 
 ### Fixed
 
