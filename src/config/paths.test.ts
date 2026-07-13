@@ -18,6 +18,17 @@ afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true })
 })
 
+describe('resolvePaths', () => {
+  it('resolves cliLogFile correctly', () => {
+    expect(paths.cliLogFile).toBe(path.join(paths.home, 'cli.log'))
+  })
+
+  it('resolves cliLogFile to ~/.monomi/cli.log when home is not specified', () => {
+    const defaultPaths = resolvePaths()
+    expect(defaultPaths.cliLogFile).toBe(path.join(defaultPaths.home, 'cli.log'))
+  })
+})
+
 describe('ensureMonomiHome', () => {
   it('creates a non-existent home directory with mode 700', () => {
     expect(fs.existsSync(paths.home)).toBe(false)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { InstanceStatusRow } from '../hub/dto.js'
 import { InstanceListStore } from './instance-list-store.js'
 import type { StatusFilter } from './status-display.js'
@@ -104,6 +104,40 @@ describe('InstanceListStore — フィルタ保持と filtered()（FR-05 AC-2 / 
     store.toggleFilter('approval_wait')
     // proj-2 は該当なしなので畳み込み対象から外れる。
     expect(store.projectRows().map((p) => p.projectId)).toEqual(['proj-1'])
+  })
+
+  it('projectRows(rows) は渡された行をそのまま畳み込み、内部で filtered() を再計算しない（release-20-dashboard-heap-guard FR-03 AC-1）', () => {
+    const store = new InstanceListStore()
+    store.setInstances([
+      row('a', 'active', 'proj-1'),
+      row('b', 'approval_wait', 'proj-1'),
+      row('c', 'active', 'proj-2'),
+    ])
+    const filteredSpy = vi.spyOn(store, 'filtered')
+
+    // 呼び出し側が既に計算済みの行（例えば filter で絞った一部だけ）を渡すと、
+    // それを畳み込み対象として使う（内部の filtered() 全件とは異なる結果になることで判別する）。
+    const preComputed = store.filtered().filter((r) => r.instance_id !== 'b')
+    filteredSpy.mockClear()
+
+    const result = store.projectRows(preComputed)
+
+    expect(result.map((p) => p.projectId)).toEqual(['proj-1', 'proj-2'])
+    expect(result.find((p) => p.projectId === 'proj-1')?.instanceCount).toBe(1)
+    // filtered() を渡された rows があるときは再呼び出ししない。
+    expect(filteredSpy).not.toHaveBeenCalled()
+
+    filteredSpy.mockRestore()
+  })
+
+  it('projectRows() を rows 省略で呼ぶと従来どおり内部で filtered() を計算する', () => {
+    const store = new InstanceListStore()
+    store.setInstances([
+      row('a', 'active', 'proj-1'),
+      row('b', 'approval_wait', 'proj-1'),
+      row('c', 'active', 'proj-2'),
+    ])
+    expect(store.projectRows()).toHaveLength(2)
   })
 
   it('closed フィルタを明示的に選択すると closed 行が表示される（AC-3 複数選択対応）', () => {

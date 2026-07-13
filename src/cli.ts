@@ -6,6 +6,7 @@ import { createElement } from 'react'
 import { AppView } from './cli/components/app-view.js'
 import { createHubApiClient, createHubConnection } from './cli/hub-api-client.js'
 import { ensureHubRunning as ensureHubRunningImpl } from './cli/hub-autostart.js'
+import { MemoryWatchdog } from './cli/memory-watchdog.js'
 import { type ChildPairOptions, runChildPair, runHubPair } from './cli/pairing-client.js'
 import {
   loadConfig,
@@ -63,6 +64,15 @@ export interface CliDeps {
    * （`runGuarded` が終了コード 1 + メッセージ表示へ変換する）。
    */
   ensureHubRunning: () => Promise<void>
+  /**
+   * 稼働監視ログ（メモリ・stdoutバックプレッシャー計測）のウォッチドッグを起動する（`monomi`
+   * （引数なし）実行時、`ensureHubRunning`/`maybePromptInstallHooks` の後・`runDashboard` の前段。
+   * release-20-dashboard-heap-guard FR-01 AC-5）。Ink が書き込む `stdout` と同じストリームを
+   * 監視対象にする必要があるため、既定実装（{@link defaultCliDeps}）は `process.stdout` を渡す。
+   * 内部タイマーは `unref` 済みでプロセス終了を妨げず、`hub`/`--help` 等の他コマンド経路からは
+   * 呼ばれない。
+   */
+  startMemoryWatchdog: () => void
   /**
    * CLI 表示ロケールを解決する（{@link run} 冒頭で `setActiveLocale` に渡す /
    * release-9-i18n FR-02 AC-4）。既定実装は `config.ts` の `loadLocale()`（`locale` フィールドのみを
@@ -151,6 +161,9 @@ export const defaultCliDeps: CliDeps = {
   ensureHubRunning: () => {
     const config = loadConfig()
     return ensureHubRunningImpl(resolvePaths(), config.role, config.port)
+  },
+  startMemoryWatchdog: () => {
+    new MemoryWatchdog(resolvePaths(), { stdout: process.stdout }).start()
   },
   loadLocale: () => resolveLocale(loadLocaleFromConfig(), detectOsLocale()),
   listDevices: async () => (await createHubApiClient()).listDevices(),
@@ -285,6 +298,9 @@ async function maybePromptInstallHooks(deps: CliDeps): Promise<void> {
  * `install-hooks`/`uninstall-hooks`（FR-01）・`hub`（FR-03）・引数なし（FR-05 のダッシュボード）
  * へルーティングし、それぞれの実体呼び出しでスローされたエラーは終了コード 1 として握りつぶさず
  * メッセージ表示に変換する（bin から直接叩いたときにスタックトレースで壊れて見えないようにする）。
+ * 引数なし経路（`case undefined`）では `runDashboard` の直前に `deps.startMemoryWatchdog()` を呼び、
+ * 稼働監視ログ（メモリ・stdoutバックプレッシャー計測）を起動する（`hub` 等の他コマンド経路では
+ * 呼ばない、release-20-dashboard-heap-guard FR-01 AC-5）。
  *
  * ロケール解決（`setActiveLocale`）もここで一度だけ行う（release-9-i18n FR-02 AC-4）。
  * `deps.loadLocale` が投げる例外（不正な `locale` 値の zod バリデーションエラー等）も、
@@ -310,6 +326,7 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
       return runGuarded(deps, async () => {
         await deps.ensureHubRunning()
         await maybePromptInstallHooks(deps)
+        deps.startMemoryWatchdog()
         await deps.runDashboard()
       })
 
