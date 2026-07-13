@@ -77,9 +77,15 @@ export class InstanceListStore {
   /**
    * フィルタ適用後の行を project 単位へ畳み込む（ヘッダのプロジェクト数表示等に使う）。
    *
+   * `rows` を渡すと、それを畳み込み対象として使い内部で {@link InstanceListStore.filtered} を
+   * 再計算しない（release-20-dashboard-heap-guard FR-03 AC-1: 呼び出し側が同一レンダー内で既に
+   * `filtered()` を呼んでいれば、その結果を渡すことで二重計算を避けられる）。省略時は従来どおり
+   * 内部で `filtered()` を呼ぶ。
+   *
+   * @param rows 畳み込み対象（省略時は {@link InstanceListStore.filtered} の結果）。
    * @returns project ごとの {@link ProjectRow}（{@link ClientRollup} 経由）。
    */
-  projectRows(): ProjectRow[] {
-    return this.clientRollup.rollupByProject(this.filtered())
+  projectRows(rows?: InstanceStatusRow[]): ProjectRow[] {
+    return this.clientRollup.rollupByProject(rows ?? this.filtered())
   }
 }

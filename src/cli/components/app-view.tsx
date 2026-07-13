@@ -1,10 +1,11 @@
 import { Box, Text, useApp, useInput, useStdout } from 'ink'
-import { type ReactElement, useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { InstanceStatusRow } from '../../hub/dto.js'
 import { t } from '../../i18n/index.js'
 import { MONOMI_VERSION } from '../../version.js'
 import type { HubApiClient } from '../hub-api-client.js'
 import { InstanceListStore } from '../instance-list-store.js'
+import { DEFAULT_BACKPRESSURE_THRESHOLD_BYTES, isStdoutBackpressured } from '../memory-watchdog.js'
 import {
   KeyBindingController,
   type KeyBindingHost,
@@ -40,10 +41,12 @@ export interface AppViewProps {
  * store と polling は再描画で作り直さないよう ref に保持し、外部ミュータブル状態の変更後は
  * version カウンタで再描画をトリガする。status 導出・優先順位は一切持たない（§0.5）。
  *
- * 挙動（FR-05 AC-1〜AC-4 / FR-03 AC-1・AC-3 / FR-04 / release-6 FR-03・FR-04）:
+ * 挙動（FR-05 AC-1〜AC-4 / FR-03 AC-1・AC-3 / FR-04 / release-6 FR-03・FR-04 /
+ * release-20-dashboard-heap-guard FR-04）:
  * - マウント時に watch モード（間隔ポーリング）を常時 ON で開始し、その中の即時取得で
  *   全 instance を一覧表示（FR-05 AC-1・FR-03 AC-1/AC-3）。手動での OFF トグルは持たない
- *   （FR-03 AC-2 撤回）
+ *   （FR-03 AC-2 撤回）。詳細ビュー表示中は一覧用ポーリングを止め、一覧へ戻ると再開する
+ *   （release-20-dashboard-heap-guard FR-04 AC-1/AC-2、既知課題 B5 の解消）
  * - `1`–`6` で状態フィルタをトグル（AC-2）。一覧表示中のみ有効（FR-04）
  * - `Enter` で選択 instance の直近イベントタイムラインを表示（AC-4）。`selectedIndex` は一覧・
  *   詳細で共有する単一状態で、表示 instance は `store.filtered()[selectedIndex]` から都度導出する
@@ -101,20 +104,53 @@ export function AppView({
     polling.onUpdate((rows) => {
       store.setInstances(rows)
       setError(null)
-      bump()
+      // stdout がバックプレッシャー中は再描画トリガーだけ間引く（データ更新は継続し、
+      // ドレイン後の次回描画で最新状態が反映されるようにする, FR-02 AC-2）。
+      if (!isStdoutBackpressured(stdout, DEFAULT_BACKPRESSURE_THRESHOLD_BYTES)) {
+        bump()
+      }
     })
     polling.onError((err) => {
       setError(String(err))
-      bump()
+      if (!isStdoutBackpressured(stdout, DEFAULT_BACKPRESSURE_THRESHOLD_BYTES)) {
+        bump()
+      }
     })
     // watch モードを既定 ON にする（FR-03 AC-1/AC-3）。start() は内部で即時 refresh() を
     // 実行するため、初回全件表示（AC-1）は維持したまま起動直後から isRunning()===true になる。
     polling.start()
     return () => polling.stop()
-    // store / polling は ref で安定。bump は useCallback で安定。マウント時 1 回だけ配線する。
-  }, [store, polling, bump])
+    // store / polling は ref で安定。bump は useCallback で安定。stdout（useStdout() 由来）は
+    // マウント中同一参照を保つため、実質的にマウント時 1 回だけ配線される（FR-02 AC-2 で
+    // isStdoutBackpressured の判定に使うため依存配列に追加）。
+  }, [store, polling, bump, stdout])
 
-  const filteredRows = store.filtered()
+  // release-20-dashboard-heap-guard FR-04 AC-1/AC-2: 詳細ビュー表示中は一覧側 PollingLoop を止め、
+  // 一覧表示へ戻ったら再開する（既知課題 B5 の解消）。start()/stop() は冪等
+  // （polling-loop.ts 142-162行, timer!==null で早期 return）なので、マウント用 useEffect（上）が
+  // 既に start() 済みの状態でこの effect が重ねて start()/stop() を呼んでも安全。詳細中は
+  // `polling.onUpdate` 自体が呼ばれなくなるため store.setInstances()/bump() も発生しなくなり
+  // （AC-1・AC-3）、一覧へ戻ると start() の内部即時 refresh() で最新データが反映される（AC-4）。
+  // DetailView は自身の独立した PollingLoop を持つため、ここでは一覧側のみを制御すればよい。
+  useEffect(() => {
+    if (viewMode === 'detail') {
+      polling.stop()
+    } else {
+      polling.start()
+    }
+  }, [viewMode, polling])
+
+  // release-20-dashboard-heap-guard FR-03 AC-1: store.filtered() は1レンダー1回だけ呼び、
+  // 以降の派生値（projectRows/counts/deviceCount・host のクランプ計算）は全てこの結果を再利用する。
+  // store は ref で安定なミュータブル参照のため、依存配列には値そのものではなく
+  // setInstances/toggleFilter が更新のたびに新配列を作る store.instances / store.activeFilters を
+  // 使い、実データが変わらない限り再計算されないようにする（両者はコールバック内のテキストには
+  // 現れないが、変更検知のトリガーとして依存配列に必須）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 上記の理由で store.instances/store.activeFilters を意図的に依存配列へ含める。
+  const filteredRows = useMemo(
+    () => store.filtered(),
+    [store, store.instances, store.activeFilters]
+  )
   const lastIndex = Math.max(filteredRows.length - 1, 0)
   const clampedSelected = Math.min(Math.max(selectedIndex, 0), lastIndex)
   // 一覧・詳細で共有する selectedIndex から表示 instance を都度導出する（detailRow スナップショット
@@ -178,7 +214,9 @@ export function AppView({
   // host / controller は毎描画で作り直しても最新の state を参照できる。
   const host: KeyBindingHost = {
     moveSelection: (delta) => {
-      const length = store.filtered().length
+      // FR-03 AC-1: store.filtered() を再度呼ばず、同一レンダーで既に計算済みの filteredRows を
+      // 使う（host はレンダーごとに作り直されるため、常に最新の filteredRows を捕捉している）。
+      const length = filteredRows.length
       if (length === 0) return
       setSelectedIndex((current) => {
         const clamped = Math.min(Math.max(current, 0), length - 1)
@@ -188,13 +226,13 @@ export function AppView({
     openDetail: () => {
       // 選択は既存 selectedIndex をそのまま使い、表示 instance は selectedRow から導出する
       // （detailRow スナップショットは持たない, release-6 FR-04 AC-3）。空一覧では開かない。
-      if (store.filtered().length === 0) return
+      if (filteredRows.length === 0) return
       setViewMode('detail')
     },
     moveProject: (delta) => {
       // FR-04 AC-1/AC-2: 一覧の並び順で前後 instance へ移動し、端では反対側へ循環する。
       // len===0 は no-op。current を範囲クランプしてから wrap し、負値を避けるため +length する。
-      const length = store.filtered().length
+      const length = filteredRows.length
       if (length === 0) return
       setSelectedIndex((current) => {
         const clamped = Math.min(Math.max(current, 0), length - 1)
@@ -221,7 +259,9 @@ export function AppView({
   const controller = new KeyBindingController(store, host)
 
   useInput((input, key) => {
-    controller.handleKey(
+    // release-20-dashboard-heap-guard FR-03 AC-3: handleKey が「操作をディスパッチしたか」を
+    // 返すようになったため、無効キー（未割当のキー入力）では bump() を呼ばず無駄な再描画を防ぐ。
+    const dispatched = controller.handleKey(
       input,
       {
         upArrow: key.upArrow,
@@ -233,12 +273,21 @@ export function AppView({
       },
       viewMode
     )
-    bump()
+    if (dispatched) {
+      bump()
+    }
   })
 
-  const counts = countByDisplay(store.instances)
-  const projectCount = store.projectRows().length
-  const deviceCount = new Set(filteredRows.map((row) => row.device.id)).size
+  // FR-03 AC-2: 集計系の派生値を useMemo 化する。countByDisplay は全件（store.instances）基準、
+  // projectRows/deviceCount は既に計算済みの filteredRows を再利用するため、依存が変わらない限り
+  // （watching インジケータの点滅・ヘルプ開閉などの無関係な再描画をまたいでも）再計算されない。
+  const counts = useMemo(() => countByDisplay(store.instances), [store.instances])
+  const projectRows = useMemo(() => store.projectRows(filteredRows), [store, filteredRows])
+  const projectCount = projectRows.length
+  const deviceCount = useMemo(
+    () => new Set(filteredRows.map((row) => row.device.id)).size,
+    [filteredRows]
+  )
 
   return (
     <Box flexDirection="column">
@@ -250,7 +299,7 @@ export function AppView({
         <Text dimColor>
           {'  '}— {projectCount} projects · {deviceCount} devices
         </Text>
-        <WatchingIndicator isRunning={polling.isRunning()} />
+        <WatchingIndicator isRunning={polling.isRunning()} stdout={stdout} />
       </Text>
 
       {viewMode === 'detail' && selectedRow !== undefined ? (

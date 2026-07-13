@@ -39,6 +39,7 @@ describe('resolvePaths', () => {
       tokenFile: '/custom/root/token',
       hubPidFile: '/custom/root/hub.pid',
       hubLogFile: '/custom/root/hub.log',
+      cliLogFile: '/custom/root/cli.log',
       setupPromptStateFile: '/custom/root/setup-prompt-declined',
     })
   })

@@ -25,6 +25,8 @@ export interface MonomiPaths {
   hubPidFile: string
   /** hub の起動ログ追記先 (`~/.monomi/hub.log`, FR-01/FR-02)。detached spawn の stdout/stderr 受け皿。 */
   hubLogFile: string
+  /** CLI プロセスの稼働監視ログ追記先 (`~/.monomi/cli.log`, release-20-dashboard-heap-guard FR-01)。メモリ・stdoutバックプレッシャー計測記録。 */
+  cliLogFile: string
   /**
    * 初回セットアップ確認プロンプト（install-hooks）の拒否を永続化するマーカーファイル
    * (`~/.monomi/setup-prompt-declined`, release-18-npx-quickstart FR-03)。
@@ -71,6 +73,7 @@ export function resolvePaths(home?: string): MonomiPaths {
     tokenFile: path.join(base, 'token'),
     hubPidFile: path.join(base, 'hub.pid'),
     hubLogFile: path.join(base, 'hub.log'),
+    cliLogFile: path.join(base, 'cli.log'),
     setupPromptStateFile: path.join(base, 'setup-prompt-declined'),
   }
 }

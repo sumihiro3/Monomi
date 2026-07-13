@@ -93,51 +93,56 @@ export class KeyBindingController {
    * @param viewMode 現在表示中のビュー。`'detail'` 中はフィルタ・カーソル移動・詳細を開く操作
    *   を無視する。`j`/`k`・`↑`/`↓` も detail 中は無視する（`DetailView` 自身のイベントスクロール
    *   が消費するため）。`←`/`→` のみ detail 中に隣接プロジェクト移動へ写す（FR-04）。
+   * @returns 操作をディスパッチしたか（= 状態が変わり得るハンドル済みキーだったか、
+   *   release-20-dashboard-heap-guard FR-03 AC-3）。呼び出し側（`AppView` の `useInput`）は
+   *   これが `true` のときのみ再描画トリガー（`bump()`）を呼び、無効キーでの無駄な再描画を防ぐ。
    */
-  handleKey(input: string, key: KeyFlags, viewMode: ViewMode): void {
+  handleKey(input: string, key: KeyFlags, viewMode: ViewMode): boolean {
     if (viewMode === 'list') {
       const filter = filterForKey(input)
       if (filter !== null) {
         this.store.toggleFilter(filter)
-        return
+        return true
       }
 
       if (input === 'j' || key.downArrow) {
         this.host.moveSelection(1)
-        return
+        return true
       }
       if (input === 'k' || key.upArrow) {
         this.host.moveSelection(-1)
-        return
+        return true
       }
 
       if (key.return) {
         this.host.openDetail()
-        return
+        return true
       }
     }
 
     if (viewMode === 'detail') {
       if (key.leftArrow) {
         this.host.moveProject(-1)
-        return
+        return true
       }
       if (key.rightArrow) {
         this.host.moveProject(1)
-        return
+        return true
       }
     }
 
     if (key.escape) {
       this.host.back()
-      return
+      return true
     }
     if (input === '?') {
       this.host.toggleHelp()
-      return
+      return true
     }
     if (input === 'q') {
       this.host.quit()
+      return true
     }
+    return false
   }
 }

@@ -597,7 +597,7 @@ classDiagram
     +toggleFilter(filter: StatusFilter) void
     +clearFilters() void
     +filtered() InstanceStatusRow[]
-    +projectRows() ProjectRow[]
+    +projectRows(rows?: InstanceStatusRow[]) ProjectRow[]
   }
   class StatusDisplay {
     <<module (status-display.ts)>>
@@ -644,7 +644,7 @@ classDiagram
   }
   class KeyBindingController {
     <<controller>>
-    +handleKey(input: string, key: KeyFlags, viewMode: ViewMode) void
+    +handleKey(input: string, key: KeyFlags, viewMode: ViewMode) bool
   }
   class ConfigWriter {
     <<module (config/config-writer.ts)>>
@@ -660,6 +660,21 @@ classDiagram
     <<module (hub-autostart.ts), release-18 FR-01>>
     +ensureHubRunning(paths: MonomiPaths, role: MonomiRole, port: int, options: EnsureHubRunningOptions) Promise$
     -spawnHub(paths: MonomiPaths, options: EnsureHubRunningOptions) void$
+  }
+  class MemoryWatchdog {
+    <<module (memory-watchdog.ts), release-20-dashboard-heap-guard>>
+    +sample() void
+    +start() void
+    +stop() void
+    +isRunning() bool
+    +isStdoutBackpressured(stdout: WritableLengthSource, thresholdBytes: int) bool$
+    +DEFAULT_SAMPLE_INTERVAL_MS int$
+    +DEFAULT_BACKPRESSURE_THRESHOLD_BYTES int$
+    +DEFAULT_BACKPRESSURE_WARN_CONSECUTIVE_COUNT int$
+  }
+  class WritableLengthSource {
+    <<interface>>
+    +int writableLength
   }
   class AppView {
     <<ui component (container)>>
@@ -744,15 +759,18 @@ classDiagram
   KeyBindingController ..> StatusDisplay : filterForKey
   KeyBindingController ..> KeyBindingHost : dispatches to
   KeyBindingController ..> KeyFlags
+  MemoryWatchdog ..> WritableLengthSource
   AppView ..> InstanceListStore
   AppView ..> PollingLoop
   AppView ..> KeyBindingController
+  AppView ..> MemoryWatchdog : isStdoutBackpressured
   AppView ..|> KeyBindingHost : implements
   AppView --> InstanceTable
   AppView --> StatusFilterBar
   AppView --> DetailView
   AppView --> HelpOverlay
   AppView --> WatchingIndicator
+  WatchingIndicator ..> MemoryWatchdog : isStdoutBackpressured
   InstanceTable --> InstanceCard
   InstanceTable ..> CardGrid : columnsForWidth
   InstanceCard ..> StatusDisplay
@@ -792,8 +810,9 @@ classDiagram
 - `HubEndpointResolver` と `HubEndpointOps`／`Network` がマルチエンドポイント方針（Tailscale `100.64.0.0/10` 優先 → LAN の順、到達可否は HTTP 応答有無で判定）を実装する。`Network` は `monomi hub pair` の候補 URL 提示（`buildCandidateUrls`）にも使う。reporter（bash）側は同等ロジックをシェルで別実装する。
 - `PairingClient`（`runHubPair`/`runChildPair`）が §9 のペアリング CLI を実装し、`HubApiClient`（pair start/claim）・`Network`（候補 URL）・`ConfigWriter`（`role`/`hub_endpoints`/`device_id` の部分書き込み、`chmod 600`）を束ねる。
 - `HubAutostart`（`ensureHubRunning`、release-18 FR-01、既知課題 A7 解消）は `monomi`（引数なし）実行時にダッシュボード表示前で呼ばれる自己修復自動起動の実体。`role: child` では何もせず（`role` が `child` 以外なら hub 起動対象と見なす）、既に `port` へ疎通できれば何もしない。疎通できなければ自パッケージ内 `dist/bin.js` を `process.execPath` で `hub` サブコマンド付き detached spawn（`unref()` 済み、`spawnHub` private helper）し、stdout/stderr を `~/.monomi/hub.log` へ追記リダイレクトしてリトライ付きで起動完了を待つ（既定 10 秒でタイムアウトし `hub.log` 参照を含む例外を投げる）。疎通確認そのものは hub-api 層 `HubLifecycle.isPortReachable`（§3 参照）を直接 import して使う——これが本図中で唯一の cli-ink→hub-api のクロスレイヤー依存（逆方向の hub→cli 依存は無い）。タイムアウト時のエラーメッセージ整形は他の cli-ink モジュールと同様 `I18n.t()` 経由（`hubLogFile` 参照を含む）。Ink コンポーネント・`HubApiClient` には依存しない（ダッシュボード起動より前段で完結する処理のため）。
-- `KeyBindingController` はキー → アクションの薄い写像に徹する。ビュー状態（選択位置・`ViewMode`）は持たず、`handleKey(input, KeyFlags, viewMode)` の引数で受け取り、画面遷移・選択移動は `KeyBindingHost`（`AppView` が React state で実装）へ委譲する。フィルタキー解決だけ `StatusDisplay.filterForKey` を使う。**`PollingLoop` には依存しない**（watch は常時 ON でトグルを持たないため、旧図の依存エッジは削除）。
-- `InstanceListStore` は取得結果とフィルタ状態のみを保持し、`filtered()`/`projectRows()`（`ClientRollup` 委譲）を提供する。`ClientRollup` は hub が返す numeric priority を `max()` するだけで、優先順位の意味は解釈しない。
+- `MemoryWatchdog`（`memory-watchdog.ts`、release-20-dashboard-heap-guard FR-01/FR-02）は稼働監視ログ（`process.memoryUsage()`・`stdout.writableLength`）を `paths.cliLogFile` へ 1 行 1 サンプルで `fs.appendFileSync` 追記する診断専用モジュール。`cli.ts` の `startMemoryWatchdog`（`monomi` 引数なし経路、`runDashboard` 直前）が `new MemoryWatchdog(resolvePaths(), { stdout: process.stdout }).start()` で起動する配線は、`HubAutostart` の `ensureHubRunning` 同様に本図の対象外（cli.ts）が担う。`start()` は即時 1 回 `sample()` してから `intervalMs`（既定 `DEFAULT_SAMPLE_INTERVAL_MS`）ごとに `setInterval` で繰り返し、timer は `unref()` してプロセスの自然終了を妨げない。`sample()` 本体は try/catch で囲み、`ensureMonomiHome`/`appendFileSync` の失敗（ENOSPC・EACCES 等）を握りつぶす——診断ログの記録失敗でダッシュボード本体を落とさないため（AC-4: `process.exit` 等でのプロセス終了は一切行わない）。同モジュールが export する純粋関数 `isStdoutBackpressured(stdout, thresholdBytes)`（`WritableLengthSource` 最小 interface を引数に取る）は `MemoryWatchdog` 自身の WARN 判定（`DEFAULT_BACKPRESSURE_WARN_CONSECUTIVE_COUNT` 回連続超過）に加え、`AppView`（再描画間引き）・`WatchingIndicator`（点滅間引き、release-10 FR-02）からも import され、バックプレッシャー判定基準を1関数に集約する共有依存になっている。
+- `KeyBindingController` はキー → アクションの薄い写像に徹する。ビュー状態（選択位置・`ViewMode`）は持たず、`handleKey(input, KeyFlags, viewMode)` の引数で受け取り、画面遷移・選択移動は `KeyBindingHost`（`AppView` が React state で実装）へ委譲する。フィルタキー解決だけ `StatusDisplay.filterForKey` を使う。**`PollingLoop` には依存しない**（watch は常時 ON でトグルを持たないため、旧図の依存エッジは削除）。`handleKey` は release-20-dashboard-heap-guard FR-03 AC-3 で戻り値を `boolean` へ変更した（操作をディスパッチしたか＝ハンドル済みキーだったかを返す）。呼び出し側（`AppView` の `useInput`）はこれが `true` のときのみ再描画トリガー（`bump()`）を呼び、無効キー入力での無駄な再描画を省く。
+- `InstanceListStore` は取得結果とフィルタ状態のみを保持し、`filtered()`/`projectRows(rows?)`（`ClientRollup` 委譲）を提供する。`projectRows` の `rows` は省略可能引数（release-20-dashboard-heap-guard FR-03 AC-1）: 呼び出し側が同一レンダー内で既に `filtered()` を呼んでいれば、その結果をそのまま渡すことで内部での再計算（二重の `filtered()` 呼び出し）を避けられる。省略時は従来どおり内部で `filtered()` を呼ぶ。`ClientRollup` は hub が返す numeric priority を `max()` するだけで、優先順位の意味は解釈しない。
 - View は Container（`AppView`／`DetailView`: 状態と API 呼び出しを持つ）と Presentational（`InstanceCard`／`StatusFilterBar`／`HelpOverlay`: props を描くだけ）に分離。`AppView` は 1 instance = 1 枚の `InstanceCard` を `InstanceTable`（列数は `CardGrid.columnsForWidth` が端末幅と TTY 判定で決定）で並べる。`DetailView` は自前で `PollingLoop<InstanceDetail>` を張り、`pollIntervalMs` 間隔で `getInstanceDetail` を呼び直して status/イベントタイムラインを自動更新し、アンマウントで確実に停止する。`WatchingIndicator`（release-10 FR-02、`app-view.tsx` から分離）は見た目は presentational だが、この分離規約に対する唯一の意図的な例外として `visible` state と 1000ms `setInterval` を自身に閉じ込める。理由は `AppView` がすでに抱える再レンダー過多（既知バックログ P4）を、点滅の再描画トリガーで悪化させないため（React は子の `setState` だけでは親を再レンダーしない性質を利用）。`isRunning: boolean` を props に取り、`AppView` 本体の state は増やさない。
 - 表示語彙（ラベル・色・グリフ・経過時間・フィルタキー対応）は `StatusDisplay`（`status-display.ts`）に集約し、status 導出・優先順位ロジックは CLI に一切持たない。すべて hub 側 `StatusDeriver`／`InstanceStatusRollup` の責務。release-9-i18n 以降、ラベルの文字列自体は `StatusDisplay` が直接持たず `I18n`（`i18n/index.ts`）の `t()` 経由でアクティブロケールに応じて解決する（`StatusDisplay` が持つのは表示状態→翻訳キーの写像と色・グリフ。色・グリフはロケール非依存）。同様に `AppView`／`DetailView`／`HelpOverlay`／`InstanceTable`／`WatchingIndicator` の文言も `t()` 経由。
 - `OsLocale`（`i18n/os-locale.ts`, release-19 FR-02）: `LANG` の値を `_`/`.` 区切りで分割し先頭の言語部分が `ja`/`en` ならその値を、それ以外・未設定・`C`/`POSIX` なら `undefined` を返す `detectLocaleFromEnv(env?)` のみを持つ純粋関数モジュール（`LANGUAGE`/`LC_ALL`/`LC_MESSAGES` は参照しない。スコープ外）。`I18n.resolveLocale` はこの結果を第2引数 `osLocale` として受け取れるようシグネチャ拡張された（`configLocale ?? osLocale ?? 'en'`）が、実際に両者をつなぐ配線（`resolveLocale(loadLocaleFromConfig(), detectLocaleFromEnv())`）は本図の対象外の起動エントリ `cli.ts` が担う（`I18n`/`OsLocale` 間に直接の import 依存は無い）。
@@ -853,10 +872,11 @@ classDiagram
 | I18n                                                                        | cli-ink       | module (i18n/index.ts, release-9)               | 表示文言解決の唯一の入口（`t`/`setActiveLocale`/`getActiveLocale`/`resolveLocale`）。ロケールはモジュールレベル・シングルトンで保持（React context 不使用）。release-19 FR-02: `resolveLocale` は `configLocale ?? osLocale ?? 'en'` の優先順位で解決するようシグネチャ拡張               |
 | OsLocale                                                                    | cli-ink       | module (i18n/os-locale.ts), release-19          | `LANG` 環境変数から `ja`/`en` を判定（`detectLocaleFromEnv`）。`config.locale` 未設定時のみ `I18n.resolveLocale` の `osLocale` 引数として cli.ts が配線（本図では非対象のクロスモジュール wiring）                                                                                        |
 | ViewMode / KeyFlags / KeyBindingHost                                        | cli-ink       | type / interface                                | キー処理の入出力境界（AppView が Host を実装）                                                                                                                                                                                                                                            |
-| KeyBindingController                                                        | cli-ink       | controller                                      | キー入力 → アクションの薄い写像（PollingLoop に非依存）                                                                                                                                                                                                                                   |
+| KeyBindingController                                                        | cli-ink       | controller                                      | キー入力 → アクションの薄い写像（PollingLoop に非依存）。`handleKey` はディスパッチしたか（`boolean`）を返し、`AppView` の無駄な `bump()` を抑止（release-20 FR-03 AC-3）                                                                                                                 |
 | ConfigWriter                                                                | cli-ink       | module (config/config-writer.ts)                | child ペアリング設定の部分書き込み（chmod 600）                                                                                                                                                                                                                                           |
 | PairingClient                                                               | cli-ink       | module (pairing-client.ts)                      | `monomi hub pair` / `monomi pair` のフロー実装                                                                                                                                                                                                                                            |
 | HubAutostart                                                                | cli-ink       | module (hub-autostart.ts), release-18           | `monomi` 起動時の hub 自己修復自動起動（疎通確認→不在なら detached spawn→リトライ疎通待ち）                                                                                                                                                                                               |
+| MemoryWatchdog / WritableLengthSource                                       | cli-ink       | module (memory-watchdog.ts), release-20         | 稼働監視ログ（メモリ・stdout backpressure）を1行1サンプルで追記。`isStdoutBackpressured` は AppView/WatchingIndicator とも共有。`sample()` は try/catch で失敗を握りつぶし本体を落とさない（AC-4）                                                                                        |
 | AppView / DetailView                                                        | cli-ink       | ui component (container)                        | 状態と API を持つコンテナ（DetailView は詳細を自動更新）                                                                                                                                                                                                                                  |
 | InstanceTable                                                               | cli-ink       | ui component (grid container)                   | カードグリッド描画（A4: 命名不一致・レイアウト計算保持の逸脱あり）                                                                                                                                                                                                                        |
 | InstanceCard / StatusFilterBar / HelpOverlay                                | cli-ink       | ui component (presentational)                   | props を描くだけ                                                                                                                                                                                                                                                                          |

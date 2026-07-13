@@ -1,6 +1,11 @@
 import { Text } from 'ink'
 import { type ReactElement, useEffect, useState } from 'react'
 import { t } from '../../i18n/index.js'
+import {
+  DEFAULT_BACKPRESSURE_THRESHOLD_BYTES,
+  isStdoutBackpressured,
+  type WritableLengthSource,
+} from '../memory-watchdog.js'
 
 /** {@link WatchingIndicator} の props。 */
 export interface WatchingIndicatorProps {
@@ -12,6 +17,14 @@ export interface WatchingIndicatorProps {
    * （FR-02 AC-3）が素直に保証できる。
    */
   isRunning: boolean
+  /**
+   * バックプレッシャー判定に使う書き込み先（`writableLength` のみ参照, FR-02 AC-3）。
+   * `AppView` からは `useStdout()` の戻り値（`NodeJS.WriteStream`）をそのまま渡せる
+   * （{@link WritableLengthSource} はその最小上位互換）。`memory-watchdog.ts` の
+   * `isStdoutBackpressured` と判定基準を共有するため、フルの stdout ではなく最小 interface で
+   * 受け取り、テストでは `{ writableLength }` だけのフェイクに差し替える。
+   */
+  stdout: WritableLengthSource
 }
 
 /**
@@ -34,10 +47,18 @@ export interface WatchingIndicatorProps {
  * 当初は 500ms で実装したが、実機確認でのユーザーフィードバックにより体感の速さを半分にする
  * 1000ms へ変更した。
  *
+ * stdout がバックプレッシャー中（{@link isStdoutBackpressured}）は、その tick の `visible` トグルを
+ * スキップする（FR-02 AC-3）。判定は `setInterval` コールバック内で毎 tick 都度行う（`stdout` は
+ * 同一参照のまま `writableLength` だけが変動するため、tick ごとの最新値を読む必要がある）。
+ * スキップしても `setInterval` 自体は止めない — ドレイン後の次 tick から自然に点滅を再開する。
+ *
  * @param props {@link WatchingIndicatorProps}。
  * @returns `isRunning` が false なら `null`。true なら点滅する `<Text>`。
  */
-export function WatchingIndicator({ isRunning }: WatchingIndicatorProps): ReactElement | null {
+export function WatchingIndicator({
+  isRunning,
+  stdout,
+}: WatchingIndicatorProps): ReactElement | null {
   const [visible, setVisible] = useState(true)
 
   useEffect(() => {
@@ -45,10 +66,13 @@ export function WatchingIndicator({ isRunning }: WatchingIndicatorProps): ReactE
       return
     }
     const id = setInterval(() => {
+      if (isStdoutBackpressured(stdout, DEFAULT_BACKPRESSURE_THRESHOLD_BYTES)) {
+        return
+      }
       setVisible((current) => !current)
     }, 1000)
     return () => clearInterval(id)
-  }, [isRunning])
+  }, [isRunning, stdout])
 
   if (!isRunning) {
     return null

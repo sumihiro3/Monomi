@@ -33,6 +33,7 @@ function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     runHub: vi.fn(async () => {}),
     loadRole: vi.fn(() => 'hub' as const),
     ensureHubRunning: vi.fn(async () => {}),
+    startMemoryWatchdog: vi.fn(),
     loadLocale: vi.fn(() => 'en' as const),
     listDevices: vi.fn(async () => []),
     revokeDevice: vi.fn(async (deviceId: string) => ({
@@ -85,6 +86,38 @@ describe('run (CLI dispatch)', () => {
     expect(calls).toEqual(['ensureHubRunning', 'runDashboard'])
   })
 
+  it('starts the memory watchdog before showing the dashboard (release-20-dashboard-heap-guard FR-01 AC-5)', async () => {
+    const calls: string[] = []
+    const deps = makeDeps({
+      ensureHubRunning: vi.fn(async () => {
+        calls.push('ensureHubRunning')
+      }),
+      startMemoryWatchdog: vi.fn(() => {
+        calls.push('startMemoryWatchdog')
+      }),
+      runDashboard: vi.fn(async () => {
+        calls.push('runDashboard')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.startMemoryWatchdog).toHaveBeenCalledTimes(1)
+    // ensureHubRunning(自動起動疎通確認)を終えてからウォッチドッグを起動し、その後ダッシュボードへ
+    // 進む(順序保証)。
+    expect(calls).toEqual(['ensureHubRunning', 'startMemoryWatchdog', 'runDashboard'])
+  })
+
+  it('does not start the memory watchdog when hub autostart fails (release-20-dashboard-heap-guard FR-01 AC-5)', async () => {
+    const deps = makeDeps({
+      ensureHubRunning: vi.fn(async () => {
+        throw new Error('could not reach hub; see ~/.monomi/hub.log')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(1)
+    expect(deps.startMemoryWatchdog).not.toHaveBeenCalled()
+  })
+
   it('aborts with exit code 1 and never shows the dashboard when hub autostart times out (FR-01 AC-4)', async () => {
     const deps = makeDeps({
       ensureHubRunning: vi.fn(async () => {
@@ -103,6 +136,13 @@ describe('run (CLI dispatch)', () => {
     expect(code).toBe(0)
     expect(deps.runHub).toHaveBeenCalledTimes(1)
     expect(deps.runDashboard).not.toHaveBeenCalled()
+  })
+
+  it('does not start the memory watchdog for "hub" (release-20-dashboard-heap-guard FR-01 AC-5)', async () => {
+    const deps = makeDeps()
+    const code = await run(['hub'], deps)
+    expect(code).toBe(0)
+    expect(deps.startMemoryWatchdog).not.toHaveBeenCalled()
   })
 
   it('errors out when "hub" runs on a role:child device without starting the hub (FR-01 AC-2)', async () => {
@@ -284,6 +324,18 @@ describe('run (CLI dispatch)', () => {
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('monomi'))
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('hub stop'))
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('hub status'))
+  })
+
+  it.each([
+    '--version',
+    '-v',
+    '--help',
+    '-h',
+  ])('does not start the memory watchdog for %s (release-20-dashboard-heap-guard FR-01 AC-5)', async (flag) => {
+    const deps = makeDeps()
+    const code = await run([flag], deps)
+    expect(code).toBe(0)
+    expect(deps.startMemoryWatchdog).not.toHaveBeenCalled()
   })
 
   it('reports unknown commands as exit code 1 without dispatching anything', async () => {
