@@ -1331,6 +1331,24 @@ describe('DetailView — device.name の ANSI エスケープ除染（release-10
   })
 })
 
+describe('DetailView — project.name の ANSI エスケープ除染（release-21-known-issues-cleanup FR-02: CWE-150）', () => {
+  it('project.name に含まれる制御シーケンスを除染して描画する', async () => {
+    const ESC = String.fromCharCode(27)
+    const row = {
+      ...makeRow(),
+      project: { id: 'proj-1', name: `ProjectLens${ESC}]0;PWNED${String.fromCharCode(7)}` },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('ProjectLens')
+      expect(frame).not.toContain('PWNED')
+    })
+  })
+})
+
 describe('DetailView — 概要 BOX の running フィールド（release-16-running-work-display FR-03 AC-2/AC-3/AC-4）', () => {
   /**
    * running フィールドの行だけを取り出し、ANSI エスケープ（dimColor 等）と罫線（│）・

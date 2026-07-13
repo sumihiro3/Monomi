@@ -6,6 +6,7 @@ import { resolvePaths } from '../config/paths.js'
 import {
   DEFAULT_BACKPRESSURE_THRESHOLD_BYTES,
   DEFAULT_BACKPRESSURE_WARN_CONSECUTIVE_COUNT,
+  DEFAULT_LOG_ROTATION_THRESHOLD_BYTES,
   DEFAULT_SAMPLE_INTERVAL_MS,
   isStdoutBackpressured,
   MemoryWatchdog,
@@ -220,6 +221,95 @@ describe('MemoryWatchdog — WARN on 3 consecutive backpressure samples (FR-01 A
   })
 })
 
+describe('MemoryWatchdog log rotation (release-21-known-issues-cleanup FR-01 AC-4/5/6)', () => {
+  it('rotates cli.log to cli.log.old when at/above the threshold, then appends to a fresh cli.log (AC-4)', () => {
+    const paths = resolvePaths(path.join(tmpDir, '.monomi'))
+    fs.mkdirSync(paths.home, { recursive: true })
+    const oldContent = 'x'.repeat(DEFAULT_LOG_ROTATION_THRESHOLD_BYTES)
+    fs.writeFileSync(paths.cliLogFile, oldContent)
+    const watchdog = new MemoryWatchdog(paths, {
+      memoryUsage: fakeMemoryUsage(),
+      stdout: { writableLength: 0 },
+      now: () => new Date('2026-07-13T00:00:00.000Z'),
+    })
+
+    watchdog.sample()
+
+    expect(fs.existsSync(paths.cliLogOldFile)).toBe(true)
+    expect(fs.readFileSync(paths.cliLogOldFile, 'utf8')).toBe(oldContent)
+    const newLines = fs
+      .readFileSync(paths.cliLogFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0)
+    expect(newLines).toHaveLength(1)
+    expect(newLines[0]).toContain(' INFO ')
+  })
+
+  it('overwrites a pre-existing cli.log.old when rotation fires again (AC-6)', () => {
+    const paths = resolvePaths(path.join(tmpDir, '.monomi'))
+    fs.mkdirSync(paths.home, { recursive: true })
+    fs.writeFileSync(paths.cliLogOldFile, 'stale generation from a previous rotation\n')
+    const oldContent = 'y'.repeat(DEFAULT_LOG_ROTATION_THRESHOLD_BYTES)
+    fs.writeFileSync(paths.cliLogFile, oldContent)
+    const watchdog = new MemoryWatchdog(paths, {
+      memoryUsage: fakeMemoryUsage(),
+      stdout: { writableLength: 0 },
+      now: () => new Date('2026-07-13T00:00:00.000Z'),
+    })
+
+    watchdog.sample()
+
+    // 直近1世代のみ保持する仕様どおり、古い cli.log.old は新しい退避内容で上書きされる。
+    expect(fs.readFileSync(paths.cliLogOldFile, 'utf8')).toBe(oldContent)
+    const newLines = fs
+      .readFileSync(paths.cliLogFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0)
+    expect(newLines).toHaveLength(1)
+    expect(newLines[0]).toContain(' INFO ')
+  })
+
+  it('keeps appending to the same cli.log when below the threshold, without creating cli.log.old (AC-5)', () => {
+    const paths = resolvePaths(path.join(tmpDir, '.monomi'))
+    fs.mkdirSync(paths.home, { recursive: true })
+    fs.writeFileSync(paths.cliLogFile, 'existing line\n')
+    const watchdog = new MemoryWatchdog(paths, {
+      memoryUsage: fakeMemoryUsage(),
+      stdout: { writableLength: 0 },
+      now: () => new Date('2026-07-13T00:00:00.000Z'),
+    })
+
+    watchdog.sample()
+
+    expect(fs.existsSync(paths.cliLogOldFile)).toBe(false)
+    const lines = fs
+      .readFileSync(paths.cliLogFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0)
+    expect(lines).toHaveLength(2)
+    expect(lines[0]).toBe('existing line')
+  })
+
+  it('appends without error on the first tick when cli.log does not exist yet (negative control for the existsSync guard)', () => {
+    const paths = resolvePaths(path.join(tmpDir, '.monomi'))
+    expect(fs.existsSync(paths.cliLogFile)).toBe(false)
+    const watchdog = new MemoryWatchdog(paths, {
+      memoryUsage: fakeMemoryUsage(),
+      stdout: { writableLength: 0 },
+      now: () => new Date('2026-07-13T00:00:00.000Z'),
+    })
+
+    expect(() => watchdog.sample()).not.toThrow()
+
+    expect(fs.existsSync(paths.cliLogOldFile)).toBe(false)
+    const lines = fs
+      .readFileSync(paths.cliLogFile, 'utf8')
+      .split('\n')
+      .filter((l) => l.length > 0)
+    expect(lines).toHaveLength(1)
+  })
+})
+
 describe('MemoryWatchdog.start/stop (DI timer, AC-4: no process.exit / unref)', () => {
   it('samples immediately on start, then again every intervalMs via the injected timer', () => {
     const paths = resolvePaths(path.join(tmpDir, '.monomi'))
@@ -311,5 +401,6 @@ describe('default constants', () => {
     expect(DEFAULT_SAMPLE_INTERVAL_MS).toBe(60_000)
     expect(DEFAULT_BACKPRESSURE_THRESHOLD_BYTES).toBe(64 * 1024)
     expect(DEFAULT_BACKPRESSURE_WARN_CONSECUTIVE_COUNT).toBe(3)
+    expect(DEFAULT_LOG_ROTATION_THRESHOLD_BYTES).toBe(10 * 1024 * 1024)
   })
 })

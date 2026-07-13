@@ -25,6 +25,15 @@ export const DEFAULT_BACKPRESSURE_THRESHOLD_BYTES = 64 * 1024
 export const DEFAULT_BACKPRESSURE_WARN_CONSECUTIVE_COUNT = 3
 
 /**
+ * `cli.log` ローテーションの既定サイズ閾値（バイト, release-21-known-issues-cleanup FR-01 AC-1）。
+ *
+ * `paths.cliLogFile` のサイズがこの値以上になったら、追記前に `paths.cliLogOldFile` へリネーム退避
+ * してから新規 `cli.log` への追記を再開する（known-issues S10）。10MB は初期値であり、長時間稼働
+ * （FR-01 AC-7）でもディスクを圧迫しすぎず、直近ログを追える粒度として選定した。
+ */
+export const DEFAULT_LOG_ROTATION_THRESHOLD_BYTES = 10 * 1024 * 1024
+
+/**
  * {@link isStdoutBackpressured} が読む最小 signature（`process.stdout` 互換）。
  *
  * テストでは実ストリームを使わず `{ writableLength }` だけを持つオブジェクトに差し替える。
@@ -169,6 +178,14 @@ export class MemoryWatchdog {
    * （ENOSPC）・権限エラー（EACCES）等で例外を投げうるが、ここは診断ログの記録専用であり、
    * ログ書き込みの失敗でダッシュボード本体（初回 `start()` 呼び出し・以後の `setInterval` tick の
    * どちらも）をクラッシュ／起動失敗させてはならない。失敗は静かに無視する。
+   *
+   * 追記の直前に `cli.log` のサイズを確認し、{@link DEFAULT_LOG_ROTATION_THRESHOLD_BYTES} 以上なら
+   * `cli.log.old` へリネーム退避してから新規 `cli.log` へ追記する（release-21-known-issues-cleanup
+   * FR-01、known-issues S10）。`cli.log` が未存在（初回 tick）の場合は `existsSync` で先にガードし、
+   * `statSync` の ENOENT 例外で追記そのものがスキップされないようにする。ローテーション
+   * （`renameSync`）が失敗した場合もこの外側の try/catch がその tick の追記ごと吸収するが、次 tick
+   * で改めてローテーションを試みるため自己修復する（AC-4 の趣旨に沿い、専用の内側 try/catch は
+   * 設けない）。
    */
   sample(): void {
     try {
@@ -187,6 +204,13 @@ export class MemoryWatchdog {
             consecutiveOverThreshold: this.consecutiveOverThreshold,
           })
         : formatSampleLine('INFO', timestamp, usage, writableLength)
+
+      if (fs.existsSync(this.paths.cliLogFile)) {
+        const { size } = fs.statSync(this.paths.cliLogFile)
+        if (size >= DEFAULT_LOG_ROTATION_THRESHOLD_BYTES) {
+          fs.renameSync(this.paths.cliLogFile, this.paths.cliLogOldFile)
+        }
+      }
 
       this.appendFile(this.paths.cliLogFile, line)
     } catch {

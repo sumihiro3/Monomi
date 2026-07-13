@@ -27,6 +27,8 @@ export interface MonomiPaths {
   hubLogFile: string
   /** CLI プロセスの稼働監視ログ追記先 (`~/.monomi/cli.log`, release-20-dashboard-heap-guard FR-01)。メモリ・stdoutバックプレッシャー計測記録。 */
   cliLogFile: string
+  /** `cliLogFile` のローテーション退避先 (`~/.monomi/cli.log.old`, release-21-known-issues-cleanup FR-01)。閾値超過時に旧内容をここへ退避する。 */
+  cliLogOldFile: string
   /**
    * 初回セットアップ確認プロンプト（install-hooks）の拒否を永続化するマーカーファイル
    * (`~/.monomi/setup-prompt-declined`, release-18-npx-quickstart FR-03)。
@@ -74,6 +76,7 @@ export function resolvePaths(home?: string): MonomiPaths {
     hubPidFile: path.join(base, 'hub.pid'),
     hubLogFile: path.join(base, 'hub.log'),
     cliLogFile: path.join(base, 'cli.log'),
+    cliLogOldFile: path.join(base, 'cli.log.old'),
     setupPromptStateFile: path.join(base, 'setup-prompt-declined'),
   }
 }
@@ -82,13 +85,16 @@ export function resolvePaths(home?: string): MonomiPaths {
  * `~/.monomi` ルートディレクトリを作成し、パーミッションを `0o700` に固定する。
  *
  * hub / bootstrap / pairing-client など `~/.monomi` を作る全箇所が使う共通ヘルパー（known-issues S1）。
- * `mkdirSync` の `mode` オプションは umask でマスクされ既存ディレクトリには適用されないため、
- * 新規・既存いずれの場合も呼び出し後に明示的な `chmodSync` で `0o700` へ揃える
+ * `mkdirSync` に `mode: HOME_DIR_MODE` を渡すことで、作成の瞬間から `0o700` に絞り、
+ * 「作成〜chmod までの間だけ緩いパーミッションが露出する」TOCTOU の窓を解消する
+ * （known-issues S4）。ただし `mkdirSync` の `mode` は既存ディレクトリには効かず、
+ * 新規作成時も umask によって最終的なパーミッションがマスクされ得るため、
+ * 既存ディレクトリの締め直し・umask 分の最終補正として明示的な `chmodSync` を維持する
  * （{@link HOME_DIR_MODE}。bootstrap の `writeTokenFile` と同趣旨）。
  *
  * @param paths {@link resolvePaths} で解決したパス集合。
  */
 export function ensureMonomiHome(paths: MonomiPaths): void {
-  fs.mkdirSync(paths.home, { recursive: true })
+  fs.mkdirSync(paths.home, { recursive: true, mode: HOME_DIR_MODE })
   fs.chmodSync(paths.home, HOME_DIR_MODE)
 }
