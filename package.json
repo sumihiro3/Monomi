@@ -1,6 +1,6 @@
 {
   "name": "monomi-cli",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "A CLI dashboard to monitor Claude Code session status (working / waiting for permission / waiting for input / PR review / idle) across multiple devices and projects.",
   "keywords": [
     "claude-code",
