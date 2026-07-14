@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- npm 公開（`v*` タグの push）時に GitHub Release を自動作成するようになった。リリースノートには CHANGELOG の該当バージョン節がそのまま転記される
+
+### Changed
+
+- README を全面英語化し、日本語版を `README.ja.md` として分離（情報量は同等を維持し、相互リンクで行き来できる）
+- README（英語・日本語版共通）の対応環境の説明に、npm 10.8.2 等の環境では `npm install -g monomi-cli` が `Exit handler never called!` で失敗する場合がある旨と、npm 自体を更新すれば解消する旨の注記を追加
+- LICENSE の著作権表記からメールアドレスを削除（`sumihiro3 <sumihiro@gmail.com>` → `sumihiro3`）
+
 ## [0.1.2] - 2026-07-14
 
 ### Added

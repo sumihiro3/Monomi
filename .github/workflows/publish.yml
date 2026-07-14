@@ -6,7 +6,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish:
@@ -37,7 +37,22 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      - name: Extract changelog notes
+        # CHANGELOG.md の当該バージョン節を抽出し、gh release create の --notes-file へ渡す。
+        # extract-changelog-notes.mjs が非0で終了した場合、既定シェル（bash -eo pipefail）に
+        # よりこのステップが失敗し、以降の npm publish / Release 作成には進まない（fail fast）。
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          node scripts/extract-changelog-notes.mjs "$VERSION" > "$RUNNER_TEMP/release-notes.md"
+
       - name: Publish to npm
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        # 既存 runner 同梱の gh を使用（新規サードパーティ Action は追加しない）。
+        # --verify-tag でタグの実在を検証してから Release を作成する。
+        run: gh release create "${GITHUB_REF_NAME}" --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
