@@ -308,6 +308,30 @@ describe('MemoryWatchdog log rotation (release-21-known-issues-cleanup FR-01 AC-
       .filter((l) => l.length > 0)
     expect(lines).toHaveLength(1)
   })
+
+  it('still appends the sample when rotation (renameSync) fails, skipping only the rotation (S11 hardening)', () => {
+    const paths = resolvePaths(path.join(tmpDir, '.monomi'))
+    fs.mkdirSync(paths.home, { recursive: true })
+    const oldContent = 'z'.repeat(DEFAULT_LOG_ROTATION_THRESHOLD_BYTES)
+    fs.writeFileSync(paths.cliLogFile, oldContent)
+    const renameSyncSpy = vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' })
+    })
+    const watchdog = new MemoryWatchdog(paths, {
+      memoryUsage: fakeMemoryUsage(),
+      stdout: { writableLength: 0 },
+      now: () => new Date('2026-07-13T00:00:00.000Z'),
+    })
+
+    expect(() => watchdog.sample()).not.toThrow()
+    renameSyncSpy.mockRestore()
+
+    // ローテーションは見送られる（退避ファイル無し）が、サンプル追記は巻き添えにならず継続する。
+    expect(fs.existsSync(paths.cliLogOldFile)).toBe(false)
+    const content = fs.readFileSync(paths.cliLogFile, 'utf8')
+    expect(content.startsWith(oldContent)).toBe(true)
+    expect(content).toContain(' INFO ')
+  })
 })
 
 describe('MemoryWatchdog.start/stop (DI timer, AC-4: no process.exit / unref)', () => {

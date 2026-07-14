@@ -183,9 +183,9 @@ export class MemoryWatchdog {
    * `cli.log.old` へリネーム退避してから新規 `cli.log` へ追記する（release-21-known-issues-cleanup
    * FR-01、known-issues S10）。`cli.log` が未存在（初回 tick）の場合は `existsSync` で先にガードし、
    * `statSync` の ENOENT 例外で追記そのものがスキップされないようにする。ローテーション
-   * （`renameSync`）が失敗した場合もこの外側の try/catch がその tick の追記ごと吸収するが、次 tick
-   * で改めてローテーションを試みるため自己修復する（AC-4 の趣旨に沿い、専用の内側 try/catch は
-   * 設けない）。
+   * （`renameSync`）の失敗は専用の内側 try/catch で吸収し、その tick のローテーションのみを見送って
+   * サンプル追記は続行する（記録の継続をサイズ上限の厳守より優先する。codex adversarial review
+   * 対応、known-issues S11 参照）。ローテーション自体は次 tick で再試行するため自己修復する。
    */
   sample(): void {
     try {
@@ -205,11 +205,16 @@ export class MemoryWatchdog {
           })
         : formatSampleLine('INFO', timestamp, usage, writableLength)
 
-      if (fs.existsSync(this.paths.cliLogFile)) {
-        const { size } = fs.statSync(this.paths.cliLogFile)
-        if (size >= DEFAULT_LOG_ROTATION_THRESHOLD_BYTES) {
-          fs.renameSync(this.paths.cliLogFile, this.paths.cliLogOldFile)
+      try {
+        if (fs.existsSync(this.paths.cliLogFile)) {
+          const { size } = fs.statSync(this.paths.cliLogFile)
+          if (size >= DEFAULT_LOG_ROTATION_THRESHOLD_BYTES) {
+            fs.renameSync(this.paths.cliLogFile, this.paths.cliLogOldFile)
+          }
         }
+      } catch {
+        // ローテーション失敗はローテーションのみ諦めて追記を続行する（記録の継続 > サイズ上限の
+        // 厳守。次 tick で再試行する）。外側の catch に落とすと追記まで巻き添えで失われるため分離。
       }
 
       this.appendFile(this.paths.cliLogFile, line)
