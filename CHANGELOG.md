@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-14
+
 ### Added
 
 - npm 公開（`v*` タグの push）時に GitHub Release を自動作成するようになった。リリースノートには CHANGELOG の該当バージョン節がそのまま転記される
