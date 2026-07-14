@@ -53,6 +53,6 @@ jobs:
       - name: Create GitHub Release
         # 既存 runner 同梱の gh を使用（新規サードパーティ Action は追加しない）。
         # --verify-tag でタグの実在を検証してから Release を作成する。
-        run: gh release create "${GITHUB_REF_NAME}" --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
+        run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
