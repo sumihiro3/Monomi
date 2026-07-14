@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ensureMonomiHome, resolvePaths, type MonomiPaths } from './paths.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ensureMonomiHome, HOME_DIR_MODE, resolvePaths, type MonomiPaths } from './paths.js'
 
 let tmpDir: string
 let paths: MonomiPaths
@@ -27,6 +27,10 @@ describe('resolvePaths', () => {
     const defaultPaths = resolvePaths()
     expect(defaultPaths.cliLogFile).toBe(path.join(defaultPaths.home, 'cli.log'))
   })
+
+  it('resolves cliLogOldFile correctly', () => {
+    expect(paths.cliLogOldFile).toBe(path.join(paths.home, 'cli.log.old'))
+  })
 })
 
 describe('ensureMonomiHome', () => {
@@ -49,5 +53,18 @@ describe('ensureMonomiHome', () => {
 
     const mode = fs.statSync(paths.home).mode & 0o777
     expect(mode).toBe(0o700)
+  })
+
+  it('passes mode: HOME_DIR_MODE (0o700) to mkdirSync to close the TOCTOU window', () => {
+    const mkdirSyncSpy = vi.spyOn(fs, 'mkdirSync')
+
+    ensureMonomiHome(paths)
+
+    expect(mkdirSyncSpy).toHaveBeenCalledWith(
+      paths.home,
+      expect.objectContaining({ recursive: true, mode: HOME_DIR_MODE })
+    )
+
+    mkdirSyncSpy.mockRestore()
   })
 })

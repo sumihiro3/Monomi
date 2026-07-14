@@ -287,7 +287,7 @@ export function DetailView({
           <Text>{source.instance_id}</Text>
         </Field>
         <Field label="project">
-          <Text bold>{source.project.name}</Text>
+          <Text bold>{sanitizeDisplayText(source.project.name)}</Text>
         </Field>
         <Field label="device">
           <Text>{sanitizeDisplayText(source.device.name)}</Text>

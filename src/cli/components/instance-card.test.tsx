@@ -113,6 +113,22 @@ describe('InstanceCard（FR-01）', () => {
     expect(frame).toContain('Mac mini')
     expect(frame).toContain('feature/x')
   })
+
+  it('project.name に含まれる ANSI エスケープ・制御文字を除染して描画する（release-21-known-issues-cleanup FR-02: CWE-150）', () => {
+    const ESC = String.fromCharCode(27)
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({
+          projectName: `ProjectLens${ESC}]0;PWNED${String.fromCharCode(7)}`,
+        })}
+        selected={false}
+        width={40}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain('PWNED')
+    expect(frame).toContain('ProjectLens')
+  })
 })
 
 describe('InstanceCard — running_work（release-16-running-work-display FR-03 AC-1/2/4/5）', () => {

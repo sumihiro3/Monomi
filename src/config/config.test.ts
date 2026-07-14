@@ -40,6 +40,7 @@ describe('resolvePaths', () => {
       hubPidFile: '/custom/root/hub.pid',
       hubLogFile: '/custom/root/hub.log',
       cliLogFile: '/custom/root/cli.log',
+      cliLogOldFile: '/custom/root/cli.log.old',
       setupPromptStateFile: '/custom/root/setup-prompt-declined',
     })
   })
