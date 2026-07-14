@@ -202,10 +202,6 @@ rm -rf ~/.monomi           # 4. config.yml・SQLite DB・token・reporter を含
 
 `~/.monomi` を削除すると、稼働履歴を保持している SQLite DB・ペアリング済みデバイスの token もすべて失われる。他デバイスと共有中の hub の場合は削除前に影響範囲を確認すること。
 
-## 開発に参加する場合
-
-開発に参加する場合はリポジトリの [`docs/development.md`](./docs/development.md) を参照。
-
 ## ドキュメント
 
 - 設計の権威仕様: `docs/ARCHITECTURE.md`（`docs/monomi-handoff.md` は設計経緯を記録した凍結資料であり、現行仕様の参照先ではない）

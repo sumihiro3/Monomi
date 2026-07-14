@@ -54,6 +54,7 @@ known-issues **N4** の注記対応を含む。
 - AC-6: リポジトリ内の README.md への参照（`docs/development.md` 等）が引き続き正しいことを確認し、日本語読者向けの導線が必要な箇所には README.ja.md への参照を追記する。`reporter/README.md` など別ファイルの README は対象外（変更しない）
 - AC-7: `docs/known-issues.md` の N4 を解決済みログへ移動する（注記対応で解決とし、engines 下限引き上げはしない旨を記録する）
 - AC-8: 既存のテスト・lint・format 検査が通る（prettier は `**/*.md` を対象に含むため、新規 README.ja.md も整形チェックの対象になる）
+- AC-9: 「開発に参加する場合」節は README.md・README.ja.md のいずれにも掲載しない（ユーザー指示により削除。要件確定後に日本語 README からは削除済み。開発者向け文書 `docs/development.md` への導線は「ドキュメント」節の一覧に残す）
 
 ### FR-03: package.json description の英語化（優先度: 必須）
 
