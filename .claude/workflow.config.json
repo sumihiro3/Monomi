@@ -37,7 +37,11 @@
       },
       {
         "path": "README.md",
-        "instruction": "README.md を同期してください。ユーザーに見える機能変更・セットアップ手順の変更のみ反映し、乖離がなければ変更しないこと。"
+        "instruction": "README.md を同期してください（英語で書く。English で同期する）。ユーザーに見える機能変更・セットアップ手順の変更のみ反映し、乖離がなければ変更しないこと。"
+      },
+      {
+        "path": "README.ja.md",
+        "instruction": "README.ja.md（README.md の日本語版）を同期してください。日本語で書き、README.md と情報量が同等になるよう反映し、乖離がなければ変更しないこと。"
       },
       {
         "path": "docs/design/class-diagram.md",

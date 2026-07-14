@@ -1,6 +1,6 @@
 # 開発者向けセットアップ
 
-Monomi 本体（リポジトリ）を clone して開発に参加する場合の手順。npm パッケージ（`monomi-cli`）の利用者向け手順は [README.md](../README.md) を参照。
+Monomi 本体（リポジトリ）を clone して開発に参加する場合の手順。npm パッケージ（`monomi-cli`）の利用者向け手順は [README.md](../README.md)（英語版）を参照。日本語で読みたい場合は [README.ja.md](../README.ja.md) を参照。
 
 ## clone・セットアップ
 
