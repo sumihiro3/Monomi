@@ -12,6 +12,7 @@
       "*.ts",
       "*.js",
       "scripts/**/*.js",
+      "scripts/**/*.mjs",
       "!dist",
       "!node_modules",
       // .claude は Workflow tool 専用スクリプト（通常の JS/TS ソースではない）。
