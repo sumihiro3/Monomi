@@ -13,14 +13,14 @@
 
 ## スコープの確定（壁打ちでの決定事項）
 
-| 論点 | 決定 |
-|---|---|
-| 対象ターミナル | **Terminal.app / Ghostty / tmux 併用**。iTerm2・VS Code は対象外だが、strategy の配列追加のみで拡張できる構造にする |
-| 対応 OS | **macOS + WSL2**。WSL2 は Windows Terminal のウィンドウ前面化どまりの best-effort。Linux ネイティブは対象外 |
-| 別デバイスのセッション選択時 | `f` キー無効化 + 理由メッセージ（notice）表示。フッターヒントも同一デバイス選択時のみ表示（device_id 照合）。フォーカス移動は CLI と同一マシンのセッションに限定 |
-| 捕捉タイミング | 毎フックイベントで捕捉（`--resume` で同一 session_id が別 TTY で再開しうるため SessionStart 限定は不可） |
-| `sessions.pid` の充填 | 今回もしない（フックの ppid チェーンに中間シェルが挟まり pid 同定が脆い。紐付けは TTY で足りる）。将来の stale-TTY 緩和策として温存 |
-| `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`（Ghostty 前提設定） | install-hooks で自動設定しない（全ターミナルで動的タイトルを殺す副作用が大きい）。README 記載 + フォーカス失敗時の notice ヒントで案内 |
+| 論点                                                     | 決定                                                                                                                                                             |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 対象ターミナル                                           | **Terminal.app / Ghostty / tmux 併用**。iTerm2・VS Code は対象外だが、strategy の配列追加のみで拡張できる構造にする                                              |
+| 対応 OS                                                  | **macOS + WSL2**。WSL2 は Windows Terminal のウィンドウ前面化どまりの best-effort。Linux ネイティブは対象外                                                      |
+| 別デバイスのセッション選択時                             | `f` キー無効化 + 理由メッセージ（notice）表示。フッターヒントも同一デバイス選択時のみ表示（device_id 照合）。フォーカス移動は CLI と同一マシンのセッションに限定 |
+| 捕捉タイミング                                           | 毎フックイベントで捕捉（`--resume` で同一 session_id が別 TTY で再開しうるため SessionStart 限定は不可）                                                         |
+| `sessions.pid` の充填                                    | 今回もしない（フックの ppid チェーンに中間シェルが挟まり pid 同定が脆い。紐付けは TTY で足りる）。将来の stale-TTY 緩和策として温存                              |
+| `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`（Ghostty 前提設定） | install-hooks で自動設定しない（全ターミナルで動的タイトルを殺す副作用が大きい）。README 記載 + フォーカス失敗時の notice ヒントで案内                           |
 
 ## 機能要件
 

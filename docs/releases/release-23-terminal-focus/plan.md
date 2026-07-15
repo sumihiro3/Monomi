@@ -6,11 +6,11 @@
 
 ## 確定スコープ
 
-| 項目 | 決定 |
-|---|---|
-| 対象ターミナル | **Terminal.app / Ghostty / tmux 併用**（iTerm2・VS Code は対象外だが strategy 追加で拡張できる構造にする） |
-| 対応 OS | **macOS + WSL2**（WSL2 は Windows Terminal のウィンドウ前面化どまりの best-effort。Linux ネイティブは対象外） |
-| 別デバイスのセッション | **f キー無効化 + 理由メッセージ表示**。フッターヒントも同一デバイス時のみ表示（device_id 照合） |
+| 項目                   | 決定                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 対象ターミナル         | **Terminal.app / Ghostty / tmux 併用**（iTerm2・VS Code は対象外だが strategy 追加で拡張できる構造にする）    |
+| 対応 OS                | **macOS + WSL2**（WSL2 は Windows Terminal のウィンドウ前面化どまりの best-effort。Linux ネイティブは対象外） |
+| 別デバイスのセッション | **f キー無効化 + 理由メッセージ表示**。フッターヒントも同一デバイス時のみ表示（device_id 照合）               |
 
 ## 方式の要点（claude-code-monitor 調査より）
 
@@ -104,13 +104,13 @@ wsl-strategy.ts           # powershell.exe で Windows Terminal 前面化（best
 
 ## 主要リスクと対応
 
-| リスク | 対応 |
-|---|---|
-| TTY 再利用・stale TTY | `closed` 中は f をゲート。live での不一致は AppleScript 側で見つからず `not_found` notice（安全側） |
-| Ghostty のアクセシビリティ権限 / タイトル上書き競合 | 失敗時 notice に許可手順ヒント。タグ書込→検索は 1 回リトライ、finally で必ずタグ復元 |
-| tmux デタッチ中 / 複数クライアント | 0件→notice、複数→client_activity 最大を採用 |
-| reporter 由来値のインジェクション | focus-target の厳格検証 + AppleScript エスケープ + execFile（非 shell）の三段防御 |
-| 旧 reporter / 旧 hub 混在 | 欠落 = 「情報なし」縮退。zod optional/strip で双方向に 400 を出さない |
+| リスク                                              | 対応                                                                                                |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| TTY 再利用・stale TTY                               | `closed` 中は f をゲート。live での不一致は AppleScript 側で見つからず `not_found` notice（安全側） |
+| Ghostty のアクセシビリティ権限 / タイトル上書き競合 | 失敗時 notice に許可手順ヒント。タグ書込→検索は 1 回リトライ、finally で必ずタグ復元                |
+| tmux デタッチ中 / 複数クライアント                  | 0件→notice、複数→client_activity 最大を採用                                                         |
+| reporter 由来値のインジェクション                   | focus-target の厳格検証 + AppleScript エスケープ + execFile（非 shell）の三段防御                   |
+| 旧 reporter / 旧 hub 混在                           | 欠落 = 「情報なし」縮退。zod optional/strip で双方向に 400 を出さない                               |
 
 ## 検証（実機）
 
