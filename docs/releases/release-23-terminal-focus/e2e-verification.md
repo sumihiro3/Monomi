@@ -28,9 +28,9 @@ node dist/cli.js install-hooks
 
 チェック:
 
-- [ ] hub が `http://0.0.0.0:47632` で起動
-- [ ] `~/.monomi/{config.yml,monomi.db,token}` が生成される
-- [ ] フック登録が成功（7 フック確認: `grep "monomi-report.sh" ~/.claude/settings.json`）
+- [x] hub が `http://0.0.0.0:47632` で起動（2026-07-15 確認。**注意: 常駐 hub が旧ビルドのままだと `terminal` が保存されず「情報なし」になる。必ず新ビルドで再起動すること**）
+- [x] `~/.monomi/{config.yml,monomi.db,token}` が生成される（既存環境で列マイグレーション適用を確認）
+- [x] フック登録が成功（7 フック確認: `grep "monomi-report.sh" ~/.claude/settings.json`）
 
 ## 1. Terminal.app 検証（macOS）
 
@@ -55,11 +55,13 @@ node dist/cli.js        # list ビュー表示
 
 検証ステップ:
 
-- [ ] ダッシュボードに複数セッション（タブ1・タブ2 各々）がリスト表示される
-- [ ] タブ1 のセッション行を選択し、ダッシュボード下部に ` f focus` ヒントが表示される
-- [ ] `f` キーを押す → タブ1 が前面に出て、Terminal.app ウィンドウが active になる
-- [ ] タブ2 のセッション行を選択し、`f` キーを押す → タブ2 が前面に出る
-- [ ] detail ビューを開いた状態（Enter キー）でも `f` キーが動作する
+- [x] ダッシュボードに複数セッション（タブ1・タブ2 各々）がリスト表示される
+- [x] タブ1 のセッション行を選択し、ダッシュボード下部に ` f focus` ヒントが表示される
+- [x] `f` キーを押す → タブ1 が前面に出て、Terminal.app ウィンドウが active になる
+- [x] タブ2 のセッション行を選択し、`f` キーを押す → タブ2 が前面に出る
+- [x] detail ビューを開いた状態（Enter キー）でも `f` キーが動作する
+
+（2026-07-16 実機確認済み）
 
 メモ:
 
@@ -195,6 +197,8 @@ node dist/cli.js
 
 ## 5. WSL2 前面化検証（Windows + WSL2、環境あれば）
 
+> **注記（2026-07-16）**: WSL2 対応は Windows Terminal 前面化から WezTerm（タブ/ペイン単位）へ方針転換した（known-issues **U17**）。本節の検証は任意のまま未実施でよい。
+
 WSL2 内の Claude Code セッションから Windows Terminal のウィンドウ前面化。
 
 ### 5.1 準備
@@ -322,7 +326,7 @@ pnpm run lint
 
 | 日付 | 実施者 | 環境                    | Terminal.app | Ghostty | tmux | WSL2 | 旧 reporter | メモ |
 | ---- | ------ | ----------------------- | ------------ | ------- | ---- | ---- | ----------- | ---- |
-|      |        | macOS (Terminal.app)    | [ ]          |         |      |      | [ ]         |      |
+| 2026-07-16 | sumihiro | macOS (Terminal.app)    | [x]          |         |      |      | [ ]         | f キーでタブ前面化を確認。前提: 常駐 hub の新ビルド再起動が必要（旧 hub だと terminal が strip され「情報なし」になる） |
 |      |        | macOS (Ghostty)         |              | [ ]     |      |      |             |      |
 |      |        | macOS (tmux)            | [ ]          |         | [ ]  |      |             |      |
 |      |        | WSL2 + Windows Terminal |              |         |      | [ ]  |             |      |
