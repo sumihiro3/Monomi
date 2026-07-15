@@ -91,6 +91,45 @@ const DIFF = diffPathScope
   ? `カレント作業ディレクトリ(=リポジトリルート)でレビューする。レビュー対象は「${base} との差分 + 未コミットの変更」のうち、次のパスに限定する: ${diffPathScope.join(', ')}。git diff ${base}... -- ${diffPathScope.join(' ')} と、git status / git diff(未コミット分)も同じパスに絞って確認すること。`
   : `カレント作業ディレクトリ(=リポジトリルート)でレビューする。レビュー対象は「${base} との差分 + 未コミットの変更」。git diff ${base}... と git status / git diff で対象を確認すること。`
 
+// Codex 連携の対象判定: config.codexReview.enabled かつ diffPathScope が null(全差分)のときのみ、
+// 各次元のレビュープロンプトへ Codex 委譲手順を付与する。
+// diffPathScope が非 null(モノレポの部分スコープ・Gate2 の絞り込み再レビュー)のときは付与しない
+// (Codex CLI に --scope <path> 相当が存在せず、--base 比較も未コミット差分を含められないため)。
+const codexEligible = Boolean(config.codexReview && config.codexReview.enabled === true) && diffPathScope === null
+
+/** Codex 委譲手順(codexEligible のときのみプロンプトへ付与)。次元ごとの prompt を focus text として渡す。 */
+function codexInstructions(d) {
+  return `
+
+---
+## Codex 連携(任意・失敗時は自力レビューにフォールバック)
+
+このマシンに OpenAI Codex CLI プラグイン(codex@<マーケットプレイス名>)が導入・認証済みであれば、このレビューの一次生成を Codex の adversarial-review へ委譲してよい。以下を順に行い、いずれかの段階で「利用不可・非対応・失敗」と判断した場合は、理由を詮索せず直ちにこの手順を中断し、このプロンプト冒頭の指示どおり自分自身で diff を読んでレビューすること(=今日までの挙動と同じ)。Codex 経由・自力どちらの経路でも、最終的に返す findings の形式は変わらない。
+
+1. **作業ツリーがクリーンであること**を確認する: bash で \`git status --porcelain\` を実行し、出力が空であること。出力が空でない場合(未コミットの変更がある場合)、Codex の --base 比較は未コミット差分を含められないため、Codex 連携を行わず直ちに自力レビューへ進むこと。
+2. Codex プラグインの導入ディレクトリを解決する:
+   a. \`cat ~/.claude/settings.json\` 等で \`enabledPlugins\` を確認し、\`"codex@<マーケットプレイス名>": true\` の形のキーを探す(例: \`codex@openai-codex\`)。見つからなければ Codex 未導入とみなし自力レビューへ進む。
+   b. 見つかったマーケットプレイス名を使い、\`ls -d ~/.claude/plugins/cache/<マーケットプレイス名>/codex/*/ 2>/dev/null | sort -V | tail -1\` でインストールディレクトリを得る(バージョンは環境により異なるためハードコード禁止)。ディレクトリが見つからない、または \`<ディレクトリ>/scripts/codex-companion.mjs\` が存在しない場合は Codex 未導入とみなし自力レビューへ進む。
+3. \`node "<解決したディレクトリ>/scripts/codex-companion.mjs" setup --json\` を実行する。**この bash 呼び出しには明示的にタイムアウトを指定すること(目安 30000ms)**。終了コードが 0 以外、タイムアウトした、標準出力が JSON としてパースできない、または \`.ready !== true\` の場合は Codex 利用不可とみなし自力レビューへ進む。
+4. 利用可能であれば、次元プロンプト(下記)をシェルのクォート崩れなく渡すため、bash のクォート付き heredoc で変数に読み込んでから渡すこと(例):
+   \`\`\`bash
+   FOCUS=$(cat <<'CODEX_FOCUS_EOF'
+   ${d.prompt}
+   CODEX_FOCUS_EOF
+   )
+   node "<解決したディレクトリ>/scripts/codex-companion.mjs" adversarial-review --json --base "${base}" "$FOCUS"
+   \`\`\`
+   (この呼び出しはバックグラウンド実行にせず、完了を待って同期的に扱うこと。--wait は付けなくてよい。このコマンドは Codex CLI の性質上、数十秒〜数分かかることがある。**bash 呼び出しに明示的にタイムアウトを指定すること(目安 600000ms、bash ツールの上限)**。Codex 側・ネットワーク側がハングし応答が返らない場合に、この工程全体が無期限にブロックされるのを防ぐため。)
+   終了コードが 0 以外、タイムアウトした、標準出力が JSON としてパースできない、または \`.result\` が null もしくは \`.result.findings\` が配列でない場合は、Codex 呼び出し失敗(タイムアウトも失敗の一種として扱う)とみなし自力レビューへ進む。
+5. 成功した場合、\`.result.findings\` の各要素(severity/title/body/file/line_start/line_end/confidence/recommendation を持つ)を、次の対応で findings の要素に変換する:
+   - severity → そのまま
+   - title → そのまま
+   - file → line_start === line_end なら "<file>:<line_start>"、異なれば "<file>:<line_start>-<line_end>"
+   - detail → body。recommendation があれば末尾に改行して「対応案: <recommendation>」を追記してよい
+   さらに、この観点(「${d.prompt}」)に明確に無関係な所見(全く別の懸念領域を指すもの)は除外し、関連する所見のみを findings に残すこと(他の観点の呼び出しで別途拾われるため、除外してよい)。
+6. この手順を実際に使って findings を得た場合、返り値のトップレベルに engine: "codex" を含めること。1〜4 のいずれかで中断し自力レビューへ切り替えた場合は engine: "claude" を含めること。`
+}
+
 const FINDINGS_SCHEMA = {
   type: 'object',
   required: ['findings'],
@@ -108,6 +147,11 @@ const FINDINGS_SCHEMA = {
         },
       },
     },
+    engine: {
+      type: 'string',
+      enum: ['claude', 'codex'],
+      description: 'この次元の一次所見を生成したエンジン。Codex 連携が無効・非対象・フォールバックした場合は claude',
+    },
   },
 }
 
@@ -124,7 +168,7 @@ phase('レビュー')
 const results = await pipeline(
   DIMENSIONS,
   d =>
-    agent(`${DIFF}\n${d.prompt}`, {
+    agent(`${DIFF}\n${d.prompt}${codexEligible ? codexInstructions(d) : ''}`, {
       label: `review:${d.key}`,
       phase: 'レビュー',
       schema: FINDINGS_SCHEMA,
@@ -133,8 +177,10 @@ const results = await pipeline(
   (review, d) => {
     // レビューエージェントが null(失敗・スキップ)を返した次元は throw せず「検証不能」として扱う
     if (!review || !Array.isArray(review.findings)) {
-      return { dimension: d.key, ran: false, findings: [], verified: [] }
+      return { dimension: d.key, ran: false, findings: [], verified: [], engine: null }
     }
+    // engine は Codex 連携が対象外・未指定・不正値のときは claude 扱い(既定挙動と同じ)
+    const engine = review.engine === 'codex' ? 'codex' : 'claude'
     return parallel(
       review.findings.map(
         f => () =>
@@ -143,7 +189,7 @@ const results = await pipeline(
             { label: `verify:${f.file}`, phase: '検証', schema: VERDICT_SCHEMA, model: verifyModel }
           ).then(v => ({ ...f, dimension: d.key, verdict: v }))
       )
-    ).then(verified => ({ dimension: d.key, ran: true, findings: review.findings, verified }))
+    ).then(verified => ({ dimension: d.key, ran: true, findings: review.findings, verified, engine }))
   }
 )
 
@@ -180,14 +226,19 @@ DIMENSIONS.forEach((d, i) => {
         file: entry.file,
         detail: entry.detail,
         verifiedReason: entry.verdict.reason,
+        engine: r.engine,
       })
     }
     // isReal: false は誤検出として意図的に破棄する
   })
 })
 
+const codexUsedCount = codexEligible
+  ? DIMENSIONS.reduce((acc, d, i) => acc + (results && results[i] && results[i].engine === 'codex' ? 1 : 0), 0)
+  : 0
 log(
-  `確定所見: ${confirmed.length} 件 / 検証不能: ${unverifiable.length} 件 / 実行次元: ${dimensionsRun.length}/${DIMENSIONS.length}`
+  `確定所見: ${confirmed.length} 件 / 検証不能: ${unverifiable.length} 件 / 実行次元: ${dimensionsRun.length}/${DIMENSIONS.length}` +
+    (codexEligible ? ` / Codex使用: ${codexUsedCount}/${DIMENSIONS.length}次元` : '')
 )
 
 return {

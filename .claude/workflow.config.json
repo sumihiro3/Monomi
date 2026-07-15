@@ -101,6 +101,9 @@
       "backlogOnly": ["low"]
     }
   },
-  "templateVersion": "d3cff89bef2d8b9af88a715ec0e6416589b17805",
+  "codexReview": {
+    "enabled": true
+  },
+  "templateVersion": "2625c7180b8d3173df2235b2c56bdbe14c4c345a",
   "installedAt": "2026-07-07"
 }

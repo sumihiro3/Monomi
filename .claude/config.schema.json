@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "workflow.config.json",
-  "description": "リリースワークフローエンジン(.claude/workflows/*.js)が読み込むプロジェクト固有設定のスキーマ。エンジン本体はプロジェクト中立とし、固有値(検査コマンド・レビュープロンプト・文書パス等)はすべてこの config に置く。信頼境界: checks[].cmd は任意シェルコマンドとして実行され、reviewDimensions[].prompt・syncDocs.targets[].instruction はエージェントへの指示として無検証で展開される。このファイルは .claude/workflows/*.js 本体と同じ信頼レベル(リポジトリにコミットされ、通常の PR レビューでのみ変更される)を前提とする。外部入力や未レビューの変更を書き込んではならない",
+  "description": "リリースワークフローエンジン(.claude/workflows/*.js)が読み込むプロジェクト固有設定のスキーマ。エンジン本体はプロジェクト中立とし、固有値(検査コマンド・レビュープロンプト・文書パス等)はすべてこの config に置く。信頼境界: checks[].cmd は任意シェルコマンドとして実行され、reviewDimensions[].prompt・syncDocs.targets[].instruction はエージェントへの指示として無検証で展開される。このファイルは .claude/workflows/*.js 本体と同じ信頼レベル(リポジトリにコミットされ、通常の PR レビューでのみ変更される)を前提とする。外部入力や未レビューの変更を書き込んではならない。configVersion の互換性は前方向のみ保証する(同一 configVersion 内でのスキーマへの optional フィールド追加は、新エンジン+新スキーマが旧 config を読める形でのみ行い、旧エンジン+旧スキーマ(このファイルの過去バージョン)が新しい config を検証できることは保証しない)。エンジン・スキーマ・config は install/update-release-workflow の正規フローでは常に同時に更新されるため通常は問題にならないが、手動でエンジン・スキーマだけを過去バージョンへ戻しつつ config を新しいまま残すような操作は非サポートである",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -329,6 +329,17 @@
     "installedAt": {
       "type": ["string", "null"],
       "description": "テンプレート導入日(YYYY-MM-DD)。テンプレート未経由は null"
+    },
+    "codexReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "レビュー次元(review-changes)の一次生成を OpenAI Codex CLI(Claude Code プラグイン codex@<marketplace>、未導入・未認証・失敗時は自動的に通常の自力レビューへフォールバック)へ任意で委譲する設定。省略時は未委譲(常に自力レビュー)として扱う",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "true の場合、diffPathScope が null(全差分)かつ作業ツリーがクリーンなレビュー呼び出しに限り、次元ごとに Codex への委譲を試みる。Codex 未導入・認証未了・呼び出し失敗など、いかなる理由であっても自動的に自力レビューへフォールバックする(このフラグは委譲の許可であって、Codex が必ず使われることを保証しない)"
+        }
+      }
     }
   }
 }
