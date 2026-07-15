@@ -44,6 +44,7 @@ export const EN = {
   'help.openDetail': 'List: open project detail',
   'help.moveProject': 'Detail: move to adjacent project',
   'help.toggleWrap': 'Detail: toggle event line wrap/truncate',
+  'help.focusTerminal': 'List / Detail: focus the terminal running this session',
   'help.back': 'Back / close help',
   'help.toggleHelp': 'Toggle help',
   'help.quit': 'Quit',
@@ -54,6 +55,19 @@ export const EN = {
 
   // list.*（一覧 0 件時の案内）
   'list.empty': '(No matching instances)',
+
+  // focus.*（`f` キーでのターミナルフォーカス。release-23-terminal-focus FR-05。
+  // notFound/failed は Ghostty 特有のつまずき（アクセシビリティ許可・環境変数）の案内を含む）
+  'focus.otherDevice':
+    'This session is running on another device; focus only works for sessions on this machine.',
+  'focus.noTerminalInfo': 'No terminal information is available for this session.',
+  'focus.sessionClosed': 'This session has already closed; there is no terminal to focus.',
+  'focus.tmuxDetached': 'The tmux session has no attached client to focus.',
+  'focus.notFound':
+    'Could not find the terminal tab. If you use Ghostty, grant Accessibility permission (System Settings → Privacy & Security → Accessibility) to the app running monomi, and set CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 in your environment.',
+  'focus.unsupported': 'Focus is not supported on this platform.',
+  'focus.failed':
+    'Failed to focus the terminal. If you use Ghostty, grant Accessibility permission (System Settings → Privacy & Security → Accessibility) to the app running monomi, and set CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 in your environment.',
 
   // cli.*（`monomi` bin の USAGE・エラーメッセージ・成功メッセージ）
   'cli.usage': `Monomi — a status dashboard for Claude Code across machines

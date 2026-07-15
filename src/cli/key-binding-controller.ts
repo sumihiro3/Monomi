@@ -48,6 +48,13 @@ export interface KeyBindingHost {
   toggleHelp(): void
   /** アプリを終了する（`q`）。 */
   quit(): void
+  /**
+   * 選択中 instance のセッション実行中ターミナルへフォーカス移動する（`f`、release-23-terminal-focus FR-05b）。
+   *
+   * device_id 照合・ゲート判定・notice 表示は AppView 側（host 実装）の責務。
+   * KeyBindingController は viewMode によらずディスパッチするだけで、実行可否は判断しない。
+   */
+  focusTerminal(): void
 }
 
 /**
@@ -72,6 +79,9 @@ export interface KeyBindingHost {
  *
  * `viewMode` によらず常に有効:
  * - `esc`: 戻る（ヘルプを閉じる／詳細から一覧へ）、`?`: ヘルプ、`q`: 終了
+ * - `f`: 選択中 instance のターミナルへフォーカス移動（release-23-terminal-focus FR-05b。
+ *   list/detail 両ビューで {@link KeyBindingHost.focusTerminal} へディスパッチするのみで、
+ *   実行可否の判断（device_id 照合・ゲート条件）は host 側の責務）
  *
  * View 状態（選択位置・モード）を持たず、判断ロジックも持たない薄い写像に徹する。
  */
@@ -141,6 +151,10 @@ export class KeyBindingController {
     }
     if (input === 'q') {
       this.host.quit()
+      return true
+    }
+    if (input === 'f') {
+      this.host.focusTerminal()
       return true
     }
     return false

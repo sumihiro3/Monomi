@@ -1547,6 +1547,284 @@ test_tool_summary_nojq_fallback() {
   kill "$cappid" >/dev/null 2>&1
 }
 
+# =========================================================================
+# Test 22 (release-23 FR-01 AC-1): resolve_tty() は ppid チェーンを辿り、最初に
+# 見つかった非 ??/非空の tty を採用する（浅い階層は ?? を返すケース）
+# =========================================================================
+# 実 ps をフェイクへ差し替え、「1〜3 階層目は ??、4 階層目で見つかる」ケースを決定的に
+# 検証する。カウンタファイルで ps 呼び出し回数を追跡し、呼び出し回数だけで応答を決める
+# （実際の pid 値には依存しない。ppid= 呼び出しごとに「元 pid − 1」を返すだけの単純な
+# 仕組みで、0/1/同一値に達しない限り無限に降下を続けるが、resolve_tty() 自身が持つ
+# 15 段の上限で必ず打ち切られる；本ケースは 4 階層目で先に見つかるため上限には当たらない）。
+test_resolve_tty_finds_ancestor_tty() {
+  local name='release-23 FR-01 AC-1: resolve_tty finds tty via ppid chain (ancestor level)'
+  local home="$WORK/t22-home"
+  local repo="$WORK/t22-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t22-cap.log"
+  local capport="$WORK/t22-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  local fakebin="$WORK/t22-bin"
+  mkdir -p "$fakebin"
+  local counter="$WORK/t22-ps-count"
+  echo 0 >"$counter"
+  cat >"$fakebin/ps" <<EOF
+#!/usr/bin/env bash
+if [ "\$1" = '-o' ] && [ "\$2" = 'tty=' ]; then
+  n=\$(cat "$counter" 2>/dev/null || echo 0)
+  if [ "\$n" -ge 3 ]; then
+    printf 'ttys099\n'
+  else
+    printf '??\n'
+  fi
+elif [ "\$1" = '-o' ] && [ "\$2" = 'ppid=' ]; then
+  n=\$(cat "$counter" 2>/dev/null || echo 0)
+  n=\$((n + 1))
+  echo "\$n" >"$counter"
+  pid=\$4
+  printf '%s\n' "\$((pid - 1))"
+fi
+EOF
+  chmod +x "$fakebin/ps"
+
+  hook_json 'PreToolUse' "$repo" '' |
+    PATH="$fakebin:$PATH" MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
+      "$SCRIPT" >/dev/null 2>&1
+
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (tty resolved via ancestor, /dev/ prefixed)" '/dev/ttys099' \
+      "$(jq -r '.terminal.tty' "$caplog" | head -n 1)"
+  else
+    fail "$name (tty resolved via ancestor, /dev/ prefixed)" 'no request captured'
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 23 (release-23 FR-01 AC-1): 15 段辿っても tty が見つからなければ null に
+# 縮退する（無限ループしない）
+# =========================================================================
+test_resolve_tty_gives_up_after_max_depth() {
+  local name='release-23 FR-01 AC-1: resolve_tty gives up (null) after max depth, no infinite loop'
+  local home="$WORK/t23-home"
+  local repo="$WORK/t23-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t23-cap.log"
+  local capport="$WORK/t23-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  # フェイク ps: tty= は常に ?? を返し、ppid= は常に「元 pid − 1」を返す（0/1/同一値に
+  # 到達しないため resolve_tty() 自身の 15 段上限で打ち切られることを検証する）。
+  local fakebin="$WORK/t23-bin"
+  mkdir -p "$fakebin"
+  cat >"$fakebin/ps" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = '-o' ] && [ "$2" = 'tty=' ]; then
+  printf '??\n'
+elif [ "$1" = '-o' ] && [ "$2" = 'ppid=' ]; then
+  pid=$4
+  printf '%s\n' "$((pid - 1))"
+fi
+EOF
+  chmod +x "$fakebin/ps"
+
+  hook_json 'PreToolUse' "$repo" '' |
+    PATH="$fakebin:$PATH" MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
+      "$SCRIPT" >/dev/null 2>&1
+
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (tty null when not found within max depth)" 'null' \
+      "$(jq -r '.terminal.tty' "$caplog" | head -n 1)"
+  else
+    fail "$name (tty null when not found within max depth)" 'no request captured'
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 24 (release-23 FR-01 AC-2/AC-3): terminal オブジェクトの環境変数捕捉
+# （jq 経路・no-jq フォールバック経路の両方）
+# =========================================================================
+test_terminal_env_capture() {
+  local name='release-23 FR-01 AC-2/AC-3: terminal object captures env vars (jq + no-jq)'
+  local home="$WORK/t24-home"
+  local repo="$WORK/t24-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t24-cap.log"
+  local capport="$WORK/t24-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  local mode
+  for mode in jq nojq; do
+    : >"$caplog"
+    if [ "$mode" = nojq ]; then
+      hook_json 'PreToolUse' "$repo" '' |
+        MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" MONOMI_DISABLE_JQ=1 \
+          TERM_PROGRAM='iTerm.app' TMUX='/tmp/tmux-501/default,4242,0' TMUX_PANE='%7' \
+          WSL_DISTRO_NAME='Ubuntu' WT_SESSION='abc-def' \
+          "$SCRIPT" >/dev/null 2>&1
+    else
+      hook_json 'PreToolUse' "$repo" '' |
+        MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
+          TERM_PROGRAM='iTerm.app' TMUX='/tmp/tmux-501/default,4242,0' TMUX_PANE='%7' \
+          WSL_DISTRO_NAME='Ubuntu' WT_SESSION='abc-def' \
+          "$SCRIPT" >/dev/null 2>&1
+    fi
+    if ! wait_for_file "$caplog" 50; then
+      fail "$name ($mode)" 'no request captured'
+      continue
+    fi
+    assert_eq "$name ($mode term_program)" 'iTerm.app' \
+      "$(jq -r '.terminal.term_program' "$caplog" | head -n 1)"
+    assert_eq "$name ($mode tmux_pane)" '%7' \
+      "$(jq -r '.terminal.tmux_pane' "$caplog" | head -n 1)"
+    assert_eq "$name ($mode tmux_socket)" '/tmp/tmux-501/default' \
+      "$(jq -r '.terminal.tmux_socket' "$caplog" | head -n 1)"
+    assert_eq "$name ($mode wsl_distro)" 'Ubuntu' \
+      "$(jq -r '.terminal.wsl_distro' "$caplog" | head -n 1)"
+    assert_eq "$name ($mode wt_session)" 'abc-def' \
+      "$(jq -r '.terminal.wt_session' "$caplog" | head -n 1)"
+  done
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 25 (release-23 FR-01 AC-2): $TMUX が非空でなければ tmux_pane/tmux_socket は
+# 設定しない（$TMUX_PANE だけが残っている状況でも漏れない）
+# =========================================================================
+test_terminal_tmux_fields_gated_by_TMUX() {
+  local name='release-23 FR-01 AC-2: tmux_pane/tmux_socket stay null unless $TMUX is non-empty'
+  local home="$WORK/t25-home"
+  local repo="$WORK/t25-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t25-cap.log"
+  local capport="$WORK/t25-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  # $TMUX は意図的に未設定のまま(env -u で環境から確実に除去。テスト実行者が tmux 内に
+  # いても影響を受けない)、$TMUX_PANE だけが残っている状況(tmux 終了直後のシェル等)を
+  # 想定する。$TMUX が非空でなければ tmux_pane/tmux_socket は捕捉しないこと(AC-2)。
+  hook_json 'PreToolUse' "$repo" '' |
+    env -u TMUX TMUX_PANE='%9' MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
+      "$SCRIPT" >/dev/null 2>&1
+
+  if wait_for_file "$caplog" 50; then
+    assert_eq "$name (tmux_pane null without \$TMUX)" 'null' \
+      "$(jq -r '.terminal.tmux_pane' "$caplog" | head -n 1)"
+    assert_eq "$name (tmux_socket null without \$TMUX)" 'null' \
+      "$(jq -r '.terminal.tmux_socket' "$caplog" | head -n 1)"
+  else
+    fail "$name" 'no request captured'
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 26 (release-23 FR-01): terminal 追加後も旧形式ペイロード(outbox に仕込んだ
+# terminal キー無しの固定 JSON)が引き続き有効に再送される(既存 outbox 経路への回帰なし)
+# =========================================================================
+# 新設フィールドは reporter が新規生成するペイロードにのみ載る。outbox 内の既存ファイル
+# (旧 reporter が書いた terminal キー無しの JSON)はそのままバイト列として再送されるだけ
+# なので、reporter は中身の shape を検査しない。ここでは明示的にそれを固定する。
+test_legacy_outbox_payload_without_terminal_still_resent() {
+  local name='release-23 FR-01: legacy outbox payload (no terminal key) still resent as-is'
+  local home="$WORK/t26-home"
+  local repo="$WORK/t26-repo"
+  mkdir -p "$home/outbox"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  cat >"$home/outbox/legacy.json" <<'JSON'
+{"device_id":"local","session_id":"legacy-no-terminal","instance":{"remote_url":"https://github.com/sumihiro/ProjectLens.git","path":"/x","branch":null,"is_git_repo":true,"common_dir":null},"event_type":"Notification","event_subtype":"idle_prompt","tool_name":null,"tool_summary":null,"occurred_at":"2020-01-01T06:00:00Z"}
+JSON
+
+  local caplog="$WORK/t26-cap.log"
+  local capport="$WORK/t26-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  hook_json 'Notification' "$repo" 'permission' |
+    MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
+      "$SCRIPT" --subtype permission_prompt >/dev/null 2>&1
+
+  if wait_for_grep "$caplog" 'legacy-no-terminal' 50; then
+    pass "$name (legacy payload without terminal key delivered)"
+  else
+    fail "$name (legacy payload without terminal key delivered)" "caplog: $(cat "$caplog" 2>/dev/null)"
+  fi
+  # 再送は生バイト列そのままなので terminal キーは足されない(旧形式のまま届く)。
+  local has_terminal
+  has_terminal=$(grep -c 'legacy-no-terminal' "$caplog" 2>/dev/null)
+  if [ "$has_terminal" -ge 1 ] && ! grep -q '"terminal"' <(grep 'legacy-no-terminal' "$caplog"); then
+    pass "$name (resent bytes unchanged, no terminal key injected)"
+  else
+    fail "$name (resent bytes unchanged, no terminal key injected)" "caplog: $(cat "$caplog" 2>/dev/null)"
+  fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
 # --- 実行 ----------------------------------------------------------------
 ensure_build
 test_real_hub_records_event
@@ -1571,6 +1849,11 @@ test_tool_summary_workflow
 test_tool_summary_task_and_skill
 test_tool_summary_other_tools_regression
 test_tool_summary_nojq_fallback
+test_resolve_tty_finds_ancestor_tty
+test_resolve_tty_gives_up_after_max_depth
+test_terminal_env_capture
+test_terminal_tmux_fields_gated_by_TMUX
+test_legacy_outbox_payload_without_terminal_still_resent
 
 echo '----------------------------------------'
 printf 'passed: %d  failed: %d\n' "$PASS" "$FAIL"

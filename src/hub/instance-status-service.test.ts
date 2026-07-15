@@ -205,6 +205,41 @@ describe('InstanceStatusService.listInstances — derived status (FR-04 / §8.2)
   })
 })
 
+describe('InstanceStatusService.listInstances — session.terminal (release-23 FR-03)', () => {
+  it('fills the representative session terminal from the latest reported snapshot, mapped to snake_case wire fields', () => {
+    ingestAt(1_000_000, {
+      event_type: 'SessionStart',
+      terminal: {
+        tty: '/dev/ttys003',
+        term_program: 'Apple_Terminal',
+        tmux_pane: null,
+        tmux_socket: null,
+        wsl_distro: null,
+        wt_session: null,
+      },
+    })
+
+    const rows = statusService.listInstances(toEpochMs(1_100_000))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].session.terminal).toEqual({
+      tty: '/dev/ttys003',
+      term_program: 'Apple_Terminal',
+      tmux_pane: null,
+      tmux_socket: null,
+      wsl_distro: null,
+      wt_session: null,
+    })
+  })
+
+  it('leaves session.terminal null when the reporter never sent a terminal snapshot (old reporter compatibility)', () => {
+    ingestAt(1_000_000, { event_type: 'SessionStart' })
+
+    const rows = statusService.listInstances(toEpochMs(1_100_000))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].session.terminal).toBeNull()
+  })
+})
+
 describe('InstanceStatusService.listInstances — running_work (release-16 FR-02 AC-1~AC-6)', () => {
   it('AC-1: a Workflow PreToolUse in the current run surfaces as kind=workflow', () => {
     ingestAt(1_000_000, { event_type: 'SessionStart' })

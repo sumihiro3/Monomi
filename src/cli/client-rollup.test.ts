@@ -29,7 +29,7 @@ function row(over: {
       priority: over.priority,
     },
     pr: { state: 'none' },
-    session: { id: `sess-${over.instanceId}`, last_heartbeat_at: null },
+    session: { id: `sess-${over.instanceId}`, last_heartbeat_at: null, terminal: null },
     running_work: null,
   }
 }

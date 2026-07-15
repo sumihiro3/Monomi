@@ -3,6 +3,8 @@ import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } 
 import type { InstanceStatusRow } from '../../hub/dto.js'
 import { t } from '../../i18n/index.js'
 import { MONOMI_VERSION } from '../../version.js'
+import { toFocusTarget } from '../focus/focus-target.js'
+import type { FocusResult, FocusTarget } from '../focus/types.js'
 import type { HubApiClient } from '../hub-api-client.js'
 import { InstanceListStore } from '../instance-list-store.js'
 import { DEFAULT_BACKPRESSURE_THRESHOLD_BYTES, isStdoutBackpressured } from '../memory-watchdog.js'
@@ -20,6 +22,12 @@ import { InstanceTable } from './instance-table.js'
 import { StatusFilterBar } from './status-filter-bar.js'
 import { WatchingIndicator } from './watching-indicator.js'
 
+/**
+ * 検証済み {@link FocusTarget} を実ターミナルのタブ/ウィンドウへフォーカスさせる関数の DI 型
+ * （`FocusService#focus` と同じ signature、release-23-terminal-focus FR-05c）。
+ */
+export type FocusRunner = (target: FocusTarget | null) => Promise<FocusResult>
+
 /** {@link AppView} の props（container: 依存を注入してテスト可能にする）。 */
 export interface AppViewProps {
   /** hub への読み取りクライアント。 */
@@ -31,7 +39,58 @@ export interface AppViewProps {
    * bin 実行では {@link ../hub-api-client.js} の `createHubConnection` が供給する。
    */
   reresolve?: ReresolveClient
+  /**
+   * この CLI 自身の device_id（release-23-terminal-focus FR-05 AC-2）。`f` によるフォーカス
+   * 実行を選択行の `device.id` と照合するゲートに使う。省略時は空文字列（実在する device_id と
+   * 一致し得ない安全側の既定値のため、フォーカスは常に `focus.otherDevice` へ縮退する）。
+   * 実運用では `src/cli.ts` の `runDashboard()`（FR-05d）が
+   * `loadConfig().deviceId ?? deriveDeviceId(os.hostname())` を注入する。
+   */
+  localDeviceId?: string
+  /**
+   * {@link FocusTarget} を実ターミナルへフォーカスする実行体（FocusService の DI、FR-04d）。
+   * テストでは mock に差し替える。省略時は常に `unsupported_platform` を返す no-op
+   * （実運用では `src/cli.ts` の `runDashboard()`（FR-05d）が FocusService を注入する）。
+   */
+  focusRunner?: FocusRunner
 }
+
+/**
+ * {@link AppViewProps.focusRunner} の既定値（未注入時の安全な no-op、release-23-terminal-focus FR-05c）。
+ *
+ * `src/cli.ts` の配線（FR-05d）が完了するまでの間、`AppView` を単体で使う既存呼び出し元が
+ * 型エラーなくビルドできるようにするためのフォールバック。
+ */
+const noopFocusRunner: FocusRunner = () => Promise.resolve('unsupported_platform')
+
+/**
+ * FocusResult を CLI 表示用の理由 notice へ写す（release-23-terminal-focus FR-05c、AC-4）。
+ *
+ * `ok` は呼び出し側（{@link AppView} の `focusTerminal`）が成功時に notice を出さず早期 return
+ * するため、ここには渡ってこない前提。`no_terminal` は `AppView` 側の事前ゲート（terminal
+ * 情報なし/検証不合格判定）で通常は発生しないはずだが、縮退時の安全側フォールバックとして
+ * `focus.noTerminalInfo` に写す。
+ *
+ * @param result `focusRunner` が返した `'ok'` 以外の {@link FocusResult}。
+ * @returns 表示する notice 文言。
+ */
+function noticeForFocusResult(result: Exclude<FocusResult, 'ok'>): string {
+  switch (result) {
+    case 'tmux_detached':
+      return t('focus.tmuxDetached')
+    case 'not_found':
+      return t('focus.notFound')
+    case 'unsupported_platform':
+      return t('focus.unsupported')
+    case 'no_terminal':
+      return t('focus.noTerminalInfo')
+    case 'error':
+      return t('focus.failed')
+  }
+}
+
+/** notice の自動消去までの時間（release-23-terminal-focus FR-05c、AC-4: 約4秒）。 */
+const FOCUS_NOTICE_DURATION_MS = 4000
 
 /**
  * CLI のルートコンテナ（class-diagram §4 / FR-05）。
@@ -61,6 +120,13 @@ export interface AppViewProps {
  *   `project名 @ device名` を設定し、隣接プロジェクト移動・ポーリング更新で表示中の project/device
  *   が変わればタイトルも追従する（AC-1〜AC-4）
  *
+ * - `f` で選択中 instance のセッション実行中ターミナルへフォーカス移動する
+ *   （release-23-terminal-focus FR-05c）。選択行なし・別デバイス・`closed`・ターミナル情報
+ *   なし/検証不合格のいずれかでは `focusRunner` を呼ばず理由 notice を表示する（AC-2〜AC-4）。
+ *   成功時は notice を出さず（タブ移動自体がフィードバック）、失敗時のみ理由別 notice を表示し
+ *   約4秒で自動消去する。フッターヒントは選択行が同一デバイスのときのみ ` f focus` を追加する
+ *   （AC-5）
+ *
  * @param props {@link AppViewProps}。
  * @returns CLI ルートの要素。
  */
@@ -68,6 +134,8 @@ export function AppView({
   client,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   reresolve,
+  localDeviceId = '',
+  focusRunner = noopFocusRunner,
 }: AppViewProps): ReactElement {
   const { exit } = useApp()
   const { stdout } = useStdout()
@@ -99,6 +167,39 @@ export function AppView({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [showHelp, setShowHelp] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // release-23-terminal-focus FR-05c: `f` フォーカス実行の理由 notice（既存の error state に
+  // 倣うが、こちらは約4秒で自動消去する時限式）。アンマウント後の setState を防ぐため
+  // mountedRef を、連続実行時に前回のタイマーを取り消すため noticeTimerRef を持つ。
+  const [notice, setNotice] = useState<string | null>(null)
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+      if (noticeTimerRef.current !== null) {
+        clearTimeout(noticeTimerRef.current)
+        noticeTimerRef.current = null
+      }
+    }
+  }, [])
+
+  /**
+   * notice を表示し、約4秒後に自動で消す（AC-4）。連続で呼ばれた場合は前回のタイマーを
+   * 解除してから新しい notice をセットし直す（複数タイマーの重複起動を防ぐ）。
+   */
+  const showNotice = (message: string): void => {
+    if (noticeTimerRef.current !== null) {
+      clearTimeout(noticeTimerRef.current)
+    }
+    setNotice(message)
+    noticeTimerRef.current = setTimeout(() => {
+      noticeTimerRef.current = null
+      if (mountedRef.current) {
+        setNotice(null)
+      }
+    }, FOCUS_NOTICE_DURATION_MS)
+  }
 
   useEffect(() => {
     polling.onUpdate((rows) => {
@@ -255,6 +356,45 @@ export function AppView({
       polling.stop()
       exit()
     },
+    // release-23-terminal-focus FR-05c: `f`。selectedRow は同一レンダーで既に計算済みの値を
+    // 使う（host はレンダーごとに作り直されるため常に最新を捕捉している、moveSelection と同じ理由）。
+    focusTerminal: () => {
+      // ①行なし → no-op（filteredRows が空のときのみ undefined になる）。
+      if (selectedRow === undefined) return
+
+      // ②別デバイスの行 → 実行せず理由 notice（AC-2）。
+      if (selectedRow.device.id !== localDeviceId) {
+        showNotice(t('focus.otherDevice'))
+        return
+      }
+
+      // ③closed 行 → 実行せず理由 notice（stale TTY 誤爆防止、AC-3）。
+      if (selectedRow.status.display === 'closed') {
+        showNotice(t('focus.sessionClosed'))
+        return
+      }
+
+      // ④terminal 情報なし/検証不合格 → 実行せず理由 notice（AC-3）。tty も tmuxPane も無ければ
+      // どの strategy にも到達できないため、focusRunner を呼ばずここで縮退させる。
+      const target = toFocusTarget(selectedRow.session.terminal)
+      if (target === null || (target.tty === null && target.tmuxPane === null)) {
+        showNotice(t('focus.noTerminalInfo'))
+        return
+      }
+
+      // ⑤実行。成功時（'ok'）は notice を出さない（タブ移動自体がフィードバック、AC-4）。
+      // 失敗時のみ理由別 notice。focusRunner が想定外に reject した場合も failed 相当に丸める。
+      void focusRunner(target)
+        .then((result) => {
+          if (result === 'ok' || !mountedRef.current) return
+          showNotice(noticeForFocusResult(result))
+        })
+        .catch(() => {
+          if (mountedRef.current) {
+            showNotice(t('focus.failed'))
+          }
+        })
+    },
   }
   const controller = new KeyBindingController(store, host)
 
@@ -330,6 +470,7 @@ export function AppView({
           {error}
         </Text>
       ) : null}
+      {notice !== null ? <Text color="yellow">{notice}</Text> : null}
       {showHelp ? (
         <Box marginTop={1}>
           <HelpOverlay />
@@ -337,7 +478,12 @@ export function AppView({
       ) : null}
 
       <Box marginTop={1}>
-        <Text dimColor>{footerHint(viewMode)}</Text>
+        <Text dimColor>
+          {footerHint(
+            viewMode,
+            selectedRow !== undefined && selectedRow.device.id === localDeviceId
+          )}
+        </Text>
       </Box>
     </Box>
   )
@@ -351,13 +497,19 @@ export function AppView({
  * {@link KeyBindingController}）・`w wrap`（イベント行の折り返し/切り詰め切替, {@link DetailView}, FR-08）を
  * 提示する。
  *
+ * `canFocusTerminal`（選択行の `device.id` が CLI 自身の device_id と一致するか）が true の
+ * ときのみ末尾に ` f focus` を追加する（release-23-terminal-focus FR-05c、AC-5）。closed/
+ * ターミナル情報なしなどの実行不可条件はここでは見ない（それらは実行時に理由 notice で示す）。
+ *
  * @param viewMode 現在表示中のビュー。
+ * @param canFocusTerminal 選択行が同一デバイスか（`f` ヒントの表示可否）。
  * @returns フッターに表示するヒント文字列。
  */
-function footerHint(viewMode: ViewMode): string {
+function footerHint(viewMode: ViewMode, canFocusTerminal: boolean): string {
+  const focusSuffix = canFocusTerminal ? ' f focus' : ''
   return viewMode === 'detail'
-    ? 'j/k scroll ←/→ project w wrap esc back ? help q quit'
-    : '1-6 filter j/k ↑↓ move ↵ detail esc back ? help q quit'
+    ? `j/k scroll ←/→ project w wrap esc back ? help q quit${focusSuffix}`
+    : `1-6 filter j/k ↑↓ move ↵ detail esc back ? help q quit${focusSuffix}`
 }
 
 /**

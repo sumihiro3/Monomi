@@ -77,7 +77,9 @@ export class EventIngestionService {
    * 3. `remote_url`＋文脈を {@link ProjectKeyNormalizer} で正規化し project を findOrCreate。
    * 4. (device_id, path) で instance を upsert（branch は DO UPDATE）。
    * 5. session を upsertStarted（初出なら登録、既存は保存）。`SessionEnd`/`session_lost`
-   *    なら `markEnded` も行う。
+   *    なら `markEnded` も行う。`payload.terminal` が undefined/null でなければ
+   *    `sessions.updateTerminal` でターミナル特定情報のスナップショットを上書きする
+   *    （旧 reporter の欠落ペイロードで既存値を NULL 上書きしない、release-23 FR-02 AC-5）。
    * 6. `received_at = now()` を付与し event を append。
    *
    * @param rawPayload 信頼できない生リクエストボディ（§8.1）。
@@ -108,6 +110,20 @@ export class EventIngestionService {
     )
 
     this.sessions.upsertStarted(instance.id, payload.session_id, occurredAt)
+    if (payload.terminal !== undefined && payload.terminal !== null) {
+      this.sessions.updateTerminal(
+        payload.session_id,
+        {
+          tty: payload.terminal.tty ?? null,
+          termProgram: payload.terminal.term_program ?? null,
+          tmuxPane: payload.terminal.tmux_pane ?? null,
+          tmuxSocket: payload.terminal.tmux_socket ?? null,
+          wslDistro: payload.terminal.wsl_distro ?? null,
+          wtSession: payload.terminal.wt_session ?? null,
+        },
+        receivedAt
+      )
+    }
     if (payload.event_type === 'SessionEnd') {
       this.sessions.markEnded(
         payload.session_id,

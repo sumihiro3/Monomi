@@ -1,6 +1,13 @@
-import type { Session } from '../../domain/entities.js'
+import type { Session, SessionTerminal } from '../../domain/entities.js'
 import { toEpochMs, type EpochMs } from '../../domain/time.js'
 import type { Database, PreparedStatement } from '../database.js'
+
+/**
+ * {@link SessionRepository.updateTerminal} の入力。
+ *
+ * `seenAt` は呼び出し側が別引数（`at`）で渡すため、{@link SessionTerminal} から除いた形。
+ */
+export type SessionTerminalInput = Omit<SessionTerminal, 'seenAt'>
 
 /** `sessions` テーブルの生行。 */
 interface SessionRow {
@@ -12,6 +19,13 @@ interface SessionRow {
   ended_at: number | null
   end_reason: string | null
   last_heartbeat_at: number | null
+  tty: string | null
+  term_program: string | null
+  tmux_pane: string | null
+  tmux_socket: string | null
+  wsl_distro: string | null
+  wt_session: string | null
+  terminal_seen_at: number | null
 }
 
 /** DB 行を {@link Session} へ写す。 */
@@ -25,6 +39,18 @@ function toSession(row: SessionRow): Session {
     endedAt: row.ended_at === null ? null : toEpochMs(row.ended_at),
     endReason: row.end_reason,
     lastHeartbeatAt: row.last_heartbeat_at === null ? null : toEpochMs(row.last_heartbeat_at),
+    terminal:
+      row.terminal_seen_at === null
+        ? null
+        : {
+            tty: row.tty,
+            termProgram: row.term_program,
+            tmuxPane: row.tmux_pane,
+            tmuxSocket: row.tmux_socket,
+            wslDistro: row.wsl_distro,
+            wtSession: row.wt_session,
+            seenAt: toEpochMs(row.terminal_seen_at),
+          },
   }
 }
 
@@ -40,6 +66,8 @@ export class SessionRepository {
   private readonly upsertStartedStmt: PreparedStatement
   /** {@link markEnded} 用の UPDATE。 */
   private readonly markEndedStmt: PreparedStatement
+  /** {@link updateTerminal} 用の UPDATE。 */
+  private readonly updateTerminalStmt: PreparedStatement
   /** {@link findById} 用の SELECT。 */
   private readonly findByIdStmt: PreparedStatement
   /** {@link listByInstance} 用の SELECT。 */
@@ -52,6 +80,12 @@ export class SessionRepository {
        ON CONFLICT(id) DO NOTHING`
     )
     this.markEndedStmt = db.prepare('UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?')
+    this.updateTerminalStmt = db.prepare(
+      `UPDATE sessions
+       SET tty = ?, term_program = ?, tmux_pane = ?, tmux_socket = ?, wsl_distro = ?, wt_session = ?,
+           terminal_seen_at = ?
+       WHERE id = ?`
+    )
     this.findByIdStmt = db.prepare('SELECT * FROM sessions WHERE id = ?')
     this.listByInstanceStmt = db.prepare(
       'SELECT * FROM sessions WHERE instance_id = ? ORDER BY started_at DESC, id DESC'
@@ -83,6 +117,33 @@ export class SessionRepository {
    */
   markEnded(sessionId: string, reason: string, at: EpochMs): void {
     this.markEndedStmt.run(at, reason, sessionId)
+  }
+
+  /**
+   * reporter が捕捉した最新のターミナル特定情報でセッションのスナップショットを上書きする
+   * （release-23 FR-02b）。
+   *
+   * 呼び出し側（`EventIngestionService.ingest`、FR-02 AC-5）は `payload.terminal` が
+   * undefined/null でないときのみ本メソッドを呼ぶ規約とする。旧 reporter の欠落ペイロード
+   * で既存のスナップショットを NULL 上書きしないためで、本メソッド自体は無条件に上書きする
+   * （`info` 内の個々の null は新 reporter が明示的に「取得不能」と報告した値としてそのまま
+   * 採用する）。
+   *
+   * @param sessionId session_id。
+   * @param info reporter が捕捉したターミナル特定情報（`seenAt` を除く）。
+   * @param at スナップショットを hub が受信した時刻（`terminal_seen_at` に保存）。
+   */
+  updateTerminal(sessionId: string, info: SessionTerminalInput, at: EpochMs): void {
+    this.updateTerminalStmt.run(
+      info.tty,
+      info.termProgram,
+      info.tmuxPane,
+      info.tmuxSocket,
+      info.wslDistro,
+      info.wtSession,
+      at,
+      sessionId
+    )
   }
 
   /**

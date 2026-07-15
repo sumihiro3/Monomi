@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { SessionTerminal } from '../domain/entities.js'
 import { EVENT_TYPES } from '../domain/enums.js'
 import { type EpochMs, toEpochMs } from '../domain/time.js'
 import type { RunningWork } from '../status/running-work-resolver.js'
@@ -29,6 +30,32 @@ export const rawEventPayloadSchema = z.object({
     /** `git rev-parse --git-common-dir` 相当。remote 無し git の融合キーに使う（§0.1）。 */
     common_dir: z.string().nullable().optional(),
   }),
+  /**
+   * reporter が捕捉したセッション実行中ターミナルの特定情報（release-23 FR-01/FR-02c）。
+   *
+   * 旧 reporter は本キー自体を含まないペイロードを送るため、キー丸ごと
+   * `.nullable().optional()` にして 2xx 受理を維持する（AC-1）。個々のフィールドも
+   * reporter 側で解決できなかった場合 null になりうるため、`instance` と同様に
+   * 各フィールドを `.nullable().optional()` にする。`ingest()` は本キーが
+   * undefined/null でないときのみ `sessions.updateTerminal` を呼ぶ（AC-5）。
+   */
+  terminal: z
+    .object({
+      /** 解決済み TTY（例 `/dev/ttys003`）。非 TTY 実行や解決失敗時は null。 */
+      tty: z.string().max(255).nullable().optional(),
+      /** `$TERM_PROGRAM`（tmux 内では `tmux` になる）。未設定は null。 */
+      term_program: z.string().max(128).nullable().optional(),
+      /** `$TMUX_PANE`。tmux 外や未設定は null。 */
+      tmux_pane: z.string().max(32).nullable().optional(),
+      /** `$TMUX` の socket 部分（`${TMUX%%,*}`）。tmux 外や未設定は null。 */
+      tmux_socket: z.string().max(255).nullable().optional(),
+      /** `$WSL_DISTRO_NAME`。WSL 以外は null。 */
+      wsl_distro: z.string().max(128).nullable().optional(),
+      /** `$WT_SESSION`（Windows Terminal）。未設定は null。 */
+      wt_session: z.string().max(128).nullable().optional(),
+    })
+    .nullable()
+    .optional(),
   /** Claude Code フック起因のイベント種別（§4/§7.3）。 */
   event_type: z.enum(EVENT_TYPES),
   /** 例: `Notification` の matcher（`idle_prompt`/`permission_prompt`）。 */
@@ -77,12 +104,38 @@ export interface PrDto {
   state: string
 }
 
+/**
+ * セッション実行中ターミナルの特定情報の wire 表現（snake_case、release-23 FR-03）。
+ *
+ * ドメインの {@link SessionTerminal} を写した形。`seenAt` は CLI の focus 実行
+ * （tty/tmux_pane 等の値のみを使う）に不要なため wire では露出しない。
+ */
+export interface TerminalDto {
+  /** 解決済み TTY（例 `/dev/ttys003`）。非 TTY 実行や解決失敗時は null。 */
+  tty: string | null
+  /** `$TERM_PROGRAM`（tmux 内では `tmux` になる）。未設定は null。 */
+  term_program: string | null
+  /** `$TMUX_PANE`。tmux 外や未設定は null。 */
+  tmux_pane: string | null
+  /** `$TMUX` の socket 部分。tmux 外や未設定は null。 */
+  tmux_socket: string | null
+  /** `$WSL_DISTRO_NAME`。WSL 以外は null。 */
+  wsl_distro: string | null
+  /** `$WT_SESSION`（Windows Terminal）。未設定は null。 */
+  wt_session: string | null
+}
+
 /** 代表 session の要約（§8.2 の `session`）。 */
 export interface SessionDto {
   /** session_id。 */
   id: string
   /** 最終ハートビート時刻（ISO8601）。release-1 は未更新のため常に null。 */
   last_heartbeat_at: string | null
+  /**
+   * 代表 session のターミナル特定情報（release-23 FR-03）。reporter から一度も届いて
+   * いなければ（旧 reporter・非 TTY 実行含む）null。
+   */
+  terminal: TerminalDto | null
 }
 
 /** project の参照（§8.2 の `project`）。 */
@@ -145,6 +198,27 @@ export function toRunningWorkDto(work: RunningWork | null): RunningWorkDto | nul
     kind: work.kind,
     name: work.name,
     started_at: epochMsToIso8601(work.startedAt),
+  }
+}
+
+/**
+ * ドメインの {@link SessionTerminal} を wire の {@link TerminalDto} へ写す
+ * （{@link toRunningWorkDto} と同型の「ドメイン型→薄い変換→wire DTO」パターン、release-23 FR-03）。
+ *
+ * @param terminal 対象 session のターミナル特定情報（`null` 可）。
+ * @returns wire 形の {@link TerminalDto}。`terminal` が `null` ならそのまま `null`。
+ */
+export function toTerminalDto(terminal: SessionTerminal | null): TerminalDto | null {
+  if (terminal === null) {
+    return null
+  }
+  return {
+    tty: terminal.tty,
+    term_program: terminal.termProgram,
+    tmux_pane: terminal.tmuxPane,
+    tmux_socket: terminal.tmuxSocket,
+    wsl_distro: terminal.wslDistro,
+    wt_session: terminal.wtSession,
   }
 }
 

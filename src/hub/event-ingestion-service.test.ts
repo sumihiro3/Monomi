@@ -169,6 +169,115 @@ describe('EventIngestionService.ingest — event storage (§0.5 / FR-01)', () =>
   })
 })
 
+describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c / FR-02 AC-1 / AC-5)', () => {
+  it('updates the session terminal snapshot when payload.terminal is present', () => {
+    nowMs = 3_000_000
+    ingestion.ingest(
+      payload({
+        terminal: {
+          tty: '/dev/ttys003',
+          term_program: 'Apple_Terminal',
+          tmux_pane: null,
+          tmux_socket: null,
+          wsl_distro: null,
+          wt_session: null,
+        },
+      })
+    )
+
+    const s = sessions.findById('sess-1')
+    expect(s?.terminal).toEqual({
+      tty: '/dev/ttys003',
+      termProgram: 'Apple_Terminal',
+      tmuxPane: null,
+      tmuxSocket: null,
+      wslDistro: null,
+      wtSession: null,
+      seenAt: 3_000_000,
+    })
+  })
+
+  it('keeps the existing terminal snapshot when a later payload omits the terminal key (old reporter compat, AC-1/AC-5)', () => {
+    nowMs = 3_000_000
+    ingestion.ingest(
+      payload({
+        terminal: {
+          tty: '/dev/ttys003',
+          term_program: 'Apple_Terminal',
+          tmux_pane: null,
+          tmux_socket: null,
+          wsl_distro: null,
+          wt_session: null,
+        },
+      })
+    )
+
+    nowMs = 4_000_000
+    // 旧 reporter 相当（terminal キー自体が無い）ペイロード。2xx 相当で受理され続ける（AC-1）
+    // うえ、既存のターミナルスナップショットを NULL 上書きしない（AC-5）。
+    expect(() => ingestion.ingest(payload({ event_type: 'PreToolUse' }))).not.toThrow()
+
+    const s = sessions.findById('sess-1')
+    expect(s?.terminal).toEqual({
+      tty: '/dev/ttys003',
+      termProgram: 'Apple_Terminal',
+      tmuxPane: null,
+      tmuxSocket: null,
+      wslDistro: null,
+      wtSession: null,
+      seenAt: 3_000_000,
+    })
+  })
+
+  it('adopts an explicit null-tty snapshot from a new reporter (AC-5: terminal object present but tty unresolved)', () => {
+    nowMs = 3_000_000
+    ingestion.ingest(
+      payload({
+        terminal: {
+          tty: '/dev/ttys003',
+          term_program: 'Apple_Terminal',
+          tmux_pane: null,
+          tmux_socket: null,
+          wsl_distro: null,
+          wt_session: null,
+        },
+      })
+    )
+
+    nowMs = 4_000_000
+    ingestion.ingest(
+      payload({
+        event_type: 'PreToolUse',
+        terminal: {
+          tty: null,
+          term_program: 'Apple_Terminal',
+          tmux_pane: null,
+          tmux_socket: null,
+          wsl_distro: null,
+          wt_session: null,
+        },
+      })
+    )
+
+    const s = sessions.findById('sess-1')
+    expect(s?.terminal).toEqual({
+      tty: null,
+      termProgram: 'Apple_Terminal',
+      tmuxPane: null,
+      tmuxSocket: null,
+      wslDistro: null,
+      wtSession: null,
+      seenAt: 4_000_000,
+    })
+  })
+
+  it('leaves the session terminal as null when no reporter has ever sent terminal info', () => {
+    ingestion.ingest(payload())
+    const s = sessions.findById('sess-1')
+    expect(s?.terminal).toBeNull()
+  })
+})
+
 describe('EventIngestionService.ingest — validation & invariants', () => {
   it('rejects a payload missing required fields (zod)', () => {
     expect(() => ingestion.ingest({ device_id: DEVICE_ID })).toThrow()
