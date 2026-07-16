@@ -90,6 +90,28 @@ export function buildGhosttyFocusScript(tag: string): string {
   ].join('\n')
 }
 
+/**
+ * System Events で Ghostty プロセスが起動しているかどうかだけを確認する AppleScript ソースを
+ * 組み立てる（FR-06、B12: Terminal.app 誤起動防止と同種のガードを Ghostty 側にも適用）。
+ *
+ * {@link buildGhosttyFocusScript} にも同じ `exists process` チェックが含まれるが、そちらは
+ * Window メニュー検索と一体化しており、TTY へタグを書き込む副作用（{@link GhosttyStrategy}
+ * の `writeTtyTitle`）より前に軽量な事前確認だけを行いたい用途には使えない。そのため独立した
+ * 関数として切り出す。
+ *
+ * @returns 実行可能な AppleScript ソース全体。Ghostty プロセスが存在すれば stdout へ `"true"`、
+ *   存在しなければ `"false"` を返す。
+ */
+export function buildGhosttyProcessExistsScript(): string {
+  const escapedProcess = escapeAppleScriptString(GHOSTTY_PROCESS_NAME)
+  return [
+    'tell application "System Events"',
+    `  if not (exists process "${escapedProcess}") then return "false"`,
+    '  return "true"',
+    'end tell',
+  ].join('\n')
+}
+
 /** {@link GhosttyStrategy} の依存差し替え（テスト用）。 */
 export interface GhosttyStrategyOptions {
   /** `osascript` 実行の差し替え。省略時は実 `execFile` ベースの既定実装（`osascript.ts`）。 */
@@ -103,14 +125,30 @@ export interface GhosttyStrategyOptions {
 }
 
 /**
+ * {@link GhosttyStrategy.attemptOnce} と `focus()` 間で共有する試行状態。
+ *
+ * `wroteTag` は、いずれかの試行で TTY へのタグ書き込み（`writeTtyTitle`）に実際に成功したかを
+ * 表す。プロセス未起動などでタグを一度も書き込んでいない場合、`focus()` の `finally` はタグ消去
+ * （空タイトルの書き込み）自体を省略する（FR-06、B12: 存在しないアプリの tty へ無駄な書き込み
+ * ・例外を起こさないため）。
+ */
+interface AttemptState {
+  /** いずれかの試行でタグ書き込みに成功していれば true。 */
+  wroteTag: boolean
+}
+
+/**
  * Ghostty 向けフォーカス strategy（release-23-terminal-focus FR-04b、`types.ts` の
- * {@link Strategy} 実装、AC-4）。
+ * {@link Strategy} 実装、AC-4。FR-06/B12 でプロセス存在確認ガードを追加）。
  *
  * Ghostty は AppleScript から直接 tty を問い合わせられないため、TTY デバイスファイルへ
  * OSC タイトルタグを一時書き込みし、System Events でそのタグ名を Window メニューから検索して
- * クリックする間接的な手順を取る。タグ書き込み → メニュー操作の一連の手順が失敗した場合は
- * 1 回だけリトライし、成否によらず `finally` で必ずタグを消去する（book-keeping の取りこぼしで
- * ウィンドウタイトルにタグが残り続けることを防ぐ）。
+ * クリックする間接的な手順を取る。ただし書き込みは副作用のため、まず Ghostty プロセスが実際に
+ * 起動しているかを {@link buildGhosttyProcessExistsScript} で確認し、起動していなければ
+ * `writeTtyTitle` を一切呼ばずに `not_found` を返す（プロセス存在確認 → TTY タグ書き込み →
+ * メニュー検索の順）。存在する場合の書き込み→メニュー操作の一連の手順が失敗した場合は 1 回だけ
+ * リトライし、タグを書き込んだ試行が 1 回でもあれば `finally` で必ずタグを消去する
+ * （book-keeping の取りこぼしでウィンドウタイトルにタグが残り続けることを防ぐ）。
  */
 export class GhosttyStrategy implements Strategy {
   private readonly exec: RunOsascriptOptions['exec']
@@ -134,11 +172,13 @@ export class GhosttyStrategy implements Strategy {
   }
 
   /**
-   * `tty` が指すウィンドウ/タブへフォーカスする（AC-4）。
+   * `tty` が指すウィンドウ/タブへフォーカスする（AC-4、FR-06/B12）。
    *
-   * 1 回目が `ok` にならなければタグ書き込みからやり直して 1 回だけリトライする。試行回数に
-   * かかわらず、最後に必ずタグを消去する（アクセシビリティ権限が無い等でメニュー検索自体が
-   * 例外を投げても、タグ消去は独立して試みる）。
+   * 1 回目が `ok` にならなければプロセス存在確認からやり直して 1 回だけリトライする。タグを
+   * 書き込んだ試行が 1 回でもあれば、試行回数・成否にかかわらず最後に必ずタグを消去する
+   * （アクセシビリティ権限が無い等でメニュー検索自体が例外を投げても、タグ消去は独立して試みる）。
+   * 逆に、Ghostty プロセスが一度も見つからずタグを書き込んでいなければ、タグ消去も省略する
+   * （存在しない tty への無駄な書き込みを避ける）。
    *
    * @param tty 検証済み TTY。
    * @returns フォーカス結果（`ok` / `not_found` / `error`。`ghostty-strategy` は
@@ -146,21 +186,43 @@ export class GhosttyStrategy implements Strategy {
    */
   async focus(tty: string): Promise<FocusResult> {
     const tag = buildGhosttyTag(tty)
+    const attemptState: AttemptState = { wroteTag: false }
     try {
-      const first = await this.attemptOnce(tty, tag)
+      const first = await this.attemptOnce(tty, tag, attemptState)
       if (first === 'ok') {
         return first
       }
-      return await this.attemptOnce(tty, tag)
+      return await this.attemptOnce(tty, tag, attemptState)
     } finally {
-      this.clearTag(tty)
+      if (attemptState.wroteTag) {
+        this.clearTag(tty)
+      }
     }
   }
 
-  /** タグ書き込み → System Events でのメニュー検索・クリックを 1 回分実行する。 */
-  private async attemptOnce(tty: string, tag: string): Promise<FocusResult> {
+  /**
+   * プロセス存在確認 → TTY タグ書き込み → System Events でのメニュー検索・クリック の順に
+   * 1 回分実行する（FR-06、B12）。
+   *
+   * Ghostty プロセスが起動していなければ `writeTtyTitle` を一切呼ばずに `not_found` を返す。
+   *
+   * @param state 呼び出し元（{@link focus}）と共有する試行状態。タグ書き込みに成功したときのみ
+   *   `wroteTag` を `true` にする。
+   */
+  private async attemptOnce(tty: string, tag: string, state: AttemptState): Promise<FocusResult> {
+    let exists: boolean
+    try {
+      exists = await this.existsGhosttyProcess()
+    } catch {
+      return 'error'
+    }
+    if (!exists) {
+      return 'not_found'
+    }
+
     try {
       this.writeTtyTitle(tty, buildOscTitleSequence(tag))
+      state.wroteTag = true
     } catch {
       return 'error'
     }
@@ -173,6 +235,18 @@ export class GhosttyStrategy implements Strategy {
       return 'error'
     }
     return stdout === 'true' ? 'ok' : 'not_found'
+  }
+
+  /**
+   * Ghostty プロセスが起動しているかどうかを確認する（FR-06、B12: TTY 書き込み前のガード）。
+   *
+   * @returns プロセスが存在すれば true。
+   * @throws `osascript` 実行自体が失敗した場合（呼び出し元 {@link attemptOnce} で `error` に
+   *   丸める）。
+   */
+  private async existsGhosttyProcess(): Promise<boolean> {
+    const stdout = await runOsascript(buildGhosttyProcessExistsScript(), { exec: this.exec })
+    return stdout === 'true'
   }
 
   /**
