@@ -4,6 +4,7 @@ import { ensureMonomiHome, type MonomiPaths, resolvePaths } from '../config/path
 import { type Database, openDatabase } from '../db/database.js'
 import type { EpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
+import { MONOMI_VERSION } from '../version.js'
 import { bootstrap } from './bootstrap.js'
 import { removeHubPidFile, writeHubPidFile } from './hub-lifecycle.js'
 import { createHubServer, type HttpServer } from './http-server.js'
@@ -97,7 +98,9 @@ export async function serve(options: ServeOptions = {}): Promise<HubHandle> {
   const port = await server.listen(options.port ?? config.port, host)
   writeHubPidFile(paths, process.pid)
 
-  log(`Monomi hub listening on http://${host}:${port} (device: ${boot.deviceId})`)
+  log(
+    `Monomi hub listening on http://${host}:${port} (device: ${boot.deviceId}, version: ${MONOMI_VERSION})`
+  )
 
   return {
     server,

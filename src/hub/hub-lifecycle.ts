@@ -21,14 +21,19 @@ export interface HubStatusResult {
   pid?: number
   /** 疎通確認したポート（`running` の場合のみ）。 */
   port?: number
+  /**
+   * `running` 時に応答ヘッダ `X-Monomi-Hub-Version` から読み取った hub の版（FR-01 AC-3）。
+   * ヘッダが無い（旧版 hub・到達性のみのプローブ実装との通信等）場合は `undefined`＝版不明。
+   */
+  hubVersion?: string
 }
 
 /** {@link hubStatus} の依存差し替え（テスト用）。 */
 export interface HubStatusOptions {
   /** プロセス生存確認の差し替え。省略時は {@link isProcessAlive}。 */
   isAlive?: (pid: number) => boolean
-  /** port 疎通確認の差し替え。省略時は {@link isPortReachable}。 */
-  checkPort?: (port: number) => Promise<boolean>
+  /** port 疎通確認＋版取得の差し替え。省略時は {@link probeHub}。 */
+  probe?: (port: number) => Promise<ProbeHubResult>
 }
 
 /** {@link hubStop} の結果。 */
@@ -66,10 +71,10 @@ const DEFAULT_STOP_WAIT_MS = 5000
 /** {@link hubStop} の既定のポーリング間隔（ミリ秒）。 */
 const DEFAULT_STOP_POLL_INTERVAL_MS = 100
 
-/** {@link isPortReachable} の到達性プローブに使う既定 GET パス（認証必須ルート。401 でも「到達」と判定する）。 */
+/** {@link probeHub} の到達性プローブに使う既定 GET パス（認証必須ルート。401 でも「到達」と判定する）。 */
 const DEFAULT_PROBE_PATH = '/api/v1/instances'
 
-/** {@link isPortReachable} の既定タイムアウト（ミリ秒）。不達ホストで長時間ブロックしないため。 */
+/** {@link probeHub} の既定タイムアウト（ミリ秒）。不達ホストで長時間ブロックしないため。 */
 const DEFAULT_PORT_CHECK_TIMEOUT_MS = 2000
 
 /**
@@ -148,8 +153,11 @@ export function isProcessAlive(pid: number, options: ProcessAliveOptions = {}): 
   }
 }
 
-/** {@link isPortReachable} の依存差し替え（テスト用）。 */
-export interface PortReachableOptions {
+/** レスポンスヘッダから hub の版を読み取るキー（FR-01。`HttpServer.send()` が全応答へ付与する）。 */
+const HUB_VERSION_HEADER = 'x-monomi-hub-version'
+
+/** {@link probeHub}（および後方互換ラッパーの {@link isPortReachable}）の依存差し替え（テスト用）。 */
+export interface ProbeHubOptions {
   /** HTTP 実装（省略時はグローバル `fetch`）。テストで注入する。 */
   fetchImpl?: typeof fetch
   /** 到達性判定に使う GET パス（既定 {@link DEFAULT_PROBE_PATH}）。 */
@@ -158,8 +166,23 @@ export interface PortReachableOptions {
   timeoutMs?: number
 }
 
+/** {@link isPortReachable} の依存差し替え（テスト用）。{@link ProbeHubOptions} と同一形状（後方互換のための別名）。 */
+export type PortReachableOptions = ProbeHubOptions
+
+/** {@link probeHub} の結果。 */
+export interface ProbeHubResult {
+  /** 応答が返れば true。fetch が reject する場合は false。 */
+  reachable: boolean
+  /**
+   * `X-Monomi-Hub-Version` ヘッダから読み取った hub の版（FR-01 AC-4）。到達できなかった場合、
+   * または（旧版 hub 等で）ヘッダが無かった場合は `undefined`＝版不明。
+   */
+  version?: string
+}
+
 /**
- * `127.0.0.1:port` への HTTP 疎通を確認する（hub が port で応答しているかの確認、FR-02）。
+ * `127.0.0.1:port` への HTTP 疎通を確認し、応答ヘッダから hub の版を読み取る
+ * （hub が port で応答しているかの確認 + 版取得、FR-01 / FR-02）。
  *
  * `src/cli/hub-endpoint-resolver.ts` の `isReachable`/`localhostEndpoint` と同じ「GET して
  * 応答が返れば（ステータス不問で）到達、fetch 自体が reject する（接続不能・タイムアウト）場合
@@ -169,25 +192,41 @@ export interface PortReachableOptions {
  *
  * @param port 確認対象ポート。
  * @param options fetch 実装・プローブパス・タイムアウトの差し替え（省略可）。
+ * @returns 到達性と（読み取れれば）版。fetch が reject する場合は `{ reachable: false }`。
+ */
+export async function probeHub(
+  port: number,
+  options: ProbeHubOptions = {}
+): Promise<ProbeHubResult> {
+  const fetchImpl = options.fetchImpl ?? fetch
+  const probePath = options.probePath ?? DEFAULT_PROBE_PATH
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PORT_CHECK_TIMEOUT_MS
+
+  try {
+    const res = await fetchImpl(`http://127.0.0.1:${port}${probePath}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    return { reachable: true, version: res.headers.get(HUB_VERSION_HEADER) ?? undefined }
+  } catch {
+    return { reachable: false }
+  }
+}
+
+/**
+ * `127.0.0.1:port` への HTTP 疎通のみを確認する（{@link probeHub} の版情報を捨てる薄いラッパー）。
+ *
+ * `src/cli/hub-autostart.ts` 等、到達性のみが必要な既存呼び出し互換のために残す。
+ *
+ * @param port 確認対象ポート。
+ * @param options fetch 実装・プローブパス・タイムアウトの差し替え（省略可）。
  * @returns 応答が返れば true。fetch が reject する場合は false。
  */
 export async function isPortReachable(
   port: number,
   options: PortReachableOptions = {}
 ): Promise<boolean> {
-  const fetchImpl = options.fetchImpl ?? fetch
-  const probePath = options.probePath ?? DEFAULT_PROBE_PATH
-  const timeoutMs = options.timeoutMs ?? DEFAULT_PORT_CHECK_TIMEOUT_MS
-
-  try {
-    await fetchImpl(`http://127.0.0.1:${port}${probePath}`, {
-      method: 'GET',
-      signal: AbortSignal.timeout(timeoutMs),
-    })
-    return true
-  } catch {
-    return false
-  }
+  return (await probeHub(port, options)).reachable
 }
 
 /**
@@ -196,12 +235,14 @@ export async function isPortReachable(
  * 判定順序（{@link HubLifecycleState} の各状態の説明を参照）:
  * 1. pid ファイルがあり、そのプロセスが不在 → `stale`（他の signal より優先。壊れたファイルの
  *    残存を最優先で知らせる）
- * 2. port に疎通できる → `running`（pid ファイル由来の pid が生存していれば併記、無ければ pid 省略）
+ * 2. port に疎通できる → `running`（pid ファイル由来の pid が生存していれば併記、無ければ pid 省略。
+ *    {@link probeHub} が読み取った版があれば `hubVersion` へ充填、ヘッダ欠落時は `undefined`＝版不明、
+ *    FR-01 AC-3・AC-4）
  * 3. それ以外 → `stopped`
  *
  * @param paths `~/.monomi` パス集合。
  * @param port 確認対象ポート（config.port）。
- * @param options 生存確認・port 疎通確認の差し替え（省略可）。
+ * @param options 生存確認・port 疎通確認＋版取得の差し替え（省略可）。
  * @returns 判定済みの {@link HubStatusResult}。
  */
 export async function hubStatus(
@@ -210,16 +251,16 @@ export async function hubStatus(
   options: HubStatusOptions = {}
 ): Promise<HubStatusResult> {
   const isAlive = options.isAlive ?? isProcessAlive
-  const checkPort = options.checkPort ?? isPortReachable
+  const probe = options.probe ?? probeHub
 
   const pid = readHubPidFile(paths)
   if (pid !== undefined && !isAlive(pid)) {
     return { state: 'stale', pid }
   }
 
-  const reachable = await checkPort(port)
+  const { reachable, version } = await probe(port)
   if (reachable) {
-    return { state: 'running', pid: pid !== undefined ? pid : undefined, port }
+    return { state: 'running', pid: pid !== undefined ? pid : undefined, port, hubVersion: version }
   }
 
   return { state: 'stopped' }

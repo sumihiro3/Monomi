@@ -6,6 +6,7 @@ import { type MonomiPaths, resolvePaths } from '../config/paths.js'
 import { DeviceRepository } from '../db/repositories/device-repository.js'
 import { TokenRepository } from '../db/repositories/token-repository.js'
 import { type EpochMs, toEpochMs } from '../domain/time.js'
+import { MONOMI_VERSION } from '../version.js'
 import type { AuthResolver } from './auth-resolver.js'
 import type { InstanceDetail, InstanceStatusRow } from './dto.js'
 import { HttpServer } from './http-server.js'
@@ -132,6 +133,26 @@ describe('bind resolution (FR-06 AC-1)', () => {
       await overrideHub.close()
       fs.rmSync(overrideDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('hub version header (FR-01 AC-1)', () => {
+  it('attaches X-Monomi-Hub-Version to an authenticated 200 response', async () => {
+    const res = await get('/api/v1/instances', token)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('x-monomi-hub-version')).toBe(MONOMI_VERSION)
+  })
+
+  it('attaches X-Monomi-Hub-Version to a 401 response too (unauthenticated request)', async () => {
+    const res = await get('/api/v1/instances')
+    expect(res.status).toBe(401)
+    expect(res.headers.get('x-monomi-hub-version')).toBe(MONOMI_VERSION)
+  })
+
+  it('attaches X-Monomi-Hub-Version to a 404 response for an unknown route', async () => {
+    const res = await get('/api/v1/nope', token)
+    expect(res.status).toBe(404)
+    expect(res.headers.get('x-monomi-hub-version')).toBe(MONOMI_VERSION)
   })
 })
 
@@ -701,5 +722,49 @@ describe('public routes bypass auth + raw request context (§0.3 / FR-02)', () =
     expect(authedRes.status).toBe(401)
     expect(authedRes.headers.get('www-authenticate')).toBe('Bearer')
     expect(resolveCalls).toBe(1)
+  })
+})
+
+/**
+ * `HttpServer` コンストラクタの `hubVersion` 注入の単体テスト（FR-01 AC-1）。
+ *
+ * E2E テスト（`serve()` 経由）は既定値（{@link MONOMI_VERSION}）を検証済みなので、ここでは
+ * 明示的な差し替え値がヘッダへそのまま反映されること、および引数省略時に既定へフォールバックする
+ * ことを直接コンストラクタで確認する。
+ */
+describe('HttpServer constructor hubVersion injection (FR-01 AC-1)', () => {
+  let server: HttpServer | undefined
+
+  afterEach(async () => {
+    if (server !== undefined) {
+      await server.close()
+      server = undefined
+    }
+  })
+
+  it('uses an explicitly injected version for the response header', async () => {
+    const router = new Router().add('GET', '/api/v1/ping', () => ({
+      status: 200,
+      body: { ok: true },
+    }))
+    const auth = { resolveDevice: () => null } as unknown as AuthResolver
+    server = new HttpServer(router, auth, '9.9.9-test')
+    const port = await server.listen(0, '127.0.0.1')
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/ping`)
+    expect(res.headers.get('x-monomi-hub-version')).toBe('9.9.9-test')
+  })
+
+  it('falls back to MONOMI_VERSION when the constructor argument is omitted', async () => {
+    const router = new Router().add('GET', '/api/v1/ping', () => ({
+      status: 200,
+      body: { ok: true },
+    }))
+    const auth = { resolveDevice: () => null } as unknown as AuthResolver
+    server = new HttpServer(router, auth)
+    const port = await server.listen(0, '127.0.0.1')
+
+    const res = await fetch(`http://127.0.0.1:${port}/api/v1/ping`)
+    expect(res.headers.get('x-monomi-hub-version')).toBe(MONOMI_VERSION)
   })
 })

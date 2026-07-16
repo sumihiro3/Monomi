@@ -8,6 +8,7 @@ import {
   hubStop,
   isPortReachable,
   isProcessAlive,
+  probeHub,
   readHubPidFile,
   removeHubPidFile,
   writeHubPidFile,
@@ -94,7 +95,57 @@ describe('isProcessAlive', () => {
   })
 })
 
-describe('isPortReachable', () => {
+describe('probeHub (FR-01 AC-4: reads X-Monomi-Hub-Version, undefined when missing)', () => {
+  it('reports reachable:true and reads the version header when present', async () => {
+    const fetchImpl = mockFetch(
+      async () => new Response('{}', { status: 200, headers: { 'X-Monomi-Hub-Version': '0.3.0' } })
+    )
+    await expect(
+      probeHub(47632, { fetchImpl: fetchImpl as unknown as typeof fetch })
+    ).resolves.toEqual({ reachable: true, version: '0.3.0' })
+    expect(String(fetchImpl.mock.calls[0][0])).toBe('http://127.0.0.1:47632/api/v1/instances')
+  })
+
+  it('reports reachable:true with version undefined when the header is missing (version unknown)', async () => {
+    const fetchImpl = mockFetch(async () => new Response('{}', { status: 200 }))
+    await expect(
+      probeHub(47632, { fetchImpl: fetchImpl as unknown as typeof fetch })
+    ).resolves.toEqual({ reachable: true, version: undefined })
+  })
+
+  it('still reads the version header on a non-2xx response (401 is "reachable" too)', async () => {
+    const fetchImpl = mockFetch(
+      async () =>
+        new Response('unauthorized', {
+          status: 401,
+          headers: { 'X-Monomi-Hub-Version': '0.3.0' },
+        })
+    )
+    await expect(
+      probeHub(47632, { fetchImpl: fetchImpl as unknown as typeof fetch })
+    ).resolves.toEqual({ reachable: true, version: '0.3.0' })
+  })
+
+  it('returns reachable:false and no version when fetch rejects (connection refused / timeout)', async () => {
+    const fetchImpl = mockFetch(async () => {
+      throw new TypeError('fetch failed')
+    })
+    await expect(
+      probeHub(47632, { fetchImpl: fetchImpl as unknown as typeof fetch })
+    ).resolves.toEqual({ reachable: false })
+  })
+
+  it('honours a custom probe path', async () => {
+    const fetchImpl = mockFetch(async () => new Response('{}', { status: 200 }))
+    await probeHub(47632, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      probePath: '/healthz',
+    })
+    expect(String(fetchImpl.mock.calls[0][0])).toBe('http://127.0.0.1:47632/healthz')
+  })
+})
+
+describe('isPortReachable (thin wrapper over probeHub, reachability only)', () => {
   it('treats any HTTP response (even 401) as reachable', async () => {
     const fetchImpl = mockFetch(async () => new Response('unauthorized', { status: 401 }))
     await expect(
@@ -122,39 +173,48 @@ describe('isPortReachable', () => {
   })
 })
 
-describe('hubStatus (FR-02 AC-1: 3-state discrimination)', () => {
-  it('reports "running" with pid+port when the pid file matches a live process and the port answers', async () => {
+describe('hubStatus (FR-02 AC-1: 3-state discrimination / FR-01 AC-3・AC-4: hubVersion)', () => {
+  it('reports "running" with pid+port+hubVersion when the pid file matches a live process and the port answers with a version', async () => {
     writeHubPidFile(paths, 4242)
     const result = await hubStatus(paths, 47632, {
       isAlive: (pid) => pid === 4242,
-      checkPort: async () => true,
+      probe: async () => ({ reachable: true, version: '0.3.0' }),
     })
-    expect(result).toEqual({ state: 'running', pid: 4242, port: 47632 })
+    expect(result).toEqual({ state: 'running', pid: 4242, port: 47632, hubVersion: '0.3.0' })
+  })
+
+  it('reports "running" with hubVersion undefined when the port answers but the version header is missing (version unknown, AC-4)', async () => {
+    writeHubPidFile(paths, 4242)
+    const result = await hubStatus(paths, 47632, {
+      isAlive: (pid) => pid === 4242,
+      probe: async () => ({ reachable: true, version: undefined }),
+    })
+    expect(result).toEqual({ state: 'running', pid: 4242, port: 47632, hubVersion: undefined })
   })
 
   it('reports "running" without a pid when no pid file exists but the port answers (externally-managed hub, e.g. pm2/launchd)', async () => {
     const result = await hubStatus(paths, 47632, {
       isAlive: () => false,
-      checkPort: async () => true,
+      probe: async () => ({ reachable: true, version: '0.3.0' }),
     })
-    expect(result).toEqual({ state: 'running', pid: undefined, port: 47632 })
+    expect(result).toEqual({ state: 'running', pid: undefined, port: 47632, hubVersion: '0.3.0' })
   })
 
   it('reports "stale" when the pid file exists but the process is no longer alive, regardless of port', async () => {
     writeHubPidFile(paths, 4242)
-    const checkPort = vi.fn(async () => true)
+    const probe = vi.fn(async () => ({ reachable: true, version: '0.3.0' }))
     const result = await hubStatus(paths, 47632, {
       isAlive: () => false,
-      checkPort, // even if something else answers on the port, stale pid wins
+      probe, // even if something else answers on the port, stale pid wins
     })
     expect(result).toEqual({ state: 'stale', pid: 4242 })
     // stale 判定は port 疎通確認より優先し、疎通確認自体を行わない（余計な HTTP 往復を避ける）。
-    expect(checkPort).not.toHaveBeenCalled()
+    expect(probe).not.toHaveBeenCalled()
   })
 
   it('reports "stopped" when there is no pid file and the port does not answer', async () => {
     const result = await hubStatus(paths, 47632, {
-      checkPort: async () => false,
+      probe: async () => ({ reachable: false }),
     })
     expect(result).toEqual({ state: 'stopped' })
   })
