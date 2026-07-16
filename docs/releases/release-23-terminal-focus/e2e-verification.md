@@ -330,13 +330,13 @@ pnpm run lint
 
 ## 結果記録
 
-| 日付 | 実施者 | 環境                    | Terminal.app | Ghostty | tmux | WSL2 | 旧 reporter | メモ |
-| ---- | ------ | ----------------------- | ------------ | ------- | ---- | ---- | ----------- | ---- |
-| 2026-07-16 | sumihiro | macOS (Terminal.app)    | [x]          |         |      |      | [ ]         | f キーでタブ前面化を確認。前提: 常駐 hub の新ビルド再起動が必要（旧 hub だと terminal が strip され「情報なし」になる） |
-|      |        | macOS (Ghostty)         |              | [ ]     |      |      |             |      |
+| 日付       | 実施者   | 環境                    | Terminal.app | Ghostty | tmux | WSL2 | 旧 reporter | メモ                                                                                                                                                                                |
+| ---------- | -------- | ----------------------- | ------------ | ------- | ---- | ---- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-16 | sumihiro | macOS (Terminal.app)    | [x]          |         |      |      | [ ]         | f キーでタブ前面化を確認。前提: 常駐 hub の新ビルド再起動が必要（旧 hub だと terminal が strip され「情報なし」になる）                                                             |
+|            |          | macOS (Ghostty)         |              | [ ]     |      |      |             |                                                                                                                                                                                     |
 | 2026-07-16 | sumihiro | macOS (tmux)            | [x]          |         | [x]  |      |             | attach 中のフォーカス（pane 切替 + 外側 Terminal.app 前面化）と detach 時の notice・再 attach 後の復帰を確認。ダッシュボードは Ghostty（Terminal.app へのオートメーション許可あり） |
-| 2026-07-16 | sumihiro | macOS (別デバイス行)     |              |         |      |      |             | MacBook（child）の行で f 無効化・「別デバイス」notice・フッターヒント非表示・detail ビューでも無効を確認 |
-|      |        | WSL2 + Windows Terminal |              |         |      | [ ]  |             |      |
+| 2026-07-16 | sumihiro | macOS (別デバイス行)    |              |         |      |      |             | MacBook（child）の行で f 無効化・「別デバイス」notice・フッターヒント非表示・detail ビューでも無効を確認                                                                            |
+|            |          | WSL2 + Windows Terminal |              |         |      | [ ]  |             |                                                                                                                                                                                     |
 
 ---
 
