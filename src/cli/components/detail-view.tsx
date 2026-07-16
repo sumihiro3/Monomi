@@ -27,6 +27,7 @@ import {
   statusGlyph,
   statusLabel,
 } from '../status-display.js'
+import { terminalDisplayName } from '../terminal-display.js'
 
 /**
  * イベント行の表示モード（FR-08）。`truncate-end` は 1 行に切り詰め（既定）、`wrap` は全文折り返し。
@@ -75,7 +76,8 @@ export interface DetailViewProps {
  * 詳細ビュー（Agent View Lv.1、§10.4 / release-6 FR-01・FR-02・FR-04）。container。
  *
  * 上部にプロジェクト概要の `borderStyle="round"` BOX（instance_id・project・device・branch・
- * status〈色付きグリフ＋ラベル＋経過時間〉・session_id・path・pr、FR-01）、下部にスクロール
+ * status〈色付きグリフ＋ラベル＋経過時間〉・session_id・path・terminal〈release-24 FR-02〉・pr、
+ * FR-01）、下部にスクロール
  * 可能なイベント履歴の `borderStyle="round"` BOX（FR-02）を積む。イベントは hub 契約（新しい順、
  * 不変）を CLI 表示側で反転し、ターミナルログ風の古い順・最新末尾で描く（FR-02 AC-1）。
  *
@@ -318,6 +320,22 @@ export function DetailView({
         </Field>
         <Field label="path">
           <Text>{sanitizeDisplayText(source.path)}</Text>
+        </Field>
+        {/* release-24 FR-02（U16）: どのターミナルアプリでこのセッションが動いているかを表示する。
+            FR-01（terminal-display.ts）の terminalDisplayName で `term_program`/`wsl_distro` を
+            表示名へ写す。session.terminal 自体が null（旧 reporter・情報未捕捉）の場合も
+            optional chaining で null を渡すだけで安全にフォールスルーする。戻り値はレポーター由来の
+            自由記述（未知の term_program・wsl_distro）を含み得るため、branch 等と同じく
+            sanitizeNullableDisplayText を適用し、null は他の nullable フィールドと同じ `-` 表示にする。 */}
+        <Field label={t('detail.terminal')}>
+          <Text>
+            {sanitizeNullableDisplayText(
+              terminalDisplayName(
+                source.session.terminal?.term_program ?? null,
+                source.session.terminal?.wsl_distro ?? null
+              )
+            ) ?? '-'}
+          </Text>
         </Field>
         <Field label="pr">
           <Text>{source.pr.state}</Text>
