@@ -11,13 +11,22 @@ import type { FocusResult, FocusTarget, Strategy } from './types.js'
  */
 export const TERMINAL_APP_TERM_PROGRAM = 'Apple_Terminal'
 
+/** System Events から見た Terminal.app のプロセス名（`exists process "Terminal"` に使う）。 */
+const TERMINAL_APP_PROCESS_NAME = 'Terminal'
+
 /**
  * Terminal.app の windows/tabs を走査し `tty of aTab` が `tty` と一致するタブを選択・
- * ウィンドウを前面化する AppleScript ソースを組み立てる（FR-04 AC-3）。
+ * ウィンドウを前面化する AppleScript ソースを組み立てる（FR-04 AC-3、FR-06a）。
  *
  * `tty` は呼び出し側（`focus-service.ts`）に渡ってくる時点で `focus-target.ts#toFocusTarget`
  * による厳格検証済みの値だが、本関数自身も {@link escapeAppleScriptString} を必ず経由してから
  * スクリプトへ埋め込む（三段防御の第二段。呼び出し順序に依存せず本関数単体でも安全な作り）。
+ *
+ * `tell application "Terminal"` へ入る前に、`ghostty-strategy.ts` の
+ * {@link import('./ghostty-strategy.js').buildGhosttyFocusScript} と同型の System Events ガードで
+ * Terminal.app が既に起動しているかを確認する。`tell application "Terminal"` は対象アプリが未起動
+ * だと Apple Events 経由で自動起動させてしまう（B12）ため、未起動なら Terminal 側の処理へ進まず
+ * `"false"` を返して strategy 側では `not_found` に丸める。
  *
  * 一致するタブが見つかれば所属ウィンドウを `frontmost` にし、タブを `selected` にした上で
  * アプリ自体を `activate` して stdout へ `"true"` を返す。見つからなければ `"false"` を返す
@@ -31,7 +40,11 @@ export const TERMINAL_APP_TERM_PROGRAM = 'Apple_Terminal'
  */
 export function buildTerminalAppFocusScript(tty: string): string {
   const escapedTty = escapeAppleScriptString(tty)
+  const escapedProcess = escapeAppleScriptString(TERMINAL_APP_PROCESS_NAME)
   return [
+    'tell application "System Events"',
+    `  if not (exists process "${escapedProcess}") then return "false"`,
+    'end tell',
     'tell application "Terminal"',
     '  set foundTab to missing value',
     '  set foundWindow to missing value',
@@ -94,10 +107,11 @@ export class TerminalAppStrategy implements Strategy {
    * `tty` の一致するタブへフォーカスする（AC-3）。
    *
    * @param tty 検証済み TTY。
-   * @returns `osascript` の stdout が `"true"` なら `ok`、`"false"`（対象タブなし）なら
-   *   `not_found`。`osascript` 実行自体が失敗（Terminal.app 未起動・権限不足等）した場合は `error`
-   *   に丸める（`focus-service.ts` 側でも strategy 例外は `error` へ丸めるが、ここでも自己完結して
-   *   `FocusResult` を返せるようにしておく）。
+   * @returns `osascript` の stdout が `"true"` なら `ok`、`"false"`（対象タブなし、または
+   *   {@link buildTerminalAppFocusScript} の System Events ガードにより Terminal.app が未起動と判定
+   *   された場合。FR-06a）なら `not_found`。`osascript` 実行自体が失敗（権限不足等）した場合は
+   *   `error` に丸める（`focus-service.ts` 側でも strategy 例外は `error` へ丸めるが、ここでも
+   *   自己完結して `FocusResult` を返せるようにしておく）。
    */
   async focus(tty: string): Promise<FocusResult> {
     const script = buildTerminalAppFocusScript(tty)

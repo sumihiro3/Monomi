@@ -30,6 +30,7 @@ export const JA = {
   'detail.loading': '読み込み中…',
   'detail.elapsedSuffix': '{age}経過',
   'detail.running': '実行中',
+  'detail.terminal': 'ターミナル',
   'detail.runningKind.workflow': 'ワークフロー',
   'detail.runningKind.agent': 'エージェント',
   'detail.runningKind.skill': 'スキル',

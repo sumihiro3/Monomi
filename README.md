@@ -156,11 +156,15 @@ Keyboard controls in the dashboard (`monomi` with no arguments):
 | `?`              | Show help                                                                   |
 | `q`              | Quit                                                                        |
 
+Each list card also includes a `path` line (the instance's working directory) between the branch and status lines. The home directory is collapsed to `~` (e.g. `/Users/alice/project` → `~/project`); if the path still doesn't fit the card width, it's truncated in the middle (`start…end`) instead of at the end, so the trailing directory name — often what distinguishes similarly named worktrees — stays visible.
+
 The last line of each list card shows the Workflow / Agent / Skill currently running for that instance, as `▶ <name>` (`-` if nothing is running). The detail view's overview box shows the same information as `<name> (workflow|agent|skill)`. When a start time can be obtained, the elapsed time is appended (list card: `▶ <name> (<elapsed>)`; detail view: `<name> (workflow|agent|skill) <elapsed>`).
 
 ## Terminal Focus (the `f` key)
 
-Pressing `f` while a session row is selected in the list or detail view brings that session's terminal window to the foreground and focuses the appropriate tab. This only works for sessions on the same machine as the CLI you're running: selecting a row from another device and pressing `f` shows an on-screen message and does nothing (the same applies to closed sessions or sessions with no terminal information). Terminal.app, Ghostty, and tmux are supported.
+Pressing `f` while a session row is selected in the list or detail view brings that session's terminal window to the foreground and focuses the appropriate tab. This only works for sessions on the same machine as the CLI you're running: selecting a row from another device and pressing `f` shows an on-screen message and does nothing (the same applies to closed sessions, sessions with no terminal information, or when the detected terminal app isn't currently running). Terminal.app, Ghostty, and tmux are supported.
+
+When Monomi detects which terminal app a session is running in, it shows the name next to the device on the session's list card (e.g. `device-name (Ghostty)`) and in a `Terminal` field in the detail view, so you can see what `f` will act on before pressing it.
 
 ### macOS: Required permissions
 

@@ -12,16 +12,18 @@ function makeRow(over: {
   projectName?: string
   deviceName?: string
   branch?: string | null
+  path?: string
   display?: string
   elapsedSeconds?: number
   runningWork?: InstanceStatusRow['running_work']
+  terminal?: InstanceStatusRow['session']['terminal']
 }): InstanceStatusRow {
   const display = over.display ?? 'approval_wait'
   return {
     instance_id: 'inst-1',
     project: { id: 'proj-1', name: over.projectName ?? 'ProjectLens' },
     device: { id: 'macmini', name: over.deviceName ?? 'Mac mini' },
-    path: '/Users/sumihiro/dev/ProjectLens',
+    path: over.path ?? '/Users/sumihiro/dev/ProjectLens',
     branch: over.branch === undefined ? 'feature/ai-sidecar' : over.branch,
     status: {
       display,
@@ -31,8 +33,26 @@ function makeRow(over: {
       priority: 4,
     },
     pr: { state: 'none' },
-    session: { id: 'sess-1', last_heartbeat_at: null, terminal: null },
+    session: {
+      id: 'sess-1',
+      last_heartbeat_at: null,
+      terminal: over.terminal === undefined ? null : over.terminal,
+    },
     running_work: over.runningWork === undefined ? null : over.runningWork,
+  }
+}
+
+/** テスト用 `session.terminal` を作る（表示に効く最小フィールドのみ指定）。 */
+function makeTerminal(
+  over: Partial<NonNullable<InstanceStatusRow['session']['terminal']>>
+): NonNullable<InstanceStatusRow['session']['terminal']> {
+  return {
+    tty: over.tty ?? '/dev/ttys003',
+    term_program: over.term_program ?? null,
+    tmux_pane: over.tmux_pane ?? null,
+    tmux_socket: over.tmux_socket ?? null,
+    wsl_distro: over.wsl_distro ?? null,
+    wt_session: over.wt_session ?? null,
   }
 }
 
@@ -128,6 +148,137 @@ describe('InstanceCard（FR-01）', () => {
     const frame = lastFrame() ?? ''
     expect(frame).not.toContain('PWNED')
     expect(frame).toContain('ProjectLens')
+  })
+})
+
+describe('InstanceCard — device 行のターミナル併記（release-24-dashboard-display-polish FR-03、既知課題 U16）', () => {
+  it('AC-1: session.terminal.term_program が既知値のとき device 行に "device (<terminal>)" を描画する', () => {
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({
+          deviceName: 'Mac mini',
+          terminal: makeTerminal({ term_program: 'ghostty' }),
+        })}
+        selected={false}
+        width={40}
+      />
+    )
+    expect(lastFrame() ?? '').toContain('Mac mini (Ghostty)')
+  })
+
+  it('AC-4: wsl_distro のみ非 null のとき device 行に distro 名を併記する', () => {
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({
+          deviceName: 'win-laptop',
+          terminal: makeTerminal({ term_program: null, wsl_distro: 'Ubuntu' }),
+        })}
+        selected={false}
+        width={40}
+      />
+    )
+    expect(lastFrame() ?? '').toContain('win-laptop (Ubuntu)')
+  })
+
+  it('AC-3: session.terminal が null のとき device 行は device 名のみで括弧を付けない', () => {
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({ deviceName: 'Mac mini', terminal: null })}
+        selected={false}
+        width={40}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('Mac mini')
+    expect(frame).not.toContain('(')
+  })
+
+  it('AC-3: term_program/wsl_distro がともに null のとき device 行は device 名のみで括弧を付けない', () => {
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({ deviceName: 'Mac mini', terminal: makeTerminal({}) })}
+        selected={false}
+        width={40}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('Mac mini')
+    expect(frame).not.toContain('(')
+  })
+
+  it('AC-2: ターミナル名に含まれる ANSI エスケープ・制御文字を除染して描画する（CWE-150）', () => {
+    const ESC = String.fromCharCode(27)
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({
+          deviceName: 'Mac mini',
+          terminal: makeTerminal({
+            term_program: null,
+            wsl_distro: `Ubuntu${ESC}]0;PWNED${String.fromCharCode(7)}`,
+          }),
+        })}
+        selected={false}
+        width={50}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain('PWNED')
+    expect(frame).toContain('Mac mini (Ubuntu)')
+  })
+})
+
+describe('InstanceCard — path 行（release-24-dashboard-display-polish FR-05、既知課題 U18）', () => {
+  it('AC: 長い path はホーム短縮なしのまま 先頭…末尾 形式で中間省略される（幅=width-罫線・paddingX分 に一致）', () => {
+    // width=19 → 罫線2桁+paddingX左右2桁(計4桁)を引いた maxWidth=15
+    // （truncate-path.test.ts の同一入力と同じ結果）。
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({ path: '/opt/dev/Monomi/release-23/src' })}
+        selected={false}
+        width={19}
+      />
+    )
+    expect(lastFrame() ?? '').toContain('/opt/de…-23/src')
+  })
+
+  it('AC: カード幅に収まる短い path はホーム短縮のみ適用され省略記号を含まず表示される', () => {
+    const { lastFrame } = render(
+      <InstanceCard row={makeRow({ path: '/Users/sumihiro/proj' })} selected={false} width={40} />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('~/proj')
+    expect(frame).not.toContain('…')
+  })
+
+  it('AC: 全角混じりの path でも displayWidth ベースで正しく中間省略される', () => {
+    // width=14 → 罫線2桁+paddingX左右2桁(計4桁)を引いた maxWidth=10
+    // （truncate-path.test.ts の同一入力と同じ結果）。
+    const { lastFrame } = render(
+      <InstanceCard row={makeRow({ path: 'あいうえお/1234567890' })} selected={false} width={14} />
+    )
+    expect(lastFrame() ?? '').toContain('あい…67890')
+  })
+
+  it('path に含まれる ANSI エスケープ・制御文字を除染してから幅計算・表示する（CWE-150）', () => {
+    const ESC = String.fromCharCode(27)
+    const { lastFrame } = render(
+      <InstanceCard
+        row={makeRow({ path: `/opt/proj${ESC}]0;PWNED${String.fromCharCode(7)}` })}
+        selected={false}
+        width={60}
+      />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).not.toContain('PWNED')
+    expect(frame).toContain('/opt/proj')
+  })
+
+  it('width 未指定時は FALLBACK_BOX_WIDTH(80) 相当を基準にホーム短縮・省略を行う', () => {
+    const { lastFrame } = render(
+      <InstanceCard row={makeRow({ path: '/Users/sumihiro/proj' })} selected={false} />
+    )
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('~/proj')
   })
 })
 

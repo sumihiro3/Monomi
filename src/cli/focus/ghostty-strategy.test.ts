@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   buildGhosttyFocusScript,
+  buildGhosttyProcessExistsScript,
   buildGhosttyTag,
   buildOscTitleSequence,
   GHOSTTY_TERM_PROGRAM,
@@ -109,6 +110,18 @@ describe('buildGhosttyFocusScript（AC-4）', () => {
   })
 })
 
+describe('buildGhosttyProcessExistsScript（FR-06, B12）', () => {
+  it('Ghostty プロセスの存在確認のみを行う（メニュー検索は含まない）', () => {
+    const script = buildGhosttyProcessExistsScript()
+    expect(script).toContain('tell application "System Events"')
+    expect(script).toContain('exists process "Ghostty"')
+    expect(script).toContain('return "true"')
+    expect(script).toContain('return "false"')
+    expect(script).not.toContain('menu item')
+    expect(script).not.toContain('AXRaise')
+  })
+})
+
 describe('GhosttyStrategy.matchesHint（AC-6）', () => {
   const strategy = new GhosttyStrategy()
 
@@ -125,16 +138,17 @@ describe('GhosttyStrategy.matchesHint（AC-6）', () => {
   })
 })
 
-describe('GhosttyStrategy.focus（AC-4）', () => {
+describe('GhosttyStrategy.focus（AC-4、FR-06/B12: プロセス存在確認→タグ書き込み→メニュー検索の順）', () => {
   it('1 回目で成功したらリトライせず ok を返す', async () => {
-    const exec = mockExec(['true'])
+    // exec 呼び出しは [存在確認, メニュー検索] の順。
+    const exec = mockExec(['true', 'true'])
     const writeTtyTitle = mockWriteTtyTitle()
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle })
 
     const result = await strategy.focus('/dev/ttys003')
 
     expect(result).toBe('ok')
-    expect(exec.calls).toHaveLength(1)
+    expect(exec.calls).toHaveLength(2)
     // タグ書き込み(1回) + finally でのタグ消去(1回) = 2回。
     expect(writeTtyTitle.calls).toHaveLength(2)
     expect(writeTtyTitle.calls[0]).toEqual({
@@ -143,19 +157,23 @@ describe('GhosttyStrategy.focus（AC-4）', () => {
     })
   })
 
-  it('osascript には "osascript" "-e" <script> の形で execFile（非 shell）発行する', async () => {
-    const exec = mockExec(['true'])
+  it('osascript には "osascript" "-e" <script> の形で execFile（非 shell）発行する（存在確認→メニュー検索の順）', async () => {
+    const exec = mockExec(['true', 'true'])
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle: mockWriteTtyTitle() })
 
     await strategy.focus('/dev/ttys003')
 
-    expect(exec.calls[0]?.command).toBe('osascript')
-    expect(exec.calls[0]?.args[0]).toBe('-e')
-    expect(exec.calls[0]?.args[1]).toBe(buildGhosttyFocusScript('monomi:ttys003'))
+    expect(exec.calls).toHaveLength(2)
+    for (const call of exec.calls) {
+      expect(call.command).toBe('osascript')
+      expect(call.args[0]).toBe('-e')
+    }
+    expect(exec.calls[0]?.args[1]).toBe(buildGhosttyProcessExistsScript())
+    expect(exec.calls[1]?.args[1]).toBe(buildGhosttyFocusScript('monomi:ttys003'))
   })
 
   it('成否によらず finally でタグを消去する（空タイトルを書き込む）', async () => {
-    const exec = mockExec(['true'])
+    const exec = mockExec(['true', 'true'])
     const writeTtyTitle = mockWriteTtyTitle()
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle })
 
@@ -166,62 +184,90 @@ describe('GhosttyStrategy.focus（AC-4）', () => {
   })
 
   it('1 回目が not_found（メニュー項目未検出）なら 1 回だけリトライし、2 回目の結果を返す', async () => {
-    const exec = mockExec(['false', 'true'])
+    // [存在確認1, メニュー検索1(未検出), 存在確認2, メニュー検索2(検出)]
+    const exec = mockExec(['true', 'false', 'true', 'true'])
     const writeTtyTitle = mockWriteTtyTitle()
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle })
 
     const result = await strategy.focus('/dev/ttys003')
 
     expect(result).toBe('ok')
-    expect(exec.calls).toHaveLength(2)
+    expect(exec.calls).toHaveLength(4)
     // タグ書き込み(1回目) + タグ書き込み(2回目のリトライ) + finally でのタグ消去 = 3回。
     expect(writeTtyTitle.calls).toHaveLength(3)
   })
 
   it('2 回とも not_found なら 3 回目は試さず not_found を返す', async () => {
-    const exec = mockExec(['false', 'false'])
+    // [存在確認1, メニュー検索1(未検出), 存在確認2, メニュー検索2(未検出)]
+    const exec = mockExec(['true', 'false', 'true', 'false'])
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle: mockWriteTtyTitle() })
 
     const result = await strategy.focus('/dev/ttys003')
 
     expect(result).toBe('not_found')
-    expect(exec.calls).toHaveLength(2)
+    expect(exec.calls).toHaveLength(4)
   })
 
   it('osascript 実行自体が例外を投げても error を返し、finally でタグを消去する', async () => {
-    const exec = mockExec([new Error('System Events not authorized'), new Error('still no')])
+    // 存在確認は成功させ、メニュー検索側の osascript 実行が例外を投げるケース。
+    const exec = mockExec([
+      'true',
+      new Error('System Events not authorized'),
+      'true',
+      new Error('still no'),
+    ])
     const writeTtyTitle = mockWriteTtyTitle()
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle })
 
     const result = await strategy.focus('/dev/ttys003')
 
     expect(result).toBe('error')
-    expect(exec.calls).toHaveLength(2)
+    expect(exec.calls).toHaveLength(4)
     expect(writeTtyTitle.calls.at(-1)).toEqual({
       ttyPath: '/dev/ttys003',
       oscSequence: buildOscTitleSequence(''),
     })
   })
 
-  it('タグ書き込み自体が失敗したら osascript を呼ばず error を返し、リトライする', async () => {
-    const exec = mockExec([])
-    // 1回目・2回目(リトライ)のタグ書き込みは失敗させ、3回目(finallyのクリア)は成功させる。
-    const writeTtyTitle = mockWriteTtyTitle((index) => index < 2)
+  it('プロセスが存在してもタグ書き込み自体が失敗したら osascript でのメニュー検索を呼ばず error を返し、リトライする', async () => {
+    // 存在確認はどちらの試行でも成功させる（メニュー検索の exec 呼び出しには到達しない）。
+    const exec = mockExec(['true', 'true'])
+    // 1回目・2回目(リトライ)のタグ書き込みをどちらも失敗させる。
+    const writeTtyTitle = mockWriteTtyTitle(() => true)
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle })
 
     const result = await strategy.focus('/dev/ttys003')
 
     expect(result).toBe('error')
-    expect(exec.calls).toHaveLength(0)
-    expect(writeTtyTitle.calls).toHaveLength(3)
+    expect(exec.calls).toHaveLength(2)
+    // タグ書き込みに一度も成功していないため wroteTag が立たず、
+    // finally でのタグ消去（clearTag）は呼ばれない。
+    expect(writeTtyTitle.calls).toHaveLength(2)
   })
 
   it('finally でのタグ消去自体が失敗しても focus() は例外を投げない（結果を優先する）', async () => {
-    const exec = mockExec(['true'])
+    const exec = mockExec(['true', 'true'])
     // 1回目で ok になりリトライは発生しないため、2回目 = finally のクリア呼び出しだけ失敗させる。
     const writeTtyTitle = mockWriteTtyTitle((index) => index === 1)
     const strategy = new GhosttyStrategy({ exec, writeTtyTitle })
 
     await expect(strategy.focus('/dev/ttys003')).resolves.toBe('ok')
+  })
+
+  it('Ghostty プロセスが起動していなければ writeTtyTitle を一切呼ばずに not_found を返す（FR-06、B12）', async () => {
+    // 1回目・リトライとも存在確認が false を返す。
+    const exec = mockExec(['false', 'false'])
+    const writeTtyTitle = mockWriteTtyTitle()
+    const strategy = new GhosttyStrategy({ exec, writeTtyTitle })
+
+    const result = await strategy.focus('/dev/ttys003')
+
+    expect(result).toBe('not_found')
+    // 存在確認のみ2回（1回目 + リトライ）で、メニュー検索用の osascript 呼び出しは発生しない。
+    expect(exec.calls).toHaveLength(2)
+    expect(exec.calls[0]?.args[1]).toBe(buildGhosttyProcessExistsScript())
+    expect(exec.calls[1]?.args[1]).toBe(buildGhosttyProcessExistsScript())
+    // タグを一度も書き込んでいないため、finally でのタグ消去も含め writeTtyTitle は無呼び出し。
+    expect(writeTtyTitle).not.toHaveBeenCalled()
   })
 })

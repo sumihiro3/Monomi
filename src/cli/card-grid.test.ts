@@ -25,4 +25,11 @@ describe('columnsForWidth', () => {
   it('isTTY が false のときは幅が広くても1列にフォールバックする（FR-02 AC-4）', () => {
     expect(columnsForWidth(200, false)).toBe(1)
   })
+
+  it('列数計算は幅・TTY判定のみに依存し高さを引数に取らない（回帰確認、release-24-dashboard-display-polish FR-05: instance-card.tsx の path 行追加でカードが5行→6行になっても列数計算ロジックは変更していないことをシグネチャで担保する）', () => {
+    expect(columnsForWidth.length).toBe(2)
+    // 同一の width/isTTY なら、カード内部の行数（高さ）に関する情報を一切渡していなくても
+    // 結果は決定的（=高さに影響されない）。
+    expect(columnsForWidth(120, true)).toBe(columnsForWidth(120, true))
+  })
 })

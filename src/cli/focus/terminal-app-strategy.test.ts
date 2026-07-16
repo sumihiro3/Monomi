@@ -65,6 +65,16 @@ describe('buildTerminalAppFocusScript（release-23-terminal-focus FR-04b AC-3）
     expect(script).not.toContain(`is "${malicious}"`)
     expect(script).toContain('if tty of t is "\\" & (do shell script \\"rm -rf ~\\") & \\"" then')
   })
+
+  it('tell application "Terminal" へ入る前に System Events で process "Terminal" の存在を確認する（FR-06a）', () => {
+    const script = buildTerminalAppFocusScript('/dev/ttys003')
+    const systemEventsIndex = script.indexOf('tell application "System Events"')
+    const guardIndex = script.indexOf('if not (exists process "Terminal") then return "false"')
+    const terminalTellIndex = script.indexOf('tell application "Terminal"')
+    expect(systemEventsIndex).toBeGreaterThanOrEqual(0)
+    expect(guardIndex).toBeGreaterThan(systemEventsIndex)
+    expect(terminalTellIndex).toBeGreaterThan(guardIndex)
+  })
 })
 
 describe('TerminalAppStrategy.matchesHint（AC-6）', () => {
@@ -114,11 +124,25 @@ describe('TerminalAppStrategy.focus（AC-3）', () => {
     await expect(strategy.focus('/dev/ttys003')).resolves.toBe('ok')
   })
 
-  it('osascript 実行自体が失敗（Terminal.app 未起動・権限不足等）したら error を返す', async () => {
+  it('osascript 実行自体が失敗（権限不足等）したら error を返す', async () => {
     const strategy = new TerminalAppStrategy({
       exec: mockExec(new Error('Application isn’t running')),
     })
 
     await expect(strategy.focus('/dev/ttys003')).resolves.toBe('error')
+  })
+
+  it('Terminal.app 未起動（System Events ガードで "false" を返す）なら not_found を返し、自動起動させない（FR-06a）', async () => {
+    // buildTerminalAppFocusScript の System Events ガードが "false" を返すケースを模す
+    // （Terminal.app 未起動時、実際の AppleScript 実行結果は "false" になる）。
+    const exec = mockExec('false')
+    const strategy = new TerminalAppStrategy({ exec })
+
+    const result = await strategy.focus('/dev/ttys003')
+
+    expect(result).toBe('not_found')
+    // ガードにより tell application "Terminal" 節が Apple Events を発行する前に return するため、
+    // strategy 側は osascript を 1 回呼ぶのみで Terminal.app を自動起動させない。
+    expect(exec.calls).toHaveLength(1)
   })
 })

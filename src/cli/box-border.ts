@@ -65,10 +65,14 @@ export function resolveBoxWidth(columns: number | undefined, isTTY: boolean): nu
  * Box Drawing（U+2500–U+257F, `╭─╮╰╯│` 等）は Ambiguous(A) 区分で表に含まれないため 1 桁扱いとなり、
  * 罫線自身の桁計算と整合する。
  *
+ * `truncate-path.ts`（{@link ../truncate-path.js}）の中間省略ヘルパーからも同じ判定基準を
+ * 再利用するため export する（release-24 FR-04: 重複実装を避け box-border.ts を判定の唯一の
+ * 拠り所にする）。
+ *
  * @param codePoint `String.prototype.codePointAt` で得たコードポイント。
  * @returns 全角なら true。
  */
-function isFullWidthCodePoint(codePoint: number): boolean {
+export function isFullWidthCodePoint(codePoint: number): boolean {
   return (
     codePoint >= 0x1100 &&
     (codePoint <= 0x115f || // Hangul Jamo
@@ -121,11 +125,14 @@ export function displayWidth(str: string): number {
  * 全角文字が半端に収まらない場合はその文字を含めない（表示桁が `maxWidth` を超えないことを優先）。
  * その結果 1 桁余ることがあるが、余りは呼び出し側でフィル（`─`）に回るため罫線全体の桁は狂わない。
  *
+ * `truncate-path.ts`（{@link ../truncate-path.js}）が末尾省略フォールバック・先頭側の
+ * 中間省略に再利用するため export する（release-24 FR-04）。
+ *
  * @param str 切り詰め対象の文字列。
  * @param maxWidth 許容する最大表示桁数。
  * @returns 表示桁が `maxWidth` 以下に収まる先頭部分文字列。
  */
-function truncateToWidth(str: string, maxWidth: number): string {
+export function truncateToWidth(str: string, maxWidth: number): string {
   if (maxWidth <= 0) {
     return ''
   }

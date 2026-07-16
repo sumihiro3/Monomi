@@ -57,8 +57,11 @@ export const MIN_VISIBLE_ROWS = 3
 export const DETAIL_RESERVED_BREAKDOWN = {
   /** AppView 最上部のタイトル行（"Claude Code Status …"）。 */
   appHeader: 1,
-  /** 上部プロジェクト概要BOX: `round` 下辺(1) + 自前タイトル行(1, FR-06) + FR-01 AC-1 の8項目(instance_id/project/device/branch/status/session_id/path/pr)。borderTop 非描画ぶんを自前タイトル行が相殺し 10 で不変。 */
-  overviewBox: 10,
+  /** 上部プロジェクト概要BOX: `round` 下辺(1) + 自前タイトル行(1, FR-06) + フィールド行群
+   * （instance_id/project/device/branch/status/running/session_id/path/terminal/pr）。
+   * release-24 FR-02 で `path` の直後に `terminal` 行を追加したため、旧値 10 から +1 して 11 にする。
+   * borderTop 非描画ぶんは自前タイトル行が相殺する。 */
+  overviewBox: 11,
   /** イベント履歴BOX の chrome: 自前タイトル行(1, FR-06) + 範囲ラベル付き自前下辺(1, FR-07)。上下罫線は borderTop/Bottom=false で無効化し box-border の罫線行に置換する。スクロールするイベント本文は含めない。 */
   eventBoxChrome: 2,
   /** `marginTop={1}` の空行 3 箇所（header→detail / overview→events / body→footer）。 */

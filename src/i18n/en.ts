@@ -33,6 +33,7 @@ export const EN = {
   'detail.loading': 'Loading…',
   'detail.elapsedSuffix': '{age} elapsed',
   'detail.running': 'Running',
+  'detail.terminal': 'Terminal',
   'detail.runningKind.workflow': 'workflow',
   'detail.runningKind.agent': 'agent',
   'detail.runningKind.skill': 'skill',
