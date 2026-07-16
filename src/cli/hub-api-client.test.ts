@@ -5,6 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resolvePaths, type MonomiPaths } from '../config/paths.js'
 import { createHubApiClient } from './hub-api-client.js'
 
+/** バージョンヘッダ付き JSON レスポンスを組み立てる（FR-04）。 */
+function jsonResponseWithVersion(status: number, body: unknown, version?: string): Response {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (version !== undefined) {
+    headers['X-Monomi-Hub-Version'] = version
+  }
+  return new Response(JSON.stringify(body), { status, headers })
+}
+
 let tmpDir: string
 let paths: MonomiPaths
 
@@ -110,5 +119,90 @@ describe('createHubApiClient', () => {
       createHubApiClient(paths, { fetchImpl: fetchImpl as unknown as typeof fetch })
     ).rejects.toThrow(/token not found/)
     expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})
+
+describe('HubApiClient.getLastHubVersion (release-25-auto-update FR-04)', () => {
+  beforeEach(() => {
+    fs.writeFileSync(paths.configFile, 'role: hub\nport: 47632\n', 'utf8')
+    fs.writeFileSync(paths.tokenFile, 'tok-hub', 'utf8')
+  })
+
+  it('is undefined before any GET response has been received', async () => {
+    const fetchImpl = mockFetch(async () =>
+      jsonResponseWithVersion(200, { generated_at: '2026-07-02T00:00:00.000Z', instances: [] })
+    )
+    const client = await createHubApiClient(paths, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+
+    expect(client.getLastHubVersion()).toBeUndefined()
+  })
+
+  it('captures X-Monomi-Hub-Version from a successful listInstances() response', async () => {
+    const fetchImpl = mockFetch(async (input) => {
+      // 到達性プローブ（HubEndpointResolver）とバージョン付き実応答（getJson）を区別しない。
+      // どちらも同じ URL を叩くため同一応答を返してよい。
+      void input
+      return jsonResponseWithVersion(
+        200,
+        { generated_at: '2026-07-02T00:00:00.000Z', instances: [] },
+        '0.9.0'
+      )
+    })
+    const client = await createHubApiClient(paths, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+
+    await client.listInstances()
+
+    expect(client.getLastHubVersion()).toBe('0.9.0')
+  })
+
+  it('captures X-Monomi-Hub-Version even from a non-2xx response (e.g. 401) before throwing', async () => {
+    const fetchImpl = mockFetch(async () =>
+      jsonResponseWithVersion(401, { error: 'invalid_token' }, '0.9.0')
+    )
+    const client = await createHubApiClient(paths, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+
+    await expect(client.listInstances()).rejects.toThrow(/hub request failed/)
+
+    expect(client.getLastHubVersion()).toBe('0.9.0')
+  })
+
+  it('returns undefined when the response has no version header (older hub build)', async () => {
+    const fetchImpl = mockFetch(async () =>
+      jsonResponseWithVersion(200, { generated_at: '2026-07-02T00:00:00.000Z', instances: [] })
+    )
+    const client = await createHubApiClient(paths, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+
+    await client.listInstances()
+
+    expect(client.getLastHubVersion()).toBeUndefined()
+  })
+
+  it('updates on each GET so the latest poll response wins', async () => {
+    let version = '0.9.0'
+    const fetchImpl = mockFetch(async () =>
+      jsonResponseWithVersion(
+        200,
+        { generated_at: '2026-07-02T00:00:00.000Z', instances: [] },
+        version
+      )
+    )
+    const client = await createHubApiClient(paths, {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    })
+
+    await client.listInstances()
+    expect(client.getLastHubVersion()).toBe('0.9.0')
+
+    version = '0.10.0'
+    await client.listInstances()
+    expect(client.getLastHubVersion()).toBe('0.10.0')
   })
 })

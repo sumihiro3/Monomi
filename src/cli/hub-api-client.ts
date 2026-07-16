@@ -62,6 +62,15 @@ interface InstancesEnvelope {
 }
 
 /**
+ * 応答から hub の版を読み取るヘッダ名（FR-01。`HttpServer.send()` が全応答へ付与する）。
+ *
+ * `src/hub/hub-lifecycle.ts` の `HUB_VERSION_HEADER` と同じ値。hub レイヤーへ依存を持ち込まない
+ * ため（class-diagram: hub→cli の依存方向を保つ）、cli 側にも同じ定数を独立して持つ
+ * （probeHub と同じ「依存方向の一貫性を優先した意図的な二重定義」パターン、`hub-lifecycle.ts` 参照）。
+ */
+const HUB_VERSION_HEADER = 'x-monomi-hub-version'
+
+/**
  * hub API への読み取り専用 HTTP クライアント（class-diagram §4 / §8.2）。
  *
  * すべてのリクエストに Bearer token を付与する（読み取りも認証必須、§8.2）。
@@ -74,6 +83,12 @@ export class HubApiClient {
   private readonly baseUrl: string
   private readonly token: string | undefined
   private readonly fetchImpl: typeof fetch
+  /**
+   * 直近の Bearer 付き GET 応答（{@link getJson}）から読み取った hub の版（FR-04）。
+   * 追加リクエストは発生させず、既存ポーリング応答のヘッダを読むだけに留める（FR-04 の要件）。
+   * 一度も GET していない、または応答にヘッダが無かった（旧版 hub 等）場合は `undefined`。
+   */
+  private lastHubVersion: string | undefined
 
   /**
    * @param options baseUrl / token / fetch 実装。
@@ -82,6 +97,21 @@ export class HubApiClient {
     this.baseUrl = options.baseUrl.replace(/\/+$/, '')
     this.token = options.token
     this.fetchImpl = options.fetchImpl ?? fetch
+  }
+
+  /**
+   * 直近の {@link getJson} 応答（`listInstances`/`getInstanceDetail`/`listDevices`）から読み取った
+   * `X-Monomi-Hub-Version` ヘッダの値を返す（FR-04）。
+   *
+   * child のポーリングループ（`app-view.tsx`）が、追加リクエストを発生させずに接続中 hub の版を
+   * 監視するための経路。一度も GET していない、またはヘッダが無かった（旧版 hub との通信等）
+   * 場合は `undefined`＝版不明（呼び出し側は `version-compare.ts` の `compareVersion` で
+   * `'unknown'` として扱う）。
+   *
+   * @returns 直近応答の hub 版、または `undefined`。
+   */
+  getLastHubVersion(): string | undefined {
+    return this.lastHubVersion
   }
 
   /**
@@ -159,6 +189,9 @@ export class HubApiClient {
   /**
    * Bearer 付き GET を投げて JSON を返す共通処理。
    *
+   * `X-Monomi-Hub-Version` ヘッダは 2xx/非2xx を問わず全応答に付与される（FR-01）ため、
+   * ok 判定より先に {@link lastHubVersion} へ読み取る（FR-04）。追加リクエストは発生させない。
+   *
    * @param pathname `/api/v1/...` から始まるパス。
    * @returns パース済み JSON（呼び出し側で型を指定）。
    * @throws {Error} 応答が 2xx でない場合。
@@ -167,6 +200,7 @@ export class HubApiClient {
     const res = await this.fetchImpl(`${this.baseUrl}${pathname}`, {
       headers: this.authHeaders(),
     })
+    this.lastHubVersion = res.headers.get(HUB_VERSION_HEADER) ?? undefined
     if (!res.ok) {
       throw new Error(`hub request failed: GET ${pathname} -> ${res.status}`)
     }
