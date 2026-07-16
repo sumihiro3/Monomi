@@ -11,10 +11,14 @@
 - 新キー `f`: 一覧・詳細どちらの画面でも、選択中セッションが実行されているターミナルタブへ OS レベルでフォーカスを移動できるようになった。対応ターミナルは Terminal.app / Ghostty / tmux、対応 OS は macOS・WSL2（WSL2 はウィンドウ前面化までの best-effort）。同一デバイスのセッションを選択している場合のみフッターに `f focus` のヒントを表示し、別デバイスの行・closed 状態のセッション・ターミナル情報が取得できない行では実行されず理由が notice 表示される
 - ヘルプオーバーレイ（`?`）に `f`（ターミナルへフォーカス）の説明を追加
 - README／README.ja.md に「Terminal Focus」節を新設。有効化に必要な権限（システム設定 → アクセシビリティで `monomi` と `System Events` を許可）、Ghostty 利用時に `~/.claude/settings.json` へ `env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE` を手動追記する手順、Linux/WSL2 での対応範囲を明記
+- 一覧カードの `device` 行に、検出できた場合はターミナルアプリ名を `device-name (Ghostty)` のように括弧付きで併記するようになった（対応: Terminal.app・Ghostty・iTerm2・VS Code・tmux。検出できない行は従来通り device 名のみ表示し、カードの行数は変わらない）
+- 詳細ビューの `path` 行の直後に新規 `terminal` 行を追加し、ターミナルアプリ名（検出できない場合は `-`）を表示するようになった
+- 一覧カードに `path` 行を追加（`branch` 行の直後・カードは5行→6行に）。ホームディレクトリは `~/...` に短縮したうえで、長い場合は先頭と末尾を残して中間を省略して表示する
 
 ### Fixed
 
 - 自動作成される GitHub Release のタイトル（name フィールド）が空になっていたのを修正（タグ名を明示指定するように変更）
+- `f` キーでのフォーカス実行時、対象が Terminal.app や Ghostty 以外のセッションであっても Terminal.app が未起動なら誤って自動起動してしまう不具合を修正。あわせて、Ghostty が未起動の場合に対象外ターミナルのタブタイトルが一瞬変化してしまう副作用も解消
 
 ## [0.2.0] - 2026-07-14
 
