@@ -115,6 +115,7 @@ describe('parseConfig overrides', () => {
       role: 'hub',
       port: 50000,
       deviceId: 'macmini-1',
+      autoUpdate: true,
       watchIntervalMs: 5_000,
       escalationThresholds: {
         active: 90 * 60_000,
@@ -200,6 +201,26 @@ describe('parseConfig locale (release-9-i18n FR-01)', () => {
 
   it('leaves locale undefined when omitted (default resolution belongs to i18n, AC-2/AC-6)', () => {
     expect(parseConfig({}).locale).toBeUndefined()
+  })
+})
+
+describe('parseConfig auto_update (FR-05)', () => {
+  it('defaults to true when omitted (AC-1)', () => {
+    expect(parseConfig({}).autoUpdate).toBe(true)
+  })
+
+  it('accepts explicit true (AC-1)', () => {
+    expect(parseConfig({ auto_update: true }).autoUpdate).toBe(true)
+  })
+
+  it('accepts explicit false (AC-1)', () => {
+    expect(parseConfig({ auto_update: false }).autoUpdate).toBe(false)
+  })
+
+  it('rejects non-boolean values (AC-2)', () => {
+    expect(() => parseConfig({ auto_update: 'true' })).toThrow(ZodError)
+    expect(() => parseConfig({ auto_update: 1 })).toThrow(ZodError)
+    expect(() => parseConfig({ auto_update: null })).toThrow(ZodError)
   })
 })
 
