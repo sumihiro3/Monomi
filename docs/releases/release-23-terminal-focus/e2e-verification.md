@@ -141,10 +141,12 @@ node dist/cli.js
 
 検証:
 
-- [ ] tmux 各 pane のセッションがダッシュボールに表示される
-- [ ] ダッシュボールでセッション行を選択し `f` キーを押す → tmux の対応 pane が前面に来て、client が自動選択される
-- [ ] 複数 client が接続している場合、`client_activity` が最新の client が選ばれる
-- [ ] 別 window への遷移も動作する
+- [x] tmux 各 pane のセッションがダッシュボールに表示される
+- [x] ダッシュボールでセッション行を選択し `f` キーを押す → tmux の対応 pane が前面に来て、client が自動選択される
+- [ ] 複数 client が接続している場合、`client_activity` が最新の client が選ばれる（未実施: 単一クライアント環境のため。ユニットテストでは検証済み・任意）
+- [x] 別 window への遷移も動作する
+
+（2026-07-16 実機確認済み。構成: tmux クライアント=Terminal.app、ダッシュボード=Ghostty、DB に `tmux_pane`/`tmux_socket` の捕捉を確認のうえ実施）
 
 ### 3.3 フォーカス検証（detach 状態）
 
@@ -156,7 +158,7 @@ tmux session から detach:
 
 その状態でダッシュボールでセッション行を選択し `f` キー:
 
-- [ ] `tmux_detached` notice が表示される（「tmux がこのセッションに接続していない」等のメッセージ）
+- [x] `tmux_detached` notice が表示される（「tmux がこのセッションに接続していない」等のメッセージ）
 
 その後 attach し直す:
 
@@ -164,7 +166,9 @@ tmux session から detach:
 tmux attach-session -t test-monomi
 ```
 
-- [ ] 再度 `f` キーでフォーカスが動作する
+- [x] 再度 `f` キーでフォーカスが動作する
+
+（2026-07-16 実機確認済み）
 
 ## 4. 別デバイス行の動作検証
 
@@ -328,7 +332,7 @@ pnpm run lint
 | ---- | ------ | ----------------------- | ------------ | ------- | ---- | ---- | ----------- | ---- |
 | 2026-07-16 | sumihiro | macOS (Terminal.app)    | [x]          |         |      |      | [ ]         | f キーでタブ前面化を確認。前提: 常駐 hub の新ビルド再起動が必要（旧 hub だと terminal が strip され「情報なし」になる） |
 |      |        | macOS (Ghostty)         |              | [ ]     |      |      |             |      |
-|      |        | macOS (tmux)            | [ ]          |         | [ ]  |      |             |      |
+| 2026-07-16 | sumihiro | macOS (tmux)            | [x]          |         | [x]  |      |             | attach 中のフォーカス（pane 切替 + 外側 Terminal.app 前面化）と detach 時の notice・再 attach 後の復帰を確認。ダッシュボードは Ghostty（Terminal.app へのオートメーション許可あり） |
 |      |        | WSL2 + Windows Terminal |              |         |      | [ ]  |             |      |
 
 ---
