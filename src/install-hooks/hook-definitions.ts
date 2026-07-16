@@ -96,6 +96,47 @@ export function isMonomiCommand(command: unknown): boolean {
 }
 
 /**
+ * 同梱 reporter スクリプト内の版マーカー行にマッチする正規表現（release-25-auto-update FR-03）。
+ *
+ * `MONOMI_HOOK_MARKER`/{@link isMonomiCommand} と同じ「機械可読マーカーを1箇所に集約する」先例に
+ * 倣う。reporter は bash スクリプトでコメントを構造化データとして扱えないため、行頭からの
+ * 変数代入 `MONOMI_REPORTER_VERSION="<値>"` そのものをマーカーとして使う（reporter/monomi-report.sh
+ * 冒頭の変数群を参照）。キャプチャグループは値（バージョン文字列、プレースホルダの場合もある）。
+ */
+const REPORTER_VERSION_LINE_RE = /^MONOMI_REPORTER_VERSION="([^"]*)"$/m
+
+/**
+ * reporter スクリプトのテキストへ版マーカーの値を注入する（配置時 = `deployReporterScript` から
+ * 呼ぶ。ビルド時の版同期は不要にするための実行時注入）。
+ *
+ * マーカー行が見つからない場合（改変・旧世代の reporter 等）は何もせず入力をそのまま返す —
+ * reporter 本体の配置自体は失敗させない（FR-03 の「reporter を壊さない」方針に合わせる）。
+ *
+ * @param scriptText reporter スクリプトの全文。
+ * @param version 注入するバージョン文字列（`MONOMI_VERSION`）。
+ * @returns マーカー行の値を置き換えた全文（マーカー無しなら入力そのまま）。
+ */
+export function injectReporterVersion(scriptText: string, version: string): string {
+  return scriptText.replace(REPORTER_VERSION_LINE_RE, `MONOMI_REPORTER_VERSION="${version}"`)
+}
+
+/**
+ * 設置済み reporter スクリプトのテキストから版マーカーの値を取り出す（起動時の版照合 /
+ * `ensureReporterUpToDate` から呼ぶ）。
+ *
+ * マーカー行が無い（旧世代の reporter・手動改変で行ごと消えた等）場合は `undefined` を返す。
+ * 呼び出し側（`version-compare.ts` の `compareVersion`）はこれを「版不明」として扱い、
+ * 更新経路では `'older'` と同じ扱いにする（「版不明 = 旧版」ポリシー）。
+ *
+ * @param scriptText 設置済み reporter スクリプトの全文。
+ * @returns マーカー行の値（プレースホルダのまま・空文字列のこともある）。マーカー行が無ければ `undefined`。
+ */
+export function extractReporterVersion(scriptText: string): string | undefined {
+  const match = REPORTER_VERSION_LINE_RE.exec(scriptText)
+  return match ? match[1] : undefined
+}
+
+/**
  * release-1 で登録する Monomi フック定義一式を返す。
  *
  * 7 フックイベント（`SessionStart`/`UserPromptSubmit`/`PreToolUse`/`PostToolUse`/

@@ -3,13 +3,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { MONOMI_HOME_ENV, resolvePaths, type MonomiPaths } from '../config/paths.js'
+import { setActiveLocale } from '../i18n/index.js'
+import { MONOMI_VERSION } from '../version.js'
 import {
   buildHookCommand,
   buildHookDefinitions,
+  extractReporterVersion,
+  injectReporterVersion,
   isMonomiCommand,
   MONOMI_HOOK_MARKER,
 } from './hook-definitions.js'
 import {
+  ensureReporterUpToDate,
   installHooks,
   isMonomiHooksInstalled,
   mergeMonomiHooks,
@@ -17,6 +22,13 @@ import {
   uninstallHooks,
   type ClaudeSettings,
 } from './install-hooks.js'
+
+// テスト間でアクティブロケール(モジュールレベル・シングルトン)を既定 en へリセットする規約
+// (cli.test.ts・i18n.test.ts と同じ規約)。ensureReporterUpToDate の notice 文言検証で
+// setActiveLocale を呼ぶテストがあるため、他テストへ波及しないよう毎回リセットする。
+afterEach(() => {
+  setActiveLocale('en')
+})
 
 /** install-hooks が網羅すべき 7 フックイベント（AC-1）。 */
 const SEVEN_EVENTS = [
@@ -111,6 +123,39 @@ describe('buildHookCommand', () => {
     )
     // マーカーは空白で区切られており、シェルではコメント（副作用なし）になる。
     expect(buildHookCommand('/x/report.sh')).toContain(` ${MONOMI_HOOK_MARKER}`)
+  })
+})
+
+describe('injectReporterVersion / extractReporterVersion (release-25-auto-update FR-03)', () => {
+  const scriptWithMarker = [
+    '#!/usr/bin/env bash',
+    'MONOMI_DEFAULT_PORT=47632',
+    'MONOMI_REPORTER_VERSION="__MONOMI_VERSION__"',
+    'TOOL_SUMMARY_MAX=200',
+    '',
+  ].join('\n')
+
+  it('injectReporterVersion replaces only the marker line value', () => {
+    const injected = injectReporterVersion(scriptWithMarker, '0.5.1')
+    expect(injected).toContain('MONOMI_REPORTER_VERSION="0.5.1"')
+    expect(injected).not.toContain('__MONOMI_VERSION__')
+    // マーカー以外の行は無変更。
+    expect(injected).toContain('MONOMI_DEFAULT_PORT=47632')
+    expect(injected).toContain('TOOL_SUMMARY_MAX=200')
+  })
+
+  it('injectReporterVersion is a no-op when the marker line is absent', () => {
+    const noMarker = '#!/usr/bin/env bash\necho no-marker-here\n'
+    expect(injectReporterVersion(noMarker, '0.5.1')).toBe(noMarker)
+  })
+
+  it('extractReporterVersion reads back the injected value', () => {
+    const injected = injectReporterVersion(scriptWithMarker, '0.5.1')
+    expect(extractReporterVersion(injected)).toBe('0.5.1')
+  })
+
+  it('extractReporterVersion returns undefined when the marker line is absent', () => {
+    expect(extractReporterVersion('#!/usr/bin/env bash\necho no-marker-here\n')).toBeUndefined()
   })
 })
 
@@ -423,7 +468,7 @@ describe('installHooks reporter deployment (FR-02)', () => {
     expect(result.added).toBe(8)
   })
 
-  it('resolves the real packaged reporter/monomi-report.sh by default (no override)', () => {
+  it('resolves the real packaged reporter/monomi-report.sh by default (no override), with the version marker injected', () => {
     const settingsPath = tmpSettingsPath()
     const paths = tmpMonomiPaths()
 
@@ -431,9 +476,21 @@ describe('installHooks reporter deployment (FR-02)', () => {
 
     const deployedPath = path.join(paths.home, 'monomi-report.sh')
     // install-hooks.ts と同じ相対位置（2階層上 → reporter/monomi-report.sh）を
-    // このテストファイル（同一ディレクトリ）からも解決し、内容が一致することを確認する。
+    // このテストファイル（同一ディレクトリ）からも解決する。配置時に版マーカー行の値だけが
+    // プレースホルダ（`__MONOMI_VERSION__`）から実際の MONOMI_VERSION へ書き換わる
+    // （release-25-auto-update FR-03）ため、それ以外の内容は同梱ソースと一致し続ける。
     const realSource = new URL('../../reporter/monomi-report.sh', import.meta.url)
-    expect(fs.readFileSync(deployedPath, 'utf8')).toBe(fs.readFileSync(realSource, 'utf8'))
+    const sourceText = fs.readFileSync(realSource, 'utf8')
+    const deployedText = fs.readFileSync(deployedPath, 'utf8')
+
+    expect(sourceText).toContain('MONOMI_REPORTER_VERSION="__MONOMI_VERSION__"')
+    expect(extractReporterVersion(deployedText)).toBe(MONOMI_VERSION)
+    expect(deployedText).toBe(
+      sourceText.replace(
+        'MONOMI_REPORTER_VERSION="__MONOMI_VERSION__"',
+        `MONOMI_REPORTER_VERSION="${MONOMI_VERSION}"`
+      )
+    )
   })
 
   it('AC-2: overwrites an existing reporter file that differs from the bundled version', () => {
@@ -520,5 +577,149 @@ describe('isMonomiHooksInstalled (release-18-npx-quickstart FR-03 AC-3)', () => 
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
     fs.writeFileSync(settingsPath, '{ not valid json')
     expect(() => isMonomiHooksInstalled(settingsPath)).toThrow(/malformed JSON/)
+  })
+})
+
+describe('ensureReporterUpToDate (release-25-auto-update FR-03)', () => {
+  const tmpDirs: string[] = []
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  function tmpSettingsPath(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-reporter-update-settings-'))
+    tmpDirs.push(dir)
+    return path.join(dir, '.claude', 'settings.json')
+  }
+
+  function tmpMonomiPaths(): MonomiPaths {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-reporter-update-home-'))
+    tmpDirs.push(dir)
+    return resolvePaths(path.join(dir, '.monomi'))
+  }
+
+  function deployedReporterPath(paths: MonomiPaths): string {
+    return path.join(paths.home, 'monomi-report.sh')
+  }
+
+  /**
+   * hooks 登録済み・reporter 配置済みの状態を作った上で、配置済みファイルの版マーカーを
+   * 任意の値（`undefined` ならマーカー行自体を持たない旧世代 reporter）へ書き換える。
+   * `mode` は「手動編集で権限が変わっている」ケースを再現するため既定 0o644 にする。
+   */
+  function setupInstalledWithMarker(
+    version: string | undefined,
+    mode = 0o644
+  ): { settingsPath: string; paths: MonomiPaths } {
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+    installHooks({ settingsPath, paths })
+    const deployedPath = deployedReporterPath(paths)
+    const body = '#!/usr/bin/env bash\necho stale-reporter-body\n'
+    const text = version === undefined ? body : `${body}MONOMI_REPORTER_VERSION="${version}"\n`
+    fs.writeFileSync(deployedPath, text, { mode })
+    return { settingsPath, paths }
+  }
+
+  it('AC-1: the reporter deployed by installHooks carries a version marker matching MONOMI_VERSION', () => {
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+    installHooks({ settingsPath, paths })
+    const deployedText = fs.readFileSync(deployedReporterPath(paths), 'utf8')
+    expect(extractReporterVersion(deployedText)).toBe(MONOMI_VERSION)
+  })
+
+  it('AC-2: an older marker version is overwritten with the bundled reporter and returns an update notice', () => {
+    const { settingsPath, paths } = setupInstalledWithMarker('0.0.1')
+    const notice = ensureReporterUpToDate(paths, { settingsPath })
+    expect(notice).not.toBeNull()
+    expect(notice).toContain('0.0.1')
+    expect(extractReporterVersion(fs.readFileSync(deployedReporterPath(paths), 'utf8'))).toBe(
+      MONOMI_VERSION
+    )
+  })
+
+  it('AC-2: a missing marker line is treated as version-unknown (= outdated) and is overwritten', () => {
+    const { settingsPath, paths } = setupInstalledWithMarker(undefined)
+    const notice = ensureReporterUpToDate(paths, { settingsPath })
+    expect(notice).not.toBeNull()
+    expect(extractReporterVersion(fs.readFileSync(deployedReporterPath(paths), 'utf8'))).toBe(
+      MONOMI_VERSION
+    )
+  })
+
+  it('AC-3: a matching marker version is left untouched even if the body was hand-edited afterward', () => {
+    const { settingsPath, paths } = setupInstalledWithMarker(MONOMI_VERSION)
+    const deployedPath = deployedReporterPath(paths)
+    const before = fs.readFileSync(deployedPath, 'utf8')
+    const notice = ensureReporterUpToDate(paths, { settingsPath })
+    expect(notice).toBeNull()
+    expect(fs.readFileSync(deployedPath, 'utf8')).toBe(before)
+  })
+
+  it('AC-4: does nothing when Monomi hooks are not registered (no reporter deployed either)', () => {
+    const settingsPath = tmpSettingsPath()
+    const paths = tmpMonomiPaths()
+    const notice = ensureReporterUpToDate(paths, { settingsPath })
+    expect(notice).toBeNull()
+    expect(fs.existsSync(deployedReporterPath(paths))).toBe(false)
+  })
+
+  it('AC-5: an older marker with auto_update disabled is left untouched and returns a suppressed notice', () => {
+    const { settingsPath, paths } = setupInstalledWithMarker('0.0.1')
+    const deployedPath = deployedReporterPath(paths)
+    const before = fs.readFileSync(deployedPath, 'utf8')
+    const notice = ensureReporterUpToDate(paths, { settingsPath, autoUpdate: false })
+    expect(notice).not.toBeNull()
+    expect(notice).toContain('0.0.1')
+    // 上書きしていない(AC-5)。
+    expect(fs.readFileSync(deployedPath, 'utf8')).toBe(before)
+  })
+
+  it('AC-6: overwriting an older marker keeps the deployed reporter executable (0o755)', () => {
+    const { settingsPath, paths } = setupInstalledWithMarker('0.0.1', 0o644)
+    ensureReporterUpToDate(paths, { settingsPath })
+    expect(fs.statSync(deployedReporterPath(paths)).mode & 0o777).toBe(0o755)
+  })
+
+  it('returns a "CLI outdated" notice without overwriting when the deployed marker is newer than self', () => {
+    const futureVersion = '999.0.0'
+    const { settingsPath, paths } = setupInstalledWithMarker(futureVersion)
+    const deployedPath = deployedReporterPath(paths)
+    const before = fs.readFileSync(deployedPath, 'utf8')
+    const notice = ensureReporterUpToDate(paths, { settingsPath })
+    expect(notice).not.toBeNull()
+    expect(notice).toContain(futureVersion)
+    expect(fs.readFileSync(deployedPath, 'utf8')).toBe(before)
+  })
+
+  it('returns null (does not throw) when settings.json is malformed', () => {
+    const settingsPath = tmpSettingsPath()
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true })
+    fs.writeFileSync(settingsPath, '{ not valid json')
+    const paths = tmpMonomiPaths()
+    expect(ensureReporterUpToDate(paths, { settingsPath })).toBeNull()
+  })
+
+  it('does not throw and returns a failure notice when deployReporterScript fails (degrade-gracefully, matches isMonomiHooksInstalled/readFileSync handling above)', () => {
+    const { settingsPath, paths } = setupInstalledWithMarker('0.0.1')
+    const deployedPath = deployedReporterPath(paths)
+    const before = fs.readFileSync(deployedPath, 'utf8')
+    const missingSourceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monomi-reporter-missing-src-'))
+    tmpDirs.push(missingSourceDir)
+    const missingSource = path.join(missingSourceDir, 'monomi-report.sh')
+
+    let notice: string | null = null
+    expect(() => {
+      notice = ensureReporterUpToDate(paths, { settingsPath, reporterSourcePath: missingSource })
+    }).not.toThrow()
+
+    expect(notice).not.toBeNull()
+    expect(notice).toContain('0.0.1')
+    // 上書きに失敗しているので、設置済みファイルは触られていない。
+    expect(fs.readFileSync(deployedPath, 'utf8')).toBe(before)
   })
 })

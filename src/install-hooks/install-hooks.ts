@@ -2,10 +2,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { ensureMonomiHome, resolvePaths, type MonomiPaths } from '../config/paths.js'
+import { t } from '../i18n/index.js'
+import { compareVersion } from '../version-compare.js'
+import { MONOMI_VERSION } from '../version.js'
 import {
   buildHookDefinitions,
   defaultSettingsPath,
   DEFAULT_REPORTER_SCRIPT,
+  extractReporterVersion,
+  injectReporterVersion,
   isMonomiCommand,
   type MonomiHookDefinition,
 } from './hook-definitions.js'
@@ -24,11 +29,18 @@ const DEFAULT_REPORTER_SOURCE = new URL('../../reporter/monomi-report.sh', impor
 const REPORTER_SCRIPT_MODE = 0o755
 
 /**
- * 同梱の reporter スクリプトを `paths.home` 配下の `monomi-report.sh`（絶対パス）へ配置する（FR-02）。
+ * 同梱の reporter スクリプトを `paths.home` 配下の `monomi-report.sh`（絶対パス）へ配置する
+ * （FR-02。版マーカー注入は release-25-auto-update FR-03）。
  *
- * `paths.home` を {@link ensureMonomiHome} で用意してから常に上書きコピーし、実行権限
+ * `paths.home` を {@link ensureMonomiHome} で用意してから常に上書きし、実行権限
  * （{@link REPORTER_SCRIPT_MODE}）を付与する。既存ファイルの内容がどうであれ同梱版を正として
  * 上書きする（手動配置していた既存ユーザーの改変も含めて上書きされる仕様）。
+ *
+ * `fs.copyFileSync` ではなくテキストとして読み込み、{@link injectReporterVersion} で版マーカー行
+ * （`MONOMI_REPORTER_VERSION="__MONOMI_VERSION__"`）の値を実際の {@link MONOMI_VERSION} へ書き換えて
+ * から書き込む。これにより reporter/monomi-report.sh 側はビルド時にバージョンを埋め込む必要がなく
+ * （プレースホルダのまま同梱でき）、配置（= 実行）時点の CLI 版が常に反映される。マーカー行が無い
+ * `source`（テスト用の素のスクリプト等）は無変更のまま書き込まれる。
  *
  * ここで解決する絶対パスは、フック command 文字列に埋め込む reporterScript の既定値
  * （{@link defaultReporterScriptFor} が導出する）と常に一致させる必要がある。両者が乖離すると
@@ -37,7 +49,8 @@ const REPORTER_SCRIPT_MODE = 0o755
  *
  * @param paths `~/.monomi` のパス集合（テスト時は隔離用の一時ディレクトリを渡す）。
  * @param source 配置元スクリプトのパス（既定 {@link DEFAULT_REPORTER_SOURCE}。テスト用に上書き可能）。
- * @throws {Error} ディレクトリ作成・コピー・chmod のいずれかが失敗した場合（原因を `cause` に保持）。
+ * @throws {Error} ディレクトリ作成・読み込み・書き込み・chmod のいずれかが失敗した場合
+ *   （原因を `cause` に保持）。
  */
 function deployReporterScript(
   paths: MonomiPaths,
@@ -46,7 +59,8 @@ function deployReporterScript(
   const dest = path.join(paths.home, 'monomi-report.sh')
   try {
     ensureMonomiHome(paths)
-    fs.copyFileSync(source, dest)
+    const scriptText = fs.readFileSync(source, 'utf8')
+    fs.writeFileSync(dest, injectReporterVersion(scriptText, MONOMI_VERSION))
     fs.chmodSync(dest, REPORTER_SCRIPT_MODE)
   } catch (cause) {
     throw new Error(`failed to deploy reporter script to ${dest}: ${(cause as Error).message}`, {
@@ -335,4 +349,104 @@ export function uninstallHooks(
   const { settings, removed } = removeMonomiHooks(current)
   writeSettingsAtomic(settingsPath, settings)
   return { settingsPath, removed, added: 0 }
+}
+
+/** {@link ensureReporterUpToDate} の依存差し替え（テスト用 / release-25-auto-update FR-03）。 */
+export interface EnsureReporterUpToDateOptions {
+  /** Monomi フック登録有無の判定に使う settings.json のパス（既定 {@link defaultSettingsPath}）。 */
+  settingsPath?: string
+  /** 自動更新フラグ（`config.yml` の `auto_update` / FR-05）。省略時 `true`。 */
+  autoUpdate?: boolean
+  /** 自版バージョン文字列の差し替え（テスト用）。省略時 {@link MONOMI_VERSION}。 */
+  selfVersion?: string
+  /** 上書き配置時に使う同梱 reporter の配置元パス（テスト用。省略時は {@link deployReporterScript} の既定）。 */
+  reporterSourcePath?: string | URL
+}
+
+/**
+ * 設置済み reporter スクリプトの版マーカーを自版と照合し、古ければ自動的に再配置する
+ * （release-25-auto-update FR-03 の中核）。`monomi`（引数なし）実行時、
+ * `maybePromptInstallHooks`（`cli.ts`）の後に呼ぶ。
+ *
+ * フロー:
+ * 1. {@link isMonomiHooksInstalled}（`options.settingsPath`）で Monomi フックが登録済みかを確認する。
+ *    未登録なら reporter もまだ配置されていない前提で何もせず `null` を返す（AC-4）。判定自体が
+ *    失敗した場合（settings.json が壊れている等）も同じく `null` を返す（判定不能を「未登録」に
+ *    倒す degrade-gracefully 方針。`maybePromptInstallHooks` と同じ）。
+ * 2. 設置済み `paths.home/monomi-report.sh` を読み込み、{@link extractReporterVersion} でマーカーの
+ *    値を取り出す（ファイル自体が読めない場合もマーカー無し = 版不明として扱う）。
+ * 3. {@link compareVersion} で自版（`options.selfVersion` / 既定 {@link MONOMI_VERSION}）と比較する:
+ *    - `same`（版一致）: 何もしない。設置済みファイルの本文が手動編集されていても一切触らない
+ *      （AC-3）。
+ *    - `newer`（設置済みの方が新しい）: 上書きせず、reporter 固有の「CLI 旧版」notice
+ *      （`autoUpdate.reporterNewerThanCli`）を返す（hub 版照合と機構は同じだが、対象が reporter
+ *      であることが伝わるよう文言は専用のものを使う）。
+ *    - `older`/`unknown`（設置済みが旧版、またはマーカー欠落 = 版不明を旧版とみなす）: 4 へ。
+ * 4. `options.autoUpdate`（既定 `true`）が `false` なら、上書きはせず版ずれ notice のみ返す（AC-5）。
+ * 5. `autoUpdate` が `true` なら {@link deployReporterScript} で同梱版を上書き配置し、更新 notice
+ *    （`autoUpdate.reporterUpdated`）を返す（AC-1・AC-2・AC-6）。{@link deployReporterScript} は
+ *    ディスク満杯・権限エラー等で例外を投げうる契約（JSDoc `@throws` 参照）だが、この関数はダッシュ
+ *    ボード起動シーケンス中に呼ばれるため 1・2 と同じ degrade-gracefully 方針で吸収し、失敗 notice
+ *    （`autoUpdate.reporterUpdateFailed`）を返す。呼び出し元（`cli.ts`）へ例外を伝播させず、
+ *    reporter 再配置の失敗でダッシュボード起動全体を止めない。
+ *
+ * @param paths `~/.monomi` パス集合。
+ * @param options 依存の差し替え（省略可、テスト用）。
+ * @returns 起動 notice チャネル（release-25-auto-update）向けの i18n 解決済み文字列。notice が
+ *   無ければ `null`。この関数自体は例外を投げない（上記フロー内の失敗はすべて notice へ変換する）。
+ */
+export function ensureReporterUpToDate(
+  paths: MonomiPaths,
+  options: EnsureReporterUpToDateOptions = {}
+): string | null {
+  const settingsPath = options.settingsPath ?? defaultSettingsPath()
+  let hooksInstalled: boolean
+  try {
+    hooksInstalled = isMonomiHooksInstalled(settingsPath)
+  } catch {
+    return null
+  }
+  if (!hooksInstalled) {
+    return null
+  }
+
+  const deployedPath = path.join(paths.home, 'monomi-report.sh')
+  let deployedText = ''
+  try {
+    deployedText = fs.readFileSync(deployedPath, 'utf8')
+  } catch {
+    deployedText = ''
+  }
+  const markerVersion = extractReporterVersion(deployedText)
+
+  const selfVersion = options.selfVersion ?? MONOMI_VERSION
+  const comparison = compareVersion(markerVersion, selfVersion)
+
+  if (comparison === 'same') {
+    return null
+  }
+
+  const markerLabel = markerVersion ?? t('cli.hubStatus.versionUnknown')
+
+  if (comparison === 'newer') {
+    return t('autoUpdate.reporterNewerThanCli', { reporterVersion: markerLabel, selfVersion })
+  }
+
+  // ここに到達するのは 'older' または 'unknown'（版不明 = 旧版）のみ。
+  const autoUpdate = options.autoUpdate ?? true
+  if (!autoUpdate) {
+    return t('autoUpdate.reporterMismatchSuppressed', { reporterVersion: markerLabel, selfVersion })
+  }
+
+  try {
+    deployReporterScript(paths, options.reporterSourcePath)
+  } catch (cause) {
+    // deployReporterScript は失敗時に例外を投げる契約（JSDoc @throws 参照）だが、この関数は
+    // `monomi`（引数なし）のダッシュボード起動シーケンス中に呼ばれるため、isMonomiHooksInstalled・
+    // fs.readFileSync の失敗と同じ degrade-gracefully 方針で吸収する。再配置失敗はダッシュボード
+    // 起動を止める理由にならない（AC-1〜AC-6 のいずれも「起動を継続しつつ notice で伝える」設計）。
+    const message = cause instanceof Error ? cause.message : String(cause)
+    return t('autoUpdate.reporterUpdateFailed', { reporterVersion: markerLabel, message })
+  }
+  return t('autoUpdate.reporterUpdated', { reporterVersion: markerLabel, selfVersion })
 }
