@@ -28,6 +28,7 @@ function makeHost(): KeyBindingHost {
     back: vi.fn(),
     toggleHelp: vi.fn(),
     quit: vi.fn(),
+    focusTerminal: vi.fn(),
   }
 }
 
@@ -153,6 +154,26 @@ describe('KeyBindingController — viewMode によらず常に有効な操作は
     expect(host.quit).toHaveBeenCalledOnce()
     expect(dispatched).toBe(true)
   })
+
+  it('f は list 中に host.focusTerminal を呼び true を返す（FR-05b AC-1）', () => {
+    const host = makeHost()
+    const controller = new KeyBindingController(new InstanceListStore(), host)
+
+    const dispatched = controller.handleKey('f', keys(), 'list')
+
+    expect(host.focusTerminal).toHaveBeenCalledOnce()
+    expect(dispatched).toBe(true)
+  })
+
+  it('f は detail 中にも host.focusTerminal を呼び true を返す（FR-05b AC-1）', () => {
+    const host = makeHost()
+    const controller = new KeyBindingController(new InstanceListStore(), host)
+
+    const dispatched = controller.handleKey('f', keys(), 'detail')
+
+    expect(host.focusTerminal).toHaveBeenCalledOnce()
+    expect(dispatched).toBe(true)
+  })
 })
 
 describe('KeyBindingController — 無効キーは false を返す（release-20-dashboard-heap-guard FR-03 AC-3）', () => {
@@ -170,6 +191,7 @@ describe('KeyBindingController — 無効キーは false を返す（release-20-
     expect(host.back).not.toHaveBeenCalled()
     expect(host.toggleHelp).not.toHaveBeenCalled()
     expect(host.quit).not.toHaveBeenCalled()
+    expect(host.focusTerminal).not.toHaveBeenCalled()
     expect(store.activeFilters).toEqual([])
   })
 

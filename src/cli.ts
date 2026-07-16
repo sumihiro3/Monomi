@@ -1,9 +1,15 @@
 import { existsSync, realpathSync, writeFileSync } from 'node:fs'
+import os from 'node:os'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import { render } from 'ink'
 import { createElement } from 'react'
 import { AppView } from './cli/components/app-view.js'
+import { FocusService } from './cli/focus/focus-service.js'
+import { GhosttyStrategy } from './cli/focus/ghostty-strategy.js'
+import { TerminalAppStrategy } from './cli/focus/terminal-app-strategy.js'
+import { TmuxFocusStrategy } from './cli/focus/tmux-strategy.js'
+import { WslFocusStrategy } from './cli/focus/wsl-strategy.js'
 import { createHubApiClient, createHubConnection } from './cli/hub-api-client.js'
 import { ensureHubRunning as ensureHubRunningImpl } from './cli/hub-autostart.js'
 import { MemoryWatchdog } from './cli/memory-watchdog.js'
@@ -15,6 +21,7 @@ import {
   type MonomiRole,
 } from './config/config.js'
 import { ensureMonomiHome, resolvePaths } from './config/paths.js'
+import { deriveDeviceId } from './domain/device-id.js'
 import type { DeviceDto, DeviceRevokeResult } from './hub/dto.js'
 import {
   hubStatus as hubStatusImpl,
@@ -125,11 +132,44 @@ export interface CliDeps {
   error: (message: string) => void
 }
 
+/**
+ * このデバイス自身の device_id を解決する（`monomi hub`（bootstrap.ts）・`monomi pair`
+ * （pairing-client.ts）と同一規則: config の明示値を優先し、未設定なら hostname から導出する）。
+ * `f` フォーカス実行時の device_id 照合（AppView 側、FR-05 AC-2）に使う。
+ */
+function resolveLocalDeviceId(): string {
+  return loadConfig().deviceId ?? deriveDeviceId(os.hostname())
+}
+
+/**
+ * 実ターミナルへフォーカスを移す既定の {@link FocusService} を組み立てる（release-23-terminal-focus
+ * FR-04d）。darwin 総当たり対象は Terminal.app・Ghostty、tmux/WSL2 はそれぞれ専用 strategy。
+ * 各 strategy は `exec` 省略時に実 `execFile` ベースの既定実装を使う（テストでのみ差し替える）。
+ */
+function createDefaultFocusService(): FocusService {
+  return new FocusService({
+    darwinStrategies: [new TerminalAppStrategy(), new GhosttyStrategy()],
+    tmuxStrategy: new TmuxFocusStrategy(),
+    wslStrategy: new WslFocusStrategy(),
+  })
+}
+
 /** hub へ接続して Ink ダッシュボードを描画し、終了まで待つ（FR-05 AC-1）。 */
 async function runDashboard(): Promise<void> {
   // watch 中の取得失敗で到達先を選び直せるよう、client と再解決ファクトリを橋渡しする（#1）。
   const { client, reresolve } = await createHubConnection()
-  const { waitUntilExit } = render(createElement(AppView, { client, reresolve }))
+  const localDeviceId = resolveLocalDeviceId()
+  const focusService = createDefaultFocusService()
+  const { waitUntilExit } = render(
+    createElement(AppView, {
+      client,
+      reresolve,
+      localDeviceId,
+      // FocusService#focus はインスタンスメソッド（内部で this.darwinStrategies 等を参照）のため、
+      // AppView から素の関数として呼ばれても this を保てるよう bind する。
+      focusRunner: focusService.focus.bind(focusService),
+    })
+  )
   await waitUntilExit()
 }
 

@@ -19,7 +19,7 @@ function row(instanceId: string, display: string, projectId = instanceId): Insta
       priority: 0,
     },
     pr: { state: 'none' },
-    session: { id: `sess-${instanceId}`, last_heartbeat_at: null },
+    session: { id: `sess-${instanceId}`, last_heartbeat_at: null, terminal: null },
     running_work: null,
   }
 }

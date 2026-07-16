@@ -16,6 +16,9 @@ import { MONOMI_VERSION } from '../../version.js'
  * 解決する。`t()` をこの配列の初期化（モジュールスコープの const 評価）で呼ぶと、import 時点の
  * アクティブロケール（常に既定の `en`）で文言が凍結されてしまうため（`../../i18n/index.js` 参照）、
  * ここではキーの参照のみを持ち、解決は描画時まで遅延させる。
+ *
+ * `f`（フォーカス移動、release-23-terminal-focus FR-05）は list / detail 両ビューで動作するため
+ * `Enter`（list 専用）ではなく `w`（詳細専用）の直後、ビュー専用行の末尾に置く。
  */
 const HELP_LINES: ReadonlyArray<readonly [string, TranslationKey]> = [
   ['1-6', 'help.filterToggle'],
@@ -23,6 +26,7 @@ const HELP_LINES: ReadonlyArray<readonly [string, TranslationKey]> = [
   ['Enter', 'help.openDetail'],
   ['← / →', 'help.moveProject'],
   ['w', 'help.toggleWrap'],
+  ['f', 'help.focusTerminal'],
   ['esc', 'help.back'],
   ['?', 'help.toggleHelp'],
   ['q', 'help.quit'],

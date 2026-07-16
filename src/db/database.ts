@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import type { DatabaseSync } from 'node:sqlite'
 import { DDL } from './ddl.js'
+import { applyMigrations } from './migrations.js'
 
 /**
  * SQLite DB ファイルのパーミッション（`chmod 600` 相当 / FR-02 AC-1）。
@@ -42,12 +43,14 @@ export type PreparedStatement = ReturnType<Database['prepare']>
  * - `journal_mode=WAL` + `synchronous=NORMAL`（§0.5 / FR-03 AC-6: 電源断耐性）。
  * - `foreign_keys=ON`（§7.3 の REFERENCES を実効化しデータモデル不変条件を守る）。
  * - DDL は `CREATE TABLE IF NOT EXISTS` なので、既存 DB に対して再実行しても安全。
+ * - DDL 直後に {@link applyMigrations} を呼び、DDL では追加できない既存 DB への
+ *   列追加（release-23 FR-02a）を冪等に適用する。
  *
  * WAL は永続ファイルでのみ有効になる。`:memory:` DB では `journal_mode` は `memory`
  * のままになるため、WAL の検証は一時ファイルを用いた統合テストで行う。
  *
  * @param location DB ファイルの絶対パス、または `:memory:`。
- * @returns PRAGMA 設定と DDL 適用を終えた {@link Database}。
+ * @returns PRAGMA 設定・DDL・マイグレーション適用を終えた {@link Database}。
  */
 export function openDatabase(location: string): Database {
   const db = new DatabaseSyncCtor(location)
@@ -55,6 +58,7 @@ export function openDatabase(location: string): Database {
   db.exec('PRAGMA synchronous = NORMAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(DDL)
+  applyMigrations(db)
   // 既存 DB（旧パーミッションのまま残っている場合を含む）にも毎回無条件に適用する
   // （FR-02 AC-1）。`:memory:` はファイルを持たないため対象外。
   // WAL 使用時に生成される `-wal`/`-shm` 補助ファイルは、親ディレクトリが

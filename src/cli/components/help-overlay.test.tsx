@@ -49,6 +49,21 @@ describe('HelpOverlay（release-9-i18n FR-02）', () => {
   })
 })
 
+describe('HelpOverlay の f 行（release-23-terminal-focus FR-05a）', () => {
+  it('既定ロケール（en）で f のフォーカス説明行が描画される', () => {
+    const { lastFrame } = render(<HelpOverlay />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('List / Detail: focus the terminal running this session') // help.focusTerminal
+  })
+
+  it('locale: ja で f のフォーカス説明行が日本語で描画される', () => {
+    setActiveLocale('ja')
+    const { lastFrame } = render(<HelpOverlay />)
+    const frame = lastFrame() ?? ''
+    expect(frame).toContain('一覧 / 詳細: セッション実行中のターミナルへフォーカス移動') // help.focusTerminal
+  })
+})
+
 describe('HelpOverlay のバージョン表示（release-11-version-automation FR-04）', () => {
   it('AC-1・AC-4: 既定ロケール（en）で末尾に Monomi v<バージョン> が描画される', () => {
     const { lastFrame } = render(<HelpOverlay />)

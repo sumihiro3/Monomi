@@ -151,11 +151,49 @@ Keyboard controls in the dashboard (`monomi` with no arguments):
 | `Enter`          | Select an instance and show its detail view                                 |
 | `←`/`→`          | Detail: move to the adjacent instance in list order                         |
 | `w`              | Detail: toggle event line wrap vs. truncated display (truncated by default) |
+| `f`              | Focus the terminal tab where this session is running (same device only)     |
 | `esc`            | Go back (close help / detail view back to list)                             |
 | `?`              | Show help                                                                   |
 | `q`              | Quit                                                                        |
 
 The last line of each list card shows the Workflow / Agent / Skill currently running for that instance, as `▶ <name>` (`-` if nothing is running). The detail view's overview box shows the same information as `<name> (workflow|agent|skill)`. When a start time can be obtained, the elapsed time is appended (list card: `▶ <name> (<elapsed>)`; detail view: `<name> (workflow|agent|skill) <elapsed>`).
+
+## Terminal Focus (the `f` key)
+
+Pressing `f` while a session row is selected in the list or detail view brings that session's terminal window to the foreground and focuses the appropriate tab. This only works for sessions on the same machine as the CLI you're running: selecting a row from another device and pressing `f` shows an on-screen message and does nothing (the same applies to closed sessions or sessions with no terminal information). Terminal.app, Ghostty, and tmux are supported.
+
+### macOS: Required permissions
+
+Monomi needs accessibility permissions to programmatically bring terminal windows to the foreground. Grant this on macOS:
+
+**System Settings → Privacy & Security → Accessibility**:
+
+- Add `monomi` (the Monomi CLI process)
+- Add `System Events` (required for Ghostty and tmux focus)
+
+If you haven't granted these permissions yet, attempting to focus will show a hint message on-screen.
+
+### Ghostty: Manual environment setup
+
+If you use Ghostty, you must manually add a one-time environment variable setting to `~/.claude/settings.json` to enable terminal title manipulation:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
+  }
+}
+```
+
+> **Why manual, not automatic?** The title manipulation approach requires disabling dynamic terminal titles globally, which affects all Claude Code sessions. To prevent unexpected side effects, Monomi does not auto-configure this. If you do not add this setting, Ghostty focus attempts will fail gracefully with a hint message.
+
+After adding the setting, restart your Claude Code session.
+
+### Linux / WSL2
+
+- **Native Linux (X11/Wayland)**: Not currently supported.
+- **WSL2**: Windows Terminal window foreground is supported on a best-effort basis. Tab-level focus is not available.
+- **tmux on any platform**: Supported. If tmux is detached, a message will indicate that the session is unreachable.
 
 ## Configuration (`~/.monomi/config.yml`)
 
@@ -212,5 +250,6 @@ Deleting `~/.monomi` also permanently deletes the SQLite DB holding your run his
 - Class design: `docs/design/class-diagram.md`
 - Development workflow: `docs/development-workflow.md`
 - Developer setup: `docs/development.md`
-- Release requirements: `docs/releases/` (`release-1-single-machine-wedge/`, `release-2-biome-migration/`, `release-3-multi-device-pairing/`, `release-4-cli-dashboard-ux/`, `release-5-docs-restructure/`, `release-6-detail-view-redesign/`, `release-7-session-status-reliability/`, `release-8-dashboard-freshness/`, `release-9-i18n/`)
+- Release requirements: `docs/releases/` (`release-1-single-machine-wedge/`, `release-2-biome-migration/`, `release-3-multi-device-pairing/`, `release-4-cli-dashboard-ux/`, `release-5-docs-restructure/`, `release-6-detail-view-redesign/`, `release-7-session-status-reliability/`, `release-8-dashboard-freshness/`, `release-9-i18n/`, `release-23-terminal-focus/`)
+- E2E verification checklist: `docs/releases/release-N/e2e-verification.md` (manual acceptance test procedure for multi-device / terminal-focus features)
 - Known issues: `docs/known-issues.md`

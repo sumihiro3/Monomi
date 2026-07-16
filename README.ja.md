@@ -144,18 +144,56 @@ monomi --help, -h               このヘルプを表示
 
 ダッシュボード（`monomi` 引数なし）のキー操作:
 
-| キー             | 動作                                                                |
-| ---------------- | ------------------------------------------------------------------- |
-| `1`-`6`          | 状態フィルタの切り替え（複数選択可、一覧表示中のみ）                |
-| `j`/`k`, `↑`/`↓` | 一覧: カーソル移動 / 詳細: イベント履歴を1行スクロール              |
-| `Enter`          | instance を選択して詳細を表示                                       |
-| `←`/`→`          | 詳細: 一覧の並び順で隣接する instance へ移動                        |
-| `w`              | 詳細: イベント行の折り返し⇔切り詰め表示を切り替え（既定は切り詰め） |
-| `esc`            | 戻る（ヘルプを閉じる／詳細から一覧へ）                              |
-| `?`              | ヘルプ表示                                                          |
-| `q`              | 終了                                                                |
+| キー             | 動作                                                                   |
+| ---------------- | ---------------------------------------------------------------------- |
+| `1`-`6`          | 状態フィルタの切り替え（複数選択可、一覧表示中のみ）                   |
+| `j`/`k`, `↑`/`↓` | 一覧: カーソル移動 / 詳細: イベント履歴を1行スクロール                 |
+| `Enter`          | instance を選択して詳細を表示                                          |
+| `←`/`→`          | 詳細: 一覧の並び順で隣接する instance へ移動                           |
+| `w`              | 詳細: イベント行の折り返し⇔切り詰め表示を切り替え（既定は切り詰め）    |
+| `f`              | セッションが動作しているターミナルタブをフォーカス（同一デバイスのみ） |
+| `esc`            | 戻る（ヘルプを閉じる／詳細から一覧へ）                                 |
+| `?`              | ヘルプ表示                                                             |
+| `q`              | 終了                                                                   |
 
 一覧カードの末尾行には instance が現在実行中の Workflow / Agent / Skill 名を `▶ <name>` 形式で表示する（実行中でなければ `-`）。詳細ビューの概要 BOX にも同じ情報を `<name> (workflow|agent|skill)` 形式で表示する。開始時刻を取得できる場合は経過時間を末尾に付記する（一覧カード `▶ <name> (<経過時間>)`、詳細ビュー `<name> (workflow|agent|skill) <経過時間>`）。
+
+## ターミナルフォーカス（`f` キー）
+
+セッション行を選択した状態で `f` キーを押すと、そのセッションが動作しているターミナルウィンドウが前面に出て、対応するタブがフォーカスされる。同一マシンのセッションのみ対応（別デバイスのセッション行は無効）。Terminal.app・Ghostty・tmux に対応している。
+
+### macOS: 必要な権限許可
+
+Monomi がターミナルウィンドウをプログラムから前面化するには、macOS のアクセシビリティ許可が必要。以下で許可を与える。
+
+**システム設定 → プライバシーとセキュリティ → アクセシビリティ**:
+
+- `monomi`（Monomi CLI プロセス）を追加
+- `System Events` を追加（Ghostty・tmux のフォーカスに必須）
+
+許可を与えていない状態でフォーカスを試みると、画面にヒントメッセージが表示される。
+
+### Ghostty: 環境変数の手動設定
+
+Ghostty を使う場合、`~/.claude/settings.json` に一度だけ環境変数を手動追加し、ターミナルタイトル操作を有効にする必要がある。
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"
+  }
+}
+```
+
+> **なぜ自動設定でなく手動か？** タイトル操作方式は動的ターミナルタイトルをグローバルに無効化する必要があり、すべての Claude Code セッションに影響する。予期しない副作用を防ぐため、Monomi は自動設定しない設計にしている。この設定がない状態で Ghostty フォーカスを試みると、失敗時にヒントメッセージが表示される。
+
+設定を追加したら、Claude Code セッションを再起動する。
+
+### Linux / WSL2
+
+- **ネイティブ Linux（X11/Wayland）**: 現在サポートしていない。
+- **WSL2**: Windows Terminal ウィンドウの前面化は best-effort で対応。タブ単位のフォーカスはサポート対象外。
+- **tmux（全プラットフォーム）**: 対応している。tmux が detach 状態の場合は、セッションに到達不可能であることを示すメッセージが表示される。
 
 ## 設定 (`~/.monomi/config.yml`)
 
@@ -212,5 +250,6 @@ rm -rf ~/.monomi           # 4. config.yml・SQLite DB・token・reporter を含
 - クラス設計: `docs/design/class-diagram.md`
 - 開発ワークフロー: `docs/development-workflow.md`
 - 開発者向けセットアップ: `docs/development.md`
-- リリース要件: `docs/releases/`（`release-1-single-machine-wedge/`・`release-2-biome-migration/`・`release-3-multi-device-pairing/`・`release-4-cli-dashboard-ux/`・`release-5-docs-restructure/`・`release-6-detail-view-redesign/`・`release-7-session-status-reliability/`・`release-8-dashboard-freshness/`・`release-9-i18n/`）
+- リリース要件: `docs/releases/`（`release-1-single-machine-wedge/`・`release-2-biome-migration/`・`release-3-multi-device-pairing/`・`release-4-cli-dashboard-ux/`・`release-5-docs-restructure/`・`release-6-detail-view-redesign/`・`release-7-session-status-reliability/`・`release-8-dashboard-freshness/`・`release-9-i18n/`・`release-23-terminal-focus/`）
+- E2E 検証チェックリスト: `docs/releases/release-N/e2e-verification.md`（複数デバイス・ターミナルフォーカス機能の手動受け入れ試験手順）
 - 既知の課題: `docs/known-issues.md`

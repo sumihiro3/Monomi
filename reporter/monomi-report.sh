@@ -18,6 +18,11 @@
 #     先頭候補 hub のみへ connect-timeout=1s/max-time=2s で単発 POST する。セッション終了の
 #     grace period 内で完了させるため。失敗時は他イベント種別と同じく outbox へ退避し、
 #     次回いずれかのイベント発火時に再送される。SessionEnd 以外は従来の複数候補・最大8sのまま。
+#   - ターミナル特定情報（release-23 FR-01）: 毎フックで `terminal`（tty/term_program/
+#     tmux_pane/tmux_socket/wsl_distro/wt_session、取得不能は null）を `resolve_tty()` と
+#     環境変数から捕捉しペイロードへ含める。`tmux_pane`/`tmux_socket` は `$TMUX` が
+#     非空のときのみ設定する。旧 reporter との互換のため hub 側は `terminal` を optional
+#     として扱う（reporter 側は常に送る）。
 #
 # 使い方（install-hooks が settings.json に登録するコマンド形）:
 #   echo "$HOOK_JSON" | monomi-report.sh                 # 一般フック（event_type は stdin から）
@@ -96,6 +101,29 @@ json_escape() {
     s=${s//"${MONOMI_CTRL_FROM[$i]}"/${MONOMI_CTRL_TO[$i]}}
   done
   printf '%s' "$s"
+}
+
+# TTY 解決（FR-01 AC-1）: $$ から ppid チェーンを最大 15 段辿り、`ps -o tty=` が
+# ??/空以外を返した最初の値に /dev/ を前置して返す（bash 3.2 互換、外部コマンドは ps のみ）。
+# 非 TTY 実行（CI・デーモン化された祖先等、$$ 自身にも祖先にも制御端末が無い）では
+# 何も出力せず失敗を返す（呼び出し元で null 化する）。
+resolve_tty() {
+  local pid=$$
+  local depth tty ppid
+  for ((depth = 0; depth < 15; depth++)); do
+    [ -n "$pid" ] || break
+    tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$tty" ] && [ "$tty" != '??' ]; then
+      printf '/dev/%s' "$tty"
+      return 0
+    fi
+    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')
+    case "$ppid" in
+      '' | 0 | 1 | "$pid") break ;;
+    esac
+    pid=$ppid
+  done
+  return 1
 }
 
 # stdin JSON からトップレベル文字列フィールドを取り出す。
@@ -639,6 +667,21 @@ main() {
     device_id='local'
   fi
 
+  # --- ターミナル特定情報の捕捉（FR-01） -----------------------------------
+  # 毎フックで捕捉する（--resume で同一 session_id が別 TTY で再開しうるため
+  # SessionStart 限定は不可）。コストは ps 最大数回 + 環境変数参照のみ（AC-4）。
+  local term_tty term_program tmux_pane tmux_socket wsl_distro wt_session
+  term_tty=$(resolve_tty)
+  term_program="${TERM_PROGRAM:-}"
+  tmux_pane=''
+  tmux_socket=''
+  if [ -n "${TMUX:-}" ]; then
+    tmux_pane="${TMUX_PANE:-}"
+    tmux_socket="${TMUX%%,*}"
+  fi
+  wsl_distro="${WSL_DISTRO_NAME:-}"
+  wt_session="${WT_SESSION:-}"
+
   # --- occurred_at（ISO8601 Z、§0.5） -------------------------------------
   local occurred_at
   occurred_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -661,6 +704,12 @@ main() {
       --arg tool_name "$tool_name" \
       --arg tool_summary "$tool_summary" \
       --arg occurred_at "$occurred_at" \
+      --arg term_tty "$term_tty" \
+      --arg term_program "$term_program" \
+      --arg tmux_pane "$tmux_pane" \
+      --arg tmux_socket "$tmux_socket" \
+      --arg wsl_distro "$wsl_distro" \
+      --arg wt_session "$wt_session" \
       '{
         device_id: $device_id,
         session_id: $session_id,
@@ -675,17 +724,32 @@ main() {
         event_subtype: (if $event_subtype == "" then null else $event_subtype end),
         tool_name: (if $tool_name == "" then null else $tool_name end),
         tool_summary: (if $tool_summary == "" then null else $tool_summary end),
-        occurred_at: $occurred_at
+        occurred_at: $occurred_at,
+        terminal: {
+          tty: (if $term_tty == "" then null else $term_tty end),
+          term_program: (if $term_program == "" then null else $term_program end),
+          tmux_pane: (if $tmux_pane == "" then null else $tmux_pane end),
+          tmux_socket: (if $tmux_socket == "" then null else $tmux_socket end),
+          wsl_distro: (if $wsl_distro == "" then null else $wsl_distro end),
+          wt_session: (if $wt_session == "" then null else $wt_session end)
+        }
       }' >"$body_file" 2>/dev/null
   else
     # bash フォールバックで JSON を手組み（null は無引用、文字列はエスケープ）。
     local j_remote j_branch j_common j_subtype j_toolname j_toolsummary
+    local j_term_tty j_term_program j_tmux_pane j_tmux_socket j_wsl_distro j_wt_session
     if [ -n "$remote_url" ]; then j_remote="\"$(json_escape "$remote_url")\""; else j_remote='null'; fi
     if [ -n "$branch" ]; then j_branch="\"$(json_escape "$branch")\""; else j_branch='null'; fi
     if [ -n "$common_dir" ]; then j_common="\"$(json_escape "$common_dir")\""; else j_common='null'; fi
     if [ -n "$event_subtype" ]; then j_subtype="\"$(json_escape "$event_subtype")\""; else j_subtype='null'; fi
     if [ -n "$tool_name" ]; then j_toolname="\"$(json_escape "$tool_name")\""; else j_toolname='null'; fi
     if [ -n "$tool_summary" ]; then j_toolsummary="\"$(json_escape "$tool_summary")\""; else j_toolsummary='null'; fi
+    if [ -n "$term_tty" ]; then j_term_tty="\"$(json_escape "$term_tty")\""; else j_term_tty='null'; fi
+    if [ -n "$term_program" ]; then j_term_program="\"$(json_escape "$term_program")\""; else j_term_program='null'; fi
+    if [ -n "$tmux_pane" ]; then j_tmux_pane="\"$(json_escape "$tmux_pane")\""; else j_tmux_pane='null'; fi
+    if [ -n "$tmux_socket" ]; then j_tmux_socket="\"$(json_escape "$tmux_socket")\""; else j_tmux_socket='null'; fi
+    if [ -n "$wsl_distro" ]; then j_wsl_distro="\"$(json_escape "$wsl_distro")\""; else j_wsl_distro='null'; fi
+    if [ -n "$wt_session" ]; then j_wt_session="\"$(json_escape "$wt_session")\""; else j_wt_session='null'; fi
     {
       printf '{'
       printf '"device_id":"%s",' "$(json_escape "$device_id")"
@@ -701,7 +765,15 @@ main() {
       printf '"event_subtype":%s,' "$j_subtype"
       printf '"tool_name":%s,' "$j_toolname"
       printf '"tool_summary":%s,' "$j_toolsummary"
-      printf '"occurred_at":"%s"' "$(json_escape "$occurred_at")"
+      printf '"occurred_at":"%s",' "$(json_escape "$occurred_at")"
+      printf '"terminal":{'
+      printf '"tty":%s,' "$j_term_tty"
+      printf '"term_program":%s,' "$j_term_program"
+      printf '"tmux_pane":%s,' "$j_tmux_pane"
+      printf '"tmux_socket":%s,' "$j_tmux_socket"
+      printf '"wsl_distro":%s,' "$j_wsl_distro"
+      printf '"wt_session":%s' "$j_wt_session"
+      printf '}'
       printf '}'
     } >"$body_file"
   fi

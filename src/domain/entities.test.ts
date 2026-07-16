@@ -54,6 +54,7 @@ describe('domain entities', () => {
       endedAt: null,
       endReason: null,
       lastHeartbeatAt: null,
+      terminal: null,
     }
 
     const event: Event = {

@@ -21,6 +21,7 @@ import {
   type InstanceStatusRow,
   type RecentEventDto,
   toRunningWorkDto,
+  toTerminalDto,
   toWireStatus,
 } from './dto.js'
 
@@ -208,6 +209,7 @@ export class InstanceStatusService {
       session: {
         id: representativeSession.id,
         last_heartbeat_at: this.formatHeartbeat(representativeSession),
+        terminal: toTerminalDto(representativeSession.terminal),
       },
       running_work: toRunningWorkDto(runningWork),
     }

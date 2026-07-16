@@ -41,6 +41,7 @@ export const JA = {
   'help.openDetail': '一覧: プロジェクト詳細を開く',
   'help.moveProject': '詳細: 隣接プロジェクトへ移動',
   'help.toggleWrap': '詳細: イベント行の折り返し/切り詰め切替',
+  'help.focusTerminal': '一覧 / 詳細: セッション実行中のターミナルへフォーカス移動',
   'help.back': '戻る / ヘルプを閉じる',
   'help.toggleHelp': 'ヘルプの表示/非表示',
   'help.quit': '終了',
@@ -51,6 +52,20 @@ export const JA = {
 
   // list.*
   'list.empty': '(該当するインスタンスがありません)',
+
+  // focus.*（release-23-terminal-focus FR-05。notFound/failed は Ghostty 特有のつまずき
+  // （アクセシビリティ許可・環境変数）の案内を含む）
+  'focus.otherDevice':
+    'このセッションは別デバイス上で実行中です。フォーカスは同一デバイスのセッションでのみ動作します。',
+  'focus.noTerminalInfo': 'このセッションのターミナル情報がありません。',
+  'focus.sessionClosed':
+    'このセッションは既に終了しています。フォーカスするターミナルがありません。',
+  'focus.tmuxDetached': 'tmux セッションに接続中のクライアントがありません。',
+  'focus.notFound':
+    'ターミナルタブが見つかりませんでした。Ghostty をお使いの場合は、monomi を実行しているアプリのアクセシビリティ許可（システム設定 → プライバシーとセキュリティ → アクセシビリティ）を付与し、環境変数 CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 を設定してください。',
+  'focus.unsupported': 'このプラットフォームではフォーカスに対応していません。',
+  'focus.failed':
+    'ターミナルへのフォーカスに失敗しました。Ghostty をお使いの場合は、monomi を実行しているアプリのアクセシビリティ許可（システム設定 → プライバシーとセキュリティ → アクセシビリティ）を付与し、環境変数 CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 を設定してください。',
 
   // cli.*
   'cli.usage': `Monomi — a status dashboard for Claude Code across machines

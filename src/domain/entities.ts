@@ -79,6 +79,36 @@ export interface Session {
    * DDL 上の列として保持する。
    */
   lastHeartbeatAt: EpochMs | null
+  /**
+   * reporter からターミナル特定情報が一度でも届いていれば {@link SessionTerminal}、
+   * 未着（旧 reporter・非 TTY 実行含む）なら null（release-23 FR-02b）。
+   */
+  terminal: SessionTerminal | null
+}
+
+/**
+ * reporter が捕捉したセッション実行中ターミナルの特定情報（release-23 FR-02b）。
+ *
+ * 毎フックイベントで reporter が送信するスナップショットを最新値でそのまま保持する
+ * （`SessionRepository.updateTerminal` が上書き）。個々のフィールドは reporter が
+ * 取得できなかった場合 null になりうるが、`seenAt` はスナップショットが一度でも
+ * 届いていれば必ず値を持つ（`Session.terminal` 自体が null の場合との違い）。
+ */
+export interface SessionTerminal {
+  /** 解決済み TTY（例 `/dev/ttys003`）。非 TTY 実行や解決失敗時は null。 */
+  tty: string | null
+  /** `$TERM_PROGRAM`（tmux 内では `tmux` になる）。未設定は null。 */
+  termProgram: string | null
+  /** `$TMUX_PANE`。tmux 外や未設定は null。 */
+  tmuxPane: string | null
+  /** `$TMUX` の socket 部分（`${TMUX%%,*}`）。tmux 外や未設定は null。 */
+  tmuxSocket: string | null
+  /** `$WSL_DISTRO_NAME`。WSL 以外は null。 */
+  wslDistro: string | null
+  /** `$WT_SESSION`（Windows Terminal）。将来のタブ単位フォーカス用に温存。未設定は null。 */
+  wtSession: string | null
+  /** このスナップショットを hub が受信した時刻。 */
+  seenAt: EpochMs
 }
 
 /**
