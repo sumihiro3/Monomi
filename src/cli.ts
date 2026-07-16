@@ -34,6 +34,7 @@ import { detectOsLocale } from './i18n/os-locale.js'
 import { resolveLocale, setActiveLocale, t } from './i18n/index.js'
 import { MONOMI_VERSION } from './index.js'
 import {
+  ensureReporterUpToDate as ensureReporterUpToDateImpl,
   type InstallHooksOptions,
   type InstallHooksResult,
   installHooks as installHooksImpl,
@@ -69,8 +70,27 @@ export interface CliDeps {
    * ダッシュボード表示の前段。release-18-npx-quickstart FR-01）。`role: child` では何もせず、
    * 既に疎通できていれば spawn しない。spawn 後の疎通確認がタイムアウトした場合は例外を投げる
    * （`runGuarded` が終了コード 1 + メッセージ表示へ変換する）。
+   *
+   * 戻り値は起動 notice チャネル（release-25-auto-update）向けの i18n 解決済み文字列。
+   * `null` は「notice なし」を表す。`run()` の `case undefined` がこの戻り値を notice 配列へ
+   * 集約して {@link runDashboard} へ渡す。既定実装（{@link defaultCliDeps}）は
+   * `hub-autostart.ts` の `ensureHubRunning` を呼び、hub 版照合・自動再起動（FR-02）の結果
+   * （更新済み・更新失敗・CLI 旧版・版ずれ抑止のいずれかの notice、または版一致で `null`）を
+   * そのまま返す。
    */
-  ensureHubRunning: () => Promise<void>
+  ensureHubRunning: () => Promise<string | null>
+  /**
+   * 設置済み reporter スクリプトの版マーカーを自版と照合し、古ければ自動的に再配置する
+   * （`monomi`（引数なし）実行時、`maybePromptInstallHooks` の後段。release-25-auto-update FR-03）。
+   * `installHooks`（フックの初回登録・reporter の初回配置）と同じく同期的な fs 操作のみのため
+   * `Promise` でラップしない。フック未登録なら何もせず `null` を返す（AC-4）。
+   *
+   * 戻り値は起動 notice チャネル（release-25-auto-update）向けの i18n 解決済み文字列。`null` は
+   * 「notice なし」を表す。`run()` の `case undefined` がこの戻り値を notice 配列へ集約する。
+   * 既定実装（{@link defaultCliDeps}）は `install-hooks.ts` の `ensureReporterUpToDate` を呼び、
+   * config.yml の `auto_update`（FR-05）をそのまま渡す。
+   */
+  ensureReporterUpToDate: () => string | null
   /**
    * 稼働監視ログ（メモリ・stdoutバックプレッシャー計測）のウォッチドッグを起動する（`monomi`
    * （引数なし）実行時、`ensureHubRunning`/`maybePromptInstallHooks` の後・`runDashboard` の前段。
@@ -104,8 +124,14 @@ export interface CliDeps {
   hubStatus: () => Promise<HubStatusResult>
   /** `monomi hub stop` の実体（稼働中なら SIGTERM + pid ファイル削除 / FR-02 AC-2）。 */
   hubStop: () => Promise<HubStopResult>
-  /** `monomi`（引数なし）の実体（Ink ダッシュボード、終了まで返らない）。 */
-  runDashboard: () => Promise<void>
+  /**
+   * `monomi`（引数なし）の実体（Ink ダッシュボード、終了まで返らない）。
+   *
+   * `startupNotices`（release-25-auto-update）は起動前段（{@link ensureHubRunning} 等）で確定した
+   * i18n 解決済みの永続 notice の配列。Ink 起動前の stdout 出力は画面クリアで消えるため、
+   * `AppView` の `startupNotices` prop（永続 notice 領域）へそのまま橋渡しする。
+   */
+  runDashboard: (startupNotices: string[]) => Promise<void>
   /**
    * Monomi 起因のフックが `~/.claude/settings.json` へ既に登録済みかを判定する（初回セットアップ
    * 確認プロンプト / release-18-npx-quickstart FR-03 AC-3）。
@@ -154,8 +180,13 @@ function createDefaultFocusService(): FocusService {
   })
 }
 
-/** hub へ接続して Ink ダッシュボードを描画し、終了まで待つ（FR-05 AC-1）。 */
-async function runDashboard(): Promise<void> {
+/**
+ * hub へ接続して Ink ダッシュボードを描画し、終了まで待つ（FR-05 AC-1）。
+ *
+ * @param startupNotices 起動前段（`ensureHubRunning` 等）で確定した永続 notice
+ *   （release-25-auto-update）。`AppView` の `startupNotices` prop へそのまま橋渡しする。
+ */
+async function runDashboard(startupNotices: string[]): Promise<void> {
   // watch 中の取得失敗で到達先を選び直せるよう、client と再解決ファクトリを橋渡しする（#1）。
   const { client, reresolve } = await createHubConnection()
   const localDeviceId = resolveLocalDeviceId()
@@ -168,6 +199,7 @@ async function runDashboard(): Promise<void> {
       // FocusService#focus はインスタンスメソッド（内部で this.darwinStrategies 等を参照）のため、
       // AppView から素の関数として呼ばれても this を保てるよう bind する。
       focusRunner: focusService.focus.bind(focusService),
+      startupNotices,
     })
   )
   await waitUntilExit()
@@ -198,9 +230,20 @@ export const defaultCliDeps: CliDeps = {
   uninstallHooks: uninstallHooksImpl,
   runHub: () => runHubServer(),
   loadRole: () => loadConfig().role,
-  ensureHubRunning: () => {
+  ensureHubRunning: async () => {
     const config = loadConfig()
-    return ensureHubRunningImpl(resolvePaths(), config.role, config.port)
+    // hub 版照合・自動再起動（FR-02）は config.yml の auto_update（既定 true）で抑止可能
+    // （FR-05）。ここで `config.autoUpdate` を渡し、実際の判定・notice 生成は
+    // `hub-autostart.ts` の `ensureHubRunning` に委譲する。
+    return ensureHubRunningImpl(resolvePaths(), config.role, config.port, {
+      autoUpdate: config.autoUpdate,
+    })
+  },
+  ensureReporterUpToDate: () => {
+    const config = loadConfig()
+    // reporter の版マーカー照合・自動再配置（FR-03）も config.yml の auto_update（既定 true）で
+    // 抑止可能（FR-05）。ensureHubRunning と同じく判定・notice 生成は install-hooks.ts に委譲する。
+    return ensureReporterUpToDateImpl(resolvePaths(), { autoUpdate: config.autoUpdate })
   },
   startMemoryWatchdog: () => {
     new MemoryWatchdog(resolvePaths(), { stdout: process.stdout }).start()
@@ -340,7 +383,10 @@ async function maybePromptInstallHooks(deps: CliDeps): Promise<void> {
  * メッセージ表示に変換する（bin から直接叩いたときにスタックトレースで壊れて見えないようにする）。
  * 引数なし経路（`case undefined`）では `runDashboard` の直前に `deps.startMemoryWatchdog()` を呼び、
  * 稼働監視ログ（メモリ・stdoutバックプレッシャー計測）を起動する（`hub` 等の他コマンド経路では
- * 呼ばない、release-20-dashboard-heap-guard FR-01 AC-5）。
+ * 呼ばない、release-20-dashboard-heap-guard FR-01 AC-5）。同経路では `deps.ensureHubRunning()`（hub 版
+ * 照合・自動再起動 / FR-02）・`deps.ensureReporterUpToDate()`（reporter 版マーカー照合・自動再配置 /
+ * FR-03、`maybePromptInstallHooks` の後に呼ぶ）それぞれの戻り値（notice、`null` はなし）を配列へ
+ * 集約し `deps.runDashboard(startupNotices)` へ渡す（起動時 notice チャネル、release-25-auto-update）。
  *
  * ロケール解決（`setActiveLocale`）もここで一度だけ行う（release-9-i18n FR-02 AC-4）。
  * `deps.loadLocale` が投げる例外（不正な `locale` 値の zod バリデーションエラー等）も、
@@ -364,10 +410,21 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
   switch (command) {
     case undefined:
       return runGuarded(deps, async () => {
-        await deps.ensureHubRunning()
+        // 起動 notice チャネル（release-25-auto-update）: 起動前段の各ステップが返す
+        // i18n 解決済み notice をここへ集約し、まとめて runDashboard へ渡す
+        // （Ink 起動前 stdout は画面クリアで消えるため、AppView の永続 notice 領域へ橋渡しする）。
+        const startupNotices: string[] = []
+        const hubNotice = await deps.ensureHubRunning()
+        if (hubNotice !== null) {
+          startupNotices.push(hubNotice)
+        }
         await maybePromptInstallHooks(deps)
+        const reporterNotice = deps.ensureReporterUpToDate()
+        if (reporterNotice !== null) {
+          startupNotices.push(reporterNotice)
+        }
         deps.startMemoryWatchdog()
-        await deps.runDashboard()
+        await deps.runDashboard(startupNotices)
       })
 
     case 'hub':
@@ -476,17 +533,22 @@ async function runHubGuardingAddrInUse(deps: CliDeps): Promise<void> {
 }
 
 /**
- * `monomi hub status` の表示整形（FR-02 AC-1）。
+ * `monomi hub status` の表示整形（FR-02 AC-1 / FR-01 AC-3）。
+ *
+ * `running` 時は hub の版（{@link HubStatusResult.hubVersion}）を併記する。ヘッダ欠落等で版が
+ * 判明しない場合は i18n の版不明ラベル（`cli.hubStatus.versionUnknown`）へ縮退する（FR-01 AC-3）。
  *
  * @param result {@link HubStatusResult}。
  * @returns 表示用の1行文字列。
  */
 function formatHubStatus(result: HubStatusResult): string {
   switch (result.state) {
-    case 'running':
+    case 'running': {
+      const version = result.hubVersion ?? t('cli.hubStatus.versionUnknown')
       return result.pid !== undefined
-        ? t('cli.hubStatus.running', { pid: result.pid, port: result.port ?? '' })
-        : t('cli.hubStatus.runningPidUnknown', { port: result.port ?? '' })
+        ? t('cli.hubStatus.running', { pid: result.pid, port: result.port ?? '', version })
+        : t('cli.hubStatus.runningPidUnknown', { port: result.port ?? '', version })
+    }
     case 'stale':
       return t('cli.hubStatus.stale', { pid: result.pid ?? '' })
     case 'stopped':
