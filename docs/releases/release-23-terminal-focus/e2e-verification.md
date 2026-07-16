@@ -186,10 +186,12 @@ node dist/cli.js
 
 検証:
 
-- [ ] 自デバイス行（DEVICE が `localhost` 等）を選択し `f` → フォーカス実行
-- [ ] 別デバイス行（DEVICE が MacBook など）を選択し `f` → フォーカス実行されず、notice に「別デバイスの行です」等の理由が表示される
-- [ ] フッターヒント ` f focus` は自デバイス行選択時のみ表示。別デバイス行選択時は表示されない
-- [ ] 別デバイス行の detail ビューでも `f` は無効
+- [x] 自デバイス行（DEVICE が `localhost` 等）を選択し `f` → フォーカス実行
+- [x] 別デバイス行（DEVICE が MacBook など）を選択し `f` → フォーカス実行されず、notice に「別デバイスの行です」等の理由が表示される
+- [x] フッターヒント ` f focus` は自デバイス行選択時のみ表示。別デバイス行選択時は表示されない
+- [x] 別デバイス行の detail ビューでも `f` は無効
+
+（2026-07-16 実機確認済み。hub=Mac mini、child=MacBook Pro のペアリング済み環境。MacBook の stale 行〔最終レポート 2026-07-13〕を使用 — 別デバイス判定は closed 判定より先に効くため、child 実機の稼働なしで検証可能だった）
 
 ### 4.2 複数デバイス環境がない場合
 
@@ -333,6 +335,7 @@ pnpm run lint
 | 2026-07-16 | sumihiro | macOS (Terminal.app)    | [x]          |         |      |      | [ ]         | f キーでタブ前面化を確認。前提: 常駐 hub の新ビルド再起動が必要（旧 hub だと terminal が strip され「情報なし」になる） |
 |      |        | macOS (Ghostty)         |              | [ ]     |      |      |             |      |
 | 2026-07-16 | sumihiro | macOS (tmux)            | [x]          |         | [x]  |      |             | attach 中のフォーカス（pane 切替 + 外側 Terminal.app 前面化）と detach 時の notice・再 attach 後の復帰を確認。ダッシュボードは Ghostty（Terminal.app へのオートメーション許可あり） |
+| 2026-07-16 | sumihiro | macOS (別デバイス行)     |              |         |      |      |             | MacBook（child）の行で f 無効化・「別デバイス」notice・フッターヒント非表示・detail ビューでも無効を確認 |
 |      |        | WSL2 + Windows Terminal |              |         |      | [ ]  |             |      |
 
 ---
@@ -341,12 +344,14 @@ pnpm run lint
 
 以下の項目を実装後・PR 前に実機で必ず確認してください。
 
-- [ ] `f` キーが list ビューで動作する（Terminal.app で複数タブ確認）
-- [ ] `f` キーが detail ビューで動作する
-- [ ] 別デバイス行では `f` が無効化される（複数デバイス環境がある場合）
-- [ ] notice が正しく表示・消去される
-- [ ] ヘルプに `f` と `focus.*` が記載されている
-- [ ] `pnpm test` と `pnpm run lint` が通る
-- [ ] console に `setState after unmount` warning がない
+- [x] `f` キーが list ビューで動作する（Terminal.app で複数タブ確認）
+- [x] `f` キーが detail ビューで動作する
+- [x] 別デバイス行では `f` が無効化される（複数デバイス環境がある場合）
+- [x] notice が正しく表示・消去される
+- [x] ヘルプに `f` と `focus.*` が記載されている
+- [x] `pnpm test` と `pnpm run lint` が通る
+- [ ] console に `setState after unmount` warning がない（長時間の実運用観測で未報告。明示観測は未実施）
+
+（2026-07-16 時点: AC-5 必須 3 項目〔Terminal.app・tmux・別デバイス〕すべて実機確認済み。Ghostty・WSL2 は任意項目のため未実施 — WSL2 は U17 で WezTerm へ方針転換済み）
 
 Terminal.app・tmux・別デバイスの項目は実機受け入れ試験（AC-5）として必須確認項目。Ghostty・WSL2 は環境がある場合に確認。
