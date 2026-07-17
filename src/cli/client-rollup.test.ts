@@ -28,7 +28,7 @@ function row(over: {
       is_stale: false,
       priority: over.priority,
     },
-    pr: { state: 'none' },
+    pr: { state: 'none', number: null, url: null, is_draft: false },
     session: { id: `sess-${over.instanceId}`, last_heartbeat_at: null, terminal: null },
     running_work: null,
   }

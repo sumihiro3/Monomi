@@ -20,6 +20,7 @@ import {
   type InstanceDetail,
   type InstanceStatusRow,
   type RecentEventDto,
+  toPrDto,
   toRunningWorkDto,
   toTerminalDto,
   toWireStatus,
@@ -45,12 +46,6 @@ const RECENT_EVENTS_LIMIT = 100
 const STATUS_EVENT_PAGE_SIZE = 200
 
 /**
- * release-1 の PR 待ち有無。poller 未実装（§0.4 v1延期）のため常に false 固定
- * （`pr_status` テーブルは作られるが行は増えず、status 導出に影響しない）。
- */
-const HAS_PR_WAITING = false
-
-/**
  * 一覧・詳細取得のための status 導出を束ねる UseCase（class-diagram §3 / §5 / §0.5）。
  *
  * instance ごとに配下 session の events から `StatusDeriver` で session 単位の
@@ -69,7 +64,8 @@ export class InstanceStatusService {
    * @param events event Repository（session 全イベント / instance 直近イベント）。
    * @param projects project Repository（表示名の解決）。
    * @param devices device Repository（デバイス名の解決）。
-   * @param prStatus PR 状態 Repository（`pr` 表示用。release-1 では常に空）。
+   * @param prStatus PR 状態 Repository（`pr` 表示用、かつ `hasPrWaiting` 導出の入力元。FR-01
+   * poller が書いた行を読む）。
    * @param thresholds 放置昇格閾値（config 由来。省略時は既定 2h/6h/24h/72h）。
    */
   constructor(
@@ -149,15 +145,19 @@ export class InstanceStatusService {
       return null
     }
 
+    // FR-04: hasPrWaiting は session ごとの deriveForSession より前に確定させる必要がある
+    // （status 導出の入力として渡すため）。instance.branch が無い（非 git / リモート未検出）
+    // instance は PR を持ちようがないので prStatus を引かず null 固定。
+    const pr =
+      instance.branch !== null
+        ? this.prStatus.findByProjectBranch(instance.projectId, instance.branch)
+        : null
+    const hasPrWaiting = pr !== null && pr.state === 'awaiting_review'
+
     const entries = sessions.map((session) => {
       const currentRunEvents = this.loadEventsForCurrentRun(session.id)
       return {
-        status: this.deriver.deriveForSession(
-          currentRunEvents,
-          now,
-          this.thresholds,
-          HAS_PR_WAITING
-        ),
+        status: this.deriver.deriveForSession(currentRunEvents, now, this.thresholds, hasPrWaiting),
         // 降順（received_at 新しい順）の先頭が直近イベント。イベント 0 件（理論上の縮退ケース。
         // 例: upsertStarted 後 events.append 前にプロセスがクラッシュし、イベントを一切持たない
         // session 行だけが残るケース）は session の起動時刻（startedAt）を使う。release-8 の
@@ -175,10 +175,6 @@ export class InstanceStatusService {
 
     const project = this.projects.findById(instance.projectId)
     const device = this.devices.findById(instance.deviceId)
-    const pr =
-      instance.branch !== null
-        ? this.prStatus.findByProjectBranch(instance.projectId, instance.branch)
-        : null
 
     // ACTIVE ゲート（release-16 FR-02 line53 確定判断）: 代表 session が非 ACTIVE
     // （APPROVAL_WAIT/NEXT_WAIT/CLOSED）なら running_work は無条件で null とし、追加のイベント
@@ -205,7 +201,7 @@ export class InstanceStatusService {
       path: instance.path,
       branch: instance.branch,
       status: this.toStatusDto(representative),
-      pr: { state: pr?.state ?? 'none' },
+      pr: toPrDto(pr),
       session: {
         id: representativeSession.id,
         last_heartbeat_at: this.formatHeartbeat(representativeSession),

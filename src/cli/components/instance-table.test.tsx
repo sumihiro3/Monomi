@@ -33,7 +33,7 @@ function makeRow(over: {
       is_stale: display === 'stale',
       priority: 4,
     },
-    pr: { state: 'none' },
+    pr: { state: 'none', number: null, url: null, is_draft: false },
     session: { id: `sess-${id}`, last_heartbeat_at: null, terminal: null },
     running_work: null,
   }

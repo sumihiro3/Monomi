@@ -14,6 +14,8 @@ import { InstanceStatusService } from './instance-status-service.js'
 
 const DEVICE_ID = 'macmini-1'
 const HOUR_MS = 3_600_000
+/** `ingestAt`/`baseEvent` が常に使う branch 名（PR 紐付けテストで instance.branch を直参照する代わりに使う）。 */
+const FIXTURE_BRANCH = 'feature/ai-sidecar'
 
 let db: Database
 let devices: DeviceRepository
@@ -92,6 +94,9 @@ describe('InstanceStatusService.listInstances — derived status (FR-04 / §8.2)
     expect(row.status.elapsed_seconds).toBe(720)
     expect(row.status.is_stale).toBe(false)
     expect(row.pr.state).toBe('none')
+    expect(row.pr.number).toBeNull()
+    expect(row.pr.url).toBeNull()
+    expect(row.pr.is_draft).toBe(false)
     expect(row.project.name).toBe('monomi') // display_name auto-generated from project_key
     expect(row.device.name).toBe('Mac mini')
     expect(row.branch).toBe('feature/ai-sidecar')
@@ -202,6 +207,82 @@ describe('InstanceStatusService.listInstances — derived status (FR-04 / §8.2)
     expect(rows).toHaveLength(1)
     expect(rows[0].status.display).toBe('active')
     expect(rows[0].session.id).toBe('sess-B')
+  })
+})
+
+describe('InstanceStatusService.listInstances — hasPrWaiting wiring (release-27 FR-04)', () => {
+  it('AC-1: an awaiting_review pr_status row surfaces the instance as pr_wait, not next_wait', () => {
+    const now = 2_000_000
+    ingestAt(now - 20 * 60_000, { event_type: 'Notification', event_subtype: 'idle_prompt' })
+
+    const instance = instances.listActive()[0]
+    prStatus.upsert({
+      projectId: instance.projectId,
+      branch: FIXTURE_BRANCH,
+      prNumber: 42,
+      state: 'awaiting_review',
+      isDraft: false,
+      url: 'https://github.com/sumihiro/monomi/pull/42',
+      checkedAt: toEpochMs(now),
+    })
+
+    const rows = statusService.listInstances(toEpochMs(now))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status.display).toBe('pr_wait')
+    expect(rows[0].status.raw_state).toBe('next_wait')
+    expect(rows[0].status.priority).toBe(3)
+    expect(rows[0].pr.state).toBe('awaiting_review')
+    expect(rows[0].pr.number).toBe(42)
+    expect(rows[0].pr.url).toBe('https://github.com/sumihiro/monomi/pull/42')
+    expect(rows[0].pr.is_draft).toBe(false)
+  })
+
+  it('FR-05a: surfaces is_draft: true for a draft PR alongside awaiting_review', () => {
+    const now = 2_000_000
+    ingestAt(now - 20 * 60_000, { event_type: 'Notification', event_subtype: 'idle_prompt' })
+
+    const instance = instances.listActive()[0]
+    prStatus.upsert({
+      projectId: instance.projectId,
+      branch: FIXTURE_BRANCH,
+      prNumber: 43,
+      state: 'awaiting_review',
+      isDraft: true,
+      url: 'https://github.com/sumihiro/monomi/pull/43',
+      checkedAt: toEpochMs(now),
+    })
+
+    const rows = statusService.listInstances(toEpochMs(now))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].pr.state).toBe('awaiting_review')
+    expect(rows[0].pr.is_draft).toBe(true)
+  })
+
+  it.each([
+    'changes_requested',
+    'approved',
+    'merged',
+    'none',
+  ] as const)('AC-2: pr_status.state=%s does not escalate an idle instance to pr_wait', (state) => {
+    const now = 2_000_000
+    ingestAt(now - 20 * 60_000, { event_type: 'Notification', event_subtype: 'idle_prompt' })
+
+    const instance = instances.listActive()[0]
+    prStatus.upsert({
+      projectId: instance.projectId,
+      branch: FIXTURE_BRANCH,
+      prNumber: 42,
+      state,
+      isDraft: false,
+      url: null,
+      checkedAt: toEpochMs(now),
+    })
+
+    const rows = statusService.listInstances(toEpochMs(now))
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status.display).toBe('next_wait')
+    expect(rows[0].status.raw_state).toBe('next_wait')
+    expect(rows[0].pr.state).toBe(state)
   })
 })
 

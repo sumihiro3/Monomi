@@ -38,7 +38,7 @@ function makeRow(over: {
       is_stale: over.display === 'stale',
       priority: over.priority,
     },
-    pr: { state: 'none' },
+    pr: { state: 'none', number: null, url: null, is_draft: false },
     session: {
       id: `sess-${over.id}`,
       last_heartbeat_at: null,

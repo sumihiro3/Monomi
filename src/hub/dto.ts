@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { SessionTerminal } from '../domain/entities.js'
+import type { PrStatus, SessionTerminal } from '../domain/entities.js'
 import { EVENT_TYPES } from '../domain/enums.js'
 import { type EpochMs, toEpochMs } from '../domain/time.js'
 import type { RunningWork } from '../status/running-work-resolver.js'
@@ -98,10 +98,18 @@ export interface StatusDto {
   priority: number
 }
 
-/** PR レビュー状態（§8.2 の `pr`）。release-1 は poller 未実装のため常に `none`。 */
+/**
+ * PR レビュー状態（§8.2 の `pr`、release-27 FR-05a で number/url/is_draft を追加）。
+ */
 export interface PrDto {
   /** `none`/`awaiting_review`/`changes_requested`/`approved`/`merged`。 */
   state: string
+  /** PR 番号。PR が存在しない（`state: 'none'`）場合は null。 */
+  number: number | null
+  /** PR の URL。PR が存在しない場合は null。 */
+  url: string | null
+  /** Draft PR か（`state` が `'awaiting_review'` でも独立して立つフラグ）。 */
+  is_draft: boolean
 }
 
 /**
@@ -219,6 +227,26 @@ export function toTerminalDto(terminal: SessionTerminal | null): TerminalDto | n
     tmux_socket: terminal.tmuxSocket,
     wsl_distro: terminal.wslDistro,
     wt_session: terminal.wtSession,
+  }
+}
+
+/**
+ * ドメインの {@link PrStatus} を wire の {@link PrDto} へ写す
+ * （{@link toRunningWorkDto}/{@link toTerminalDto} と同型の「ドメイン型→薄い変換→wire DTO」パターン、
+ * release-27 FR-05a）。
+ *
+ * @param pr 対象 (project_id, branch) の PR 状態（`null` 可。PR 未検出/poller 未実行時）。
+ * @returns wire 形の {@link PrDto}。`pr` が `null` なら `state: 'none'` の既定値。
+ */
+export function toPrDto(pr: PrStatus | null): PrDto {
+  if (pr === null) {
+    return { state: 'none', number: null, url: null, is_draft: false }
+  }
+  return {
+    state: pr.state,
+    number: pr.prNumber,
+    url: pr.url,
+    is_draft: pr.isDraft,
   }
 }
 
