@@ -271,4 +271,5 @@ rm -rf ~/.monomi           # 4. config.yml・SQLite DB・token・reporter を含
 - 開発者向けセットアップ: `docs/development.md`
 - リリース要件: `docs/releases/`（`release-1-single-machine-wedge/`・`release-2-biome-migration/`・`release-3-multi-device-pairing/`・`release-4-cli-dashboard-ux/`・`release-5-docs-restructure/`・`release-6-detail-view-redesign/`・`release-7-session-status-reliability/`・`release-8-dashboard-freshness/`・`release-9-i18n/`・`release-23-terminal-focus/`）
 - E2E 検証チェックリスト: `docs/releases/release-N/e2e-verification.md`（複数デバイス・ターミナルフォーカス機能の手動受け入れ試験手順）
-- 既知の課題: `docs/known-issues.md`
+- 既知の制限（利用前に知っておくと良いこと）: `docs/known-limitations.md`
+- 開発の内部バックログ（開発者・コントリビュータ向け）: `docs/known-issues.md`

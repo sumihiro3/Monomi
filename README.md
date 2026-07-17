@@ -271,4 +271,5 @@ Deleting `~/.monomi` also permanently deletes the SQLite DB holding your run his
 - Developer setup: `docs/development.md`
 - Release requirements: `docs/releases/` (`release-1-single-machine-wedge/`, `release-2-biome-migration/`, `release-3-multi-device-pairing/`, `release-4-cli-dashboard-ux/`, `release-5-docs-restructure/`, `release-6-detail-view-redesign/`, `release-7-session-status-reliability/`, `release-8-dashboard-freshness/`, `release-9-i18n/`, `release-23-terminal-focus/`)
 - E2E verification checklist: `docs/releases/release-N/e2e-verification.md` (manual acceptance test procedure for multi-device / terminal-focus features)
-- Known issues: `docs/known-issues.md`
+- Known limitations (worth knowing before you try it): `docs/known-limitations.md`
+- Internal development backlog (for contributors): `docs/known-issues.md`
