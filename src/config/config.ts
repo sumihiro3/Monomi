@@ -55,6 +55,26 @@ const durationSchema = z
   .transform(parseDurationMs)
 
 /**
+ * `github_pr_poll.interval` の許容下限（1分）・上限（60分）。
+ *
+ * review-changes 修正: 下限を設けないと `0s`/`1ms` 等の値が素通りし、`GithubPrPoller` の
+ * `setInterval` がタイトループになって GitHub API レート制限と CPU を消費する高 severity 所見への
+ * 対応。個人利用規模のポーリングを想定する非機能要件（既定 5 分）に照らし、明示的な安全域
+ * （1〜60分）へ制限する。
+ */
+const MIN_GITHUB_PR_POLL_INTERVAL_MS = 60_000
+const MAX_GITHUB_PR_POLL_INTERVAL_MS = 60 * 60_000
+
+/**
+ * `github_pr_poll.interval` 専用スキーマ。書式検証（{@link durationSchema}）に加え、
+ * {@link MIN_GITHUB_PR_POLL_INTERVAL_MS}〜{@link MAX_GITHUB_PR_POLL_INTERVAL_MS} の範囲外を拒否する。
+ */
+const githubPrPollIntervalSchema = durationSchema.refine(
+  (ms) => ms >= MIN_GITHUB_PR_POLL_INTERVAL_MS && ms <= MAX_GITHUB_PR_POLL_INTERVAL_MS,
+  'github_pr_poll.interval must be between "1m" and "60m"'
+)
+
+/**
  * raw_state 別の放置昇格閾値（ミリ秒）。`docs/design/class-diagram.md` の
  * `EscalationThresholds` 値オブジェクトに対応する。既定は 2h / 6h / 24h / 72h。
  */
@@ -103,6 +123,18 @@ export interface MonomiConfig {
   locale?: MonomiLocale
   /** 自動更新を有効にするか。既定 `true`。FR-05。 */
   autoUpdate: boolean
+  /** GitHub PR ポーリング設定。既定 `enabled: true` / `interval: 5m`（release-27 FR-01 AC-5）。 */
+  githubPrPoll: {
+    /** ポーリングを有効にするか。`false` で完全無効化。 */
+    enabled: boolean
+    /** ポーリング間隔（ミリ秒）。1分〜60分の範囲に制限される（review-changes 修正）。 */
+    intervalMs: DurationMs
+    /**
+     * ポーリング対象を `owner/repo` の allowlist に制限する（review-changes 修正:
+     * confused-deputy 対応）。未設定・空配列は「制限なし」（既存動作を維持）。
+     */
+    allowedRepos?: string[]
+  }
 }
 
 /**
@@ -133,6 +165,16 @@ const rawConfigSchema = z.object({
       pr_wait: durationSchema.prefault('72h'),
     })
     .prefault({}),
+  // GitHub PR ポーリング設定（release-27 FR-01 AC-5）。既定は有効・5分間隔・allowlist なし。
+  github_pr_poll: z
+    .object({
+      enabled: z.boolean().default(true),
+      interval: githubPrPollIntervalSchema.prefault('5m'),
+      // 運用者が明示的に許可する owner/repo（review-changes 修正: confused-deputy 対応）。
+      // 未指定なら制限なし（reporter が申告した全 project_key を従来どおりポーリングする）。
+      allowed_repos: z.array(z.string().min(1)).optional(),
+    })
+    .prefault({}),
 })
 
 /**
@@ -154,6 +196,11 @@ function toMonomiConfig(raw: z.infer<typeof rawConfigSchema>): MonomiConfig {
       approvalWait: raw.escalation_thresholds.approval_wait,
       nextWait: raw.escalation_thresholds.next_wait,
       prWait: raw.escalation_thresholds.pr_wait,
+    },
+    githubPrPoll: {
+      enabled: raw.github_pr_poll.enabled,
+      intervalMs: raw.github_pr_poll.interval,
+      allowedRepos: raw.github_pr_poll.allowed_repos,
     },
   }
 }
