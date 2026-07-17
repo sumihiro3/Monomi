@@ -93,8 +93,10 @@ export const JA = {
     'monomi hub: 起動に失敗しました — ポートが既に使用されています (EADDRINUSE)。hub が既に稼働中の可能性があります。`monomi hub status` で確認してください。\n\n元のエラー: {message}',
   'cli.hubAutostart.timeout':
     'monomi: hub の自動起動に失敗しました — タイムアウト内に疎通確認できませんでした。{hubLogFile} を確認するか、`monomi hub status` で状態を確認、または `monomi hub` で手動起動してください。',
-  'cli.hubStatus.running': 'hub は稼働中です（pid {pid}, port {port}）。',
-  'cli.hubStatus.runningPidUnknown': 'hub は稼働中です（port {port}。pid は不明）。',
+  'cli.hubStatus.running': 'hub は稼働中です（pid {pid}, port {port}, version {version}）。',
+  'cli.hubStatus.runningPidUnknown':
+    'hub は稼働中です（port {port}, version {version}。pid は不明）。',
+  'cli.hubStatus.versionUnknown': '不明',
   'cli.hubStatus.stopped': 'hub は稼働していません。',
   'cli.hubStatus.stale':
     'hub は稼働していません — stale な pid ファイルが見つかりました（pid {pid}）。次回 hub 起動時に自動的に上書きされます。',
@@ -122,4 +124,28 @@ export const JA = {
     'ステータスレポート用のフックがまだ登録されていません。有効にするには `monomi install-hooks` を実行してください。',
   'cli.setupPrompt.installFailure':
     'フックの自動インストールに失敗しました（{message}）。再試行するには `monomi install-hooks` を実行してください。',
+
+  // autoUpdate.*（起動時の hub 版照合・自動再起動 notice、release-25-auto-update FR-02 AC-7）
+  'autoUpdate.hubRestarted':
+    'hub が旧版（{hubVersion}）だったため、現在の版（{selfVersion}）へ自動的に再起動しました。',
+  'autoUpdate.restartFailed':
+    'hub の自動更新に失敗しました — 待機時間内に停止できなかったため、旧版（{hubVersion}）のまま稼働を継続しています。`monomi hub status` で確認するか、`monomi hub stop` を試してから再度起動してください。',
+  'autoUpdate.cliOutdated':
+    'hub の方が新しい版（{hubVersion}）で稼働しています（この CLI は {selfVersion}）。`npx monomi-cli@latest` などで CLI を更新してください。',
+  'autoUpdate.hubMismatchSuppressed':
+    'hub の版（{hubVersion}）と CLI の版（{selfVersion}）が異なりますが、auto_update が無効なため自動更新は行いませんでした。有効にするには ~/.monomi/config.yml に `auto_update: true` を設定するか、手動で hub を再起動してください。',
+
+  // autoUpdate.reporter*（起動時の reporter 版マーカー照合・自動再配置 notice、release-25-auto-update FR-03）
+  'autoUpdate.reporterUpdated':
+    'reporter スクリプト（~/.monomi/monomi-report.sh）が旧版（{reporterVersion}）だったため、現在の版（{selfVersion}）へ自動的に再配置しました。',
+  'autoUpdate.reporterMismatchSuppressed':
+    'reporter スクリプト（~/.monomi/monomi-report.sh）の版（{reporterVersion}）と CLI の版（{selfVersion}）が異なりますが、auto_update が無効なため自動再配置は行いませんでした。有効にするには ~/.monomi/config.yml に `auto_update: true` を設定するか、`monomi install-hooks` を手動で実行してください。',
+  'autoUpdate.reporterNewerThanCli':
+    '設置済みの reporter スクリプト（~/.monomi/monomi-report.sh）の方が新しい版（{reporterVersion}）です（この CLI は {selfVersion}）。`npx monomi-cli@latest` などで CLI を更新してください。',
+  'autoUpdate.reporterUpdateFailed':
+    'reporter スクリプト（~/.monomi/monomi-report.sh）の自動更新に失敗しました（{message}）。旧版（{reporterVersion}）のまま稼働を継続しています。`monomi install-hooks` を手動で実行して再試行してください。',
+
+  // autoUpdate.remoteHubOutdated（child のリモート hub 版ずれ可視化、release-25-auto-update FR-04）
+  'autoUpdate.remoteHubOutdated':
+    '接続中の hub が旧版です（hub: {hubVersion} / この CLI: {selfVersion}）。hub デバイス側で更新してください（この CLI からリモートの hub を再起動することはできません）。',
 } satisfies Record<TranslationKey, string>

@@ -3,6 +3,7 @@ import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } 
 import type { InstanceStatusRow } from '../../hub/dto.js'
 import { t } from '../../i18n/index.js'
 import { MONOMI_VERSION } from '../../version.js'
+import { compareVersion } from '../../version-compare.js'
 import { toFocusTarget } from '../focus/focus-target.js'
 import type { FocusResult, FocusTarget } from '../focus/types.js'
 import type { HubApiClient } from '../hub-api-client.js'
@@ -53,6 +54,15 @@ export interface AppViewProps {
    * （実運用では `src/cli.ts` の `runDashboard()`（FR-05d）が FocusService を注入する）。
    */
   focusRunner?: FocusRunner
+  /**
+   * ダッシュボード起動時に確定した永続 notice（呼び出し側で i18n 解決済みの文字列、
+   * release-25-auto-update）。hub/reporter の自動更新結果や版ずれ警告の受け皿で、`f` フォーカス
+   * 失敗時の理由 notice（{@link showNotice}、約4秒で自動消去する時限式）とは独立した表示領域を持つ。
+   * 更新告知・版ずれ警告はユーザーが認識するまで残すべきで自動消去すべきではないため、時限式の
+   * 仕組みは流用しない。省略時は空配列（何も表示しない）。実運用では `src/cli.ts` の
+   * `runDashboard(startupNotices)` が注入する。
+   */
+  startupNotices?: string[]
 }
 
 /**
@@ -126,6 +136,17 @@ const FOCUS_NOTICE_DURATION_MS = 4000
  *   成功時は notice を出さず（タブ移動自体がフィードバック）、失敗時のみ理由別 notice を表示し
  *   約4秒で自動消去する。フッターヒントは選択行が同一デバイスのときのみ ` f focus` を追加する
  *   （AC-5）
+ * - `startupNotices`（release-25-auto-update）はヘッダー直下に警告色（黄）でスタック表示する
+ *   永続 notice 領域。hub/reporter の自動更新結果・版ずれ警告の受け皿で、`f` 失敗時の時限式
+ *   notice とは独立しており自動消去しない
+ * - リモート hub の版ずれ可視化（release-25-auto-update FR-04）: watch ポーリングの取得関数が
+ *   `listInstances()` に続けて `client.getLastHubVersion()`（既存応答のヘッダ読み取りのみ、追加
+ *   リクエストは発生させない）を読み、自版との比較（`version-compare.ts`）が `older`/`unknown`
+ *   （ヘッダ欠落＝版不明も旧版扱い）なら「hub が旧版、hub デバイスで更新を」notice を
+ *   `startupNotices` と同じ永続 notice 領域に表示する（AC-1・AC-3）。`same`/`newer` になれば
+ *   notice を消す（AC-2）。直前と同一の notice 文字列なら再セットしない dedup で、連続ポーリングの
+ *   たびに表示が増殖しないようにする（AC-4、表示は常に高々 1 件）。hub ロール自身への接続は
+ *   再起動後に版が一致するため、この notice は自然に出ない。
  *
  * @param props {@link AppViewProps}。
  * @returns CLI ルートの要素。
@@ -136,6 +157,7 @@ export function AppView({
   reresolve,
   localDeviceId = '',
   focusRunner = noopFocusRunner,
+  startupNotices = [],
 }: AppViewProps): ReactElement {
   const { exit } = useApp()
   const { stdout } = useStdout()
@@ -146,10 +168,18 @@ export function AppView({
   }
   const store = storeRef.current
 
+  // release-25-auto-update FR-04: フォールバックで PollingLoop が client を差し替えても、実際に
+  // 応答した client の版を捕捉できるよう、取得のたびに c.getLastHubVersion() を読んで ref へ保持する
+  // （PollingLoop<InstanceStatusRow[]> の型は不変のまま。追加リクエストは発生させない）。
+  const hubVersionRef = useRef<string | undefined>(undefined)
   const pollingRef = useRef<PollingLoop<InstanceStatusRow[]> | null>(null)
   if (pollingRef.current === null) {
     pollingRef.current = new PollingLoop(
-      (c) => c.listInstances(),
+      async (c) => {
+        const rows = await c.listInstances()
+        hubVersionRef.current = c.getLastHubVersion()
+        return rows
+      },
       client,
       pollIntervalMs,
       reresolve
@@ -174,6 +204,13 @@ export function AppView({
   const [notice, setNotice] = useState<string | null>(null)
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
+
+  // release-25-auto-update FR-04: リモート hub の版ずれ notice（startupNotices と同じ永続 notice
+  // 領域に表示、自動消去しない）。remoteHubNoticeRef は直近セット値を保持し、onUpdate クロージャ
+  // （マウント時に 1 回だけ配線、state のクロージャは stale）からでも dedup 判定できるようにする
+  // （AC-4: 表示は常に高々 1 件）。
+  const [remoteHubNotice, setRemoteHubNotice] = useState<string | null>(null)
+  const remoteHubNoticeRef = useRef<string | null>(null)
   useEffect(() => {
     return () => {
       mountedRef.current = false
@@ -205,6 +242,23 @@ export function AppView({
     polling.onUpdate((rows) => {
       store.setInstances(rows)
       setError(null)
+
+      // release-25-auto-update FR-04 AC-1〜AC-4: hub 版 < 自版、またはヘッダ欠落（版不明）を
+      // 'unknown' として旧版と同じ経路に倒す（version-compare.ts の設計方針）。'same'/'newer' なら
+      // notice を消す。直前と同一文字列なら setState を呼ばない（dedup、AC-4）。
+      const hubVersionComparison = compareVersion(hubVersionRef.current)
+      const nextRemoteHubNotice =
+        hubVersionComparison === 'older' || hubVersionComparison === 'unknown'
+          ? t('autoUpdate.remoteHubOutdated', {
+              hubVersion: hubVersionRef.current ?? t('cli.hubStatus.versionUnknown'),
+              selfVersion: MONOMI_VERSION,
+            })
+          : null
+      if (nextRemoteHubNotice !== remoteHubNoticeRef.current) {
+        remoteHubNoticeRef.current = nextRemoteHubNotice
+        setRemoteHubNotice(nextRemoteHubNotice)
+      }
+
       // stdout がバックプレッシャー中は再描画トリガーだけ間引く（データ更新は継続し、
       // ドレイン後の次回描画で最新状態が反映されるようにする, FR-02 AC-2）。
       if (!isStdoutBackpressured(stdout, DEFAULT_BACKPRESSURE_THRESHOLD_BYTES)) {
@@ -441,6 +495,17 @@ export function AppView({
         </Text>
         <WatchingIndicator isRunning={polling.isRunning()} stdout={stdout} />
       </Text>
+
+      {startupNotices.length > 0 || remoteHubNotice !== null ? (
+        <Box flexDirection="column">
+          {startupNotices.map((message) => (
+            <Text key={message} color="yellow">
+              {message}
+            </Text>
+          ))}
+          {remoteHubNotice !== null ? <Text color="yellow">{remoteHubNotice}</Text> : null}
+        </Box>
+      ) : null}
 
       {viewMode === 'detail' && selectedRow !== undefined ? (
         <Box marginTop={1}>

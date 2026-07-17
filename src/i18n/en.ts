@@ -95,8 +95,10 @@ Usage:
     'monomi hub: failed to start — the port is already in use (EADDRINUSE). A hub may already be running; check with `monomi hub status`.\n\nOriginal error: {message}',
   'cli.hubAutostart.timeout':
     'monomi: could not start the hub automatically — it did not become reachable in time. Check {hubLogFile} for details, then try `monomi hub status` or start it manually with `monomi hub`.',
-  'cli.hubStatus.running': 'Hub is running (pid {pid}, port {port}).',
-  'cli.hubStatus.runningPidUnknown': 'Hub is running (port {port}; pid unknown).',
+  'cli.hubStatus.running': 'Hub is running (pid {pid}, port {port}, version {version}).',
+  'cli.hubStatus.runningPidUnknown':
+    'Hub is running (port {port}, version {version}; pid unknown).',
+  'cli.hubStatus.versionUnknown': 'unknown',
   'cli.hubStatus.stopped': 'Hub is not running.',
   'cli.hubStatus.stale':
     'Hub is not running — found a stale pid file (pid {pid}) from a process that is no longer alive. It will be replaced automatically the next time the hub starts.',
@@ -124,6 +126,30 @@ Usage:
     'Status reporting hooks are not installed yet. Run `monomi install-hooks` anytime to enable them.',
   'cli.setupPrompt.installFailure':
     'Could not install hooks automatically ({message}). Run `monomi install-hooks` anytime to retry.',
+
+  // autoUpdate.*（起動時の hub 版照合・自動再起動 notice、release-25-auto-update FR-02 AC-7）
+  'autoUpdate.hubRestarted':
+    'Hub was outdated (was {hubVersion}); restarted it to the current version ({selfVersion}).',
+  'autoUpdate.restartFailed':
+    'Could not update the hub automatically — it did not stop within the grace period, so it is still running the outdated version ({hubVersion}). Check with `monomi hub status`, or try `monomi hub stop` and start again.',
+  'autoUpdate.cliOutdated':
+    'The hub is running a newer version ({hubVersion}) than this CLI ({selfVersion}). Update the CLI, e.g. with `npx monomi-cli@latest`.',
+  'autoUpdate.hubMismatchSuppressed':
+    'Hub version ({hubVersion}) differs from this CLI ({selfVersion}), but auto_update is disabled, so it was not updated automatically. Set `auto_update: true` in ~/.monomi/config.yml to enable it, or restart the hub manually.',
+
+  // autoUpdate.reporter*（起動時の reporter 版マーカー照合・自動再配置 notice、release-25-auto-update FR-03）
+  'autoUpdate.reporterUpdated':
+    'The reporter script (~/.monomi/monomi-report.sh) was outdated (was {reporterVersion}); redeployed it to the current version ({selfVersion}).',
+  'autoUpdate.reporterMismatchSuppressed':
+    'The reporter script (~/.monomi/monomi-report.sh) version ({reporterVersion}) differs from this CLI ({selfVersion}), but auto_update is disabled, so it was not redeployed automatically. Set `auto_update: true` in ~/.monomi/config.yml to enable it, or run `monomi install-hooks` manually.',
+  'autoUpdate.reporterNewerThanCli':
+    'The deployed reporter script (~/.monomi/monomi-report.sh) is running a newer version ({reporterVersion}) than this CLI ({selfVersion}). Update the CLI, e.g. with `npx monomi-cli@latest`.',
+  'autoUpdate.reporterUpdateFailed':
+    'Could not update the reporter script (~/.monomi/monomi-report.sh) automatically ({message}); it is still running the outdated version ({reporterVersion}). Run `monomi install-hooks` manually to retry.',
+
+  // autoUpdate.remoteHubOutdated（child のリモート hub 版ずれ可視化、release-25-auto-update FR-04）
+  'autoUpdate.remoteHubOutdated':
+    'The hub you are connected to is outdated (hub: {hubVersion}, this CLI: {selfVersion}). Update it on the hub device — this CLI cannot restart a remote hub.',
 } as const
 
 /** 翻訳キーの型。{@link EN} のキー集合から導出する（release-9-i18n FR-01 AC-4）。 */

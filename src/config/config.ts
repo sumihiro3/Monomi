@@ -101,6 +101,8 @@ export interface MonomiConfig {
    * `src/i18n/` の `resolveLocale()` に委譲する。§release-9-i18n FR-01 AC-2）。
    */
   locale?: MonomiLocale
+  /** 自動更新を有効にするか。既定 `true`。FR-05。 */
+  autoUpdate: boolean
 }
 
 /**
@@ -121,6 +123,7 @@ const rawConfigSchema = z.object({
   // hub の待受アドレス上書き。既定は serve 側の 0.0.0.0（FR-06）。
   bind: z.string().optional(),
   locale: z.enum(LOCALES).optional(),
+  auto_update: z.boolean().default(true),
   watch_interval: durationSchema.prefault('3s'),
   escalation_thresholds: z
     .object({
@@ -144,6 +147,7 @@ function toMonomiConfig(raw: z.infer<typeof rawConfigSchema>): MonomiConfig {
     hubEndpoints: raw.hub_endpoints,
     bind: raw.bind,
     locale: raw.locale,
+    autoUpdate: raw.auto_update,
     watchIntervalMs: raw.watch_interval,
     escalationThresholds: {
       active: raw.escalation_thresholds.active,

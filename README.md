@@ -41,11 +41,13 @@ After a global install, you can use the `monomi` command directly instead of `np
 
 Starting the hub is automated by default. Running `monomi` (or `npx monomi-cli`) with no arguments checks connectivity to the default port (`47632`); if it can't connect, it starts the hub bundled in the package as a detached process, then shows the dashboard once connectivity is confirmed (if startup fails, it shows an error pointing you to `~/.monomi/hub.log`). A hub started this way keeps running after the dashboard exits, and subsequent launches skip the auto-start and connect directly.
 
+If a hub is already reachable, `monomi` also compares its version against the running CLI's and keeps them in sync automatically — see "Automatic updates (hub & reporter)" below.
+
 To explicitly start, stop, or check just the hub, use the following commands.
 
 ```sh
 monomi hub           # Start the hub API server (foreground)
-monomi hub status    # Show running status (running (pid/port) / stopped / stale pid)
+monomi hub status    # Show running status (running (pid/port/version) / stopped / stale pid)
 monomi hub stop      # Stop the running hub (SIGTERM; removes the pid file after confirming shutdown)
 ```
 
@@ -100,6 +102,8 @@ monomi install-hooks
 
 `install-hooks` deploys the bash reporter (`~/.monomi/monomi-report.sh`; overwrites any existing file and grants execute permission), then idempotently registers the seven hooks `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Notification` / `Stop` / `SessionEnd` into `~/.claude/settings.json` (existing hooks from other tools are preserved). If deploying the reporter fails, it exits with an error before registering the hooks. To remove them, run `monomi uninstall-hooks` (removes only the hooks; the reporter itself is left in place).
 
+Once hooks are registered, the deployed reporter is also kept up to date automatically on every `monomi` launch — see "Automatic updates (hub & reporter)" below.
+
 ## Pairing a device (adding a child)
 
 To connect a second or later device (a child), such as a MacBook, to the hub, issue a code on the hub side and use it to pair from the child side.
@@ -125,13 +129,23 @@ monomi hub devices list          # List registered devices (id, role, token vali
 monomi hub devices revoke <id>   # Revoke the token for a device (that device gets 401 from then on)
 ```
 
+## Automatic updates (hub & reporter)
+
+Every `monomi` launch checks whether the running hub and the deployed reporter script are on the same version as the CLI you just ran, and keeps them in sync so an `npm install -g monomi-cli` / `npx monomi-cli@latest` upgrade doesn't leave stale processes or scripts behind:
+
+- **Hub** (hub role only): the autostart connectivity check also reads the hub's version and compares it to the CLI's. If the hub is older (or doesn't report a version at all — an older hub build, treated as outdated), it's stopped gracefully (SIGTERM, same as `monomi hub stop`) and restarted on the current version; a notice reports the update. If the hub is newer than the CLI, the hub is left running as-is and a notice asks you to update the CLI instead (e.g. `npx monomi-cli@latest`). If the graceful stop doesn't finish in time, the hub is not force-killed — a warning notice is shown and the outdated hub keeps running (the update is retried on the next launch).
+- **Reporter**: the deployed `~/.monomi/monomi-report.sh` carries a version marker. If it's older than the CLI (or has no marker, from before this feature existed), it's redeployed automatically and a notice reports the update. If the marker already matches the current version, the file is left untouched, so manual edits to an up-to-date reporter are preserved.
+- **Child devices**: a child can't restart a remote hub, so instead it watches the hub's version on every poll response and shows a persistent notice asking you to update the hub on that device when it detects the hub is outdated (it does not repeat on every poll).
+
+These notices appear in a persistent banner at the top of the dashboard. To turn off the automatic hub and reporter updates and only see the notices, set `auto_update: false` in `~/.monomi/config.yml` (default: `true`; see the configuration table below).
+
 ## Usage
 
 ```
 monomi                          Show the dashboard for running instances (Ink. auto-starts the hub if absent)
 monomi hub                      Start the hub API server (DB init + bootstrap + HTTP)
 monomi hub stop                 Stop the running hub (SIGTERM; removes the pid file after confirming shutdown)
-monomi hub status               Show hub status (running (pid/port) / stopped / stale pid)
+monomi hub status               Show hub status (running (pid/port/version) / stopped / stale pid)
 monomi hub pair                 Issue a 6-digit pairing code and show candidate URLs (hub side)
 monomi hub devices list         List registered devices (with token valid/revoked)
 monomi hub devices revoke <id>  Revoke a device's token (that token gets 401 from then on)
@@ -203,19 +217,20 @@ After adding the setting, restart your Claude Code session.
 
 The CLI's display language defaults to English. To display in Japanese, either explicitly set `locale: ja`, or let it be auto-detected from the OS language setting (on macOS, the system language setting (`AppleLocale`) is preferred, falling back to the `LANG` environment variable only if that can't be obtained; on non-macOS, only `LANG` is used. Existing users upgrading from an older version need to add this setting to keep the Japanese display).
 
-| Key                                   | Default                  | Description                                                                                                                                                                                                                |
-| ------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role`                                | `hub`                    | `hub` (server side) or `child` (client side, set automatically by `monomi pair`)                                                                                                                                           |
-| `port`                                | `47632`                  | The hub API's listen port                                                                                                                                                                                                  |
-| `bind`                                | `0.0.0.0`                | The hub's listen address. Set to `127.0.0.1` to only accept connections from the same machine                                                                                                                              |
-| `locale`                              | (auto-detected if unset) | The CLI's display language, `ja` or `en`. If unset, auto-detected from the OS language setting (macOS: `AppleLocale` preferred, falling back to `LANG`; otherwise: `LANG`), falling back to `en` if it can't be determined |
-| `hub_endpoints`                       | (none)                   | Candidate hub endpoints to try when `role: child` (a priority-ordered block sequence; see example below)                                                                                                                   |
-| `device_id`                           | (auto-generated)         | Auto-generated from the hostname at hub startup / pairing time if not specified                                                                                                                                            |
-| `watch_interval`                      | `3s`                     | The dashboard's watch-mode polling interval                                                                                                                                                                                |
-| `escalation_thresholds.active`        | `2h`                     | Time until an active session is promoted to idle (stale)                                                                                                                                                                   |
-| `escalation_thresholds.approval_wait` | `6h`                     | Time until waiting-for-permission is promoted to idle                                                                                                                                                                      |
-| `escalation_thresholds.next_wait`     | `24h`                    | Time until waiting-for-next-instruction is promoted to idle                                                                                                                                                                |
-| `escalation_thresholds.pr_wait`       | `72h`                    | Time until waiting-for-PR-review is promoted to idle                                                                                                                                                                       |
+| Key                                   | Default                  | Description                                                                                                                                                                                                                                              |
+| ------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`                                | `hub`                    | `hub` (server side) or `child` (client side, set automatically by `monomi pair`)                                                                                                                                                                         |
+| `port`                                | `47632`                  | The hub API's listen port                                                                                                                                                                                                                                |
+| `bind`                                | `0.0.0.0`                | The hub's listen address. Set to `127.0.0.1` to only accept connections from the same machine                                                                                                                                                            |
+| `locale`                              | (auto-detected if unset) | The CLI's display language, `ja` or `en`. If unset, auto-detected from the OS language setting (macOS: `AppleLocale` preferred, falling back to `LANG`; otherwise: `LANG`), falling back to `en` if it can't be determined                               |
+| `hub_endpoints`                       | (none)                   | Candidate hub endpoints to try when `role: child` (a priority-ordered block sequence; see example below)                                                                                                                                                 |
+| `device_id`                           | (auto-generated)         | Auto-generated from the hostname at hub startup / pairing time if not specified                                                                                                                                                                          |
+| `auto_update`                         | `true`                   | Whether to automatically keep the hub and the deployed reporter script in sync with the running CLI's version on each `monomi` launch. Set to `false` to only show update notices without applying them (see "Automatic updates (hub & reporter)" above) |
+| `watch_interval`                      | `3s`                     | The dashboard's watch-mode polling interval                                                                                                                                                                                                              |
+| `escalation_thresholds.active`        | `2h`                     | Time until an active session is promoted to idle (stale)                                                                                                                                                                                                 |
+| `escalation_thresholds.approval_wait` | `6h`                     | Time until waiting-for-permission is promoted to idle                                                                                                                                                                                                    |
+| `escalation_thresholds.next_wait`     | `24h`                    | Time until waiting-for-next-instruction is promoted to idle                                                                                                                                                                                              |
+| `escalation_thresholds.pr_wait`       | `72h`                    | Time until waiting-for-PR-review is promoted to idle                                                                                                                                                                                                     |
 
 Durations are specified as unit-suffixed strings such as `500ms` / `3s` / `30m` / `2h` / `1d`.
 

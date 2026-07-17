@@ -11,6 +11,7 @@ import type { Database } from '../db/database.js'
 import type { Device } from '../domain/entities.js'
 import { epochMsNow, type EpochMs } from '../domain/time.js'
 import { EscalationThresholds } from '../status/escalation.js'
+import { MONOMI_VERSION } from '../version.js'
 import { AuthResolver } from './auth-resolver.js'
 import { DevicesController } from './controllers/devices-controller.js'
 import { EventsController } from './controllers/events-controller.js'
@@ -43,6 +44,11 @@ export interface HubServerOptions {
   now?: () => EpochMs
   /** 放置昇格閾値（config 由来）。省略時は既定 2h/6h/24h/72h。 */
   thresholds?: EscalationThresholds
+  /**
+   * 全応答へ付与する `X-Monomi-Hub-Version` ヘッダの値（FR-01）。省略時は {@link MONOMI_VERSION}。
+   * 疎通プローブ側（`probeHub`）の版比較をテストで固定値検証できるよう差し替え可能にする。
+   */
+  version?: string
 }
 
 /**
@@ -54,12 +60,13 @@ export interface HubServerOptions {
  * を渡す。全ルートは同一の {@link AuthResolver} で認証ゲートされる（HttpServer の前段で適用）。
  *
  * @param db 初期化済みの hub データベース。
- * @param options 時刻・閾値の注入（省略可）。
+ * @param options 時刻・閾値・版の注入（省略可）。
  * @returns ルート登録済みの {@link HttpServer}。
  */
 export function createHubServer(db: Database, options: HubServerOptions = {}): HttpServer {
   const now = options.now ?? epochMsNow
   const thresholds = options.thresholds ?? EscalationThresholds.withDefaults()
+  const hubVersion = options.version ?? MONOMI_VERSION
 
   const devices = new DeviceRepository(db)
   const projects = new ProjectRepository(db)
@@ -101,7 +108,7 @@ export function createHubServer(db: Database, options: HubServerOptions = {}): H
     .add('POST', '/api/v1/pair/start', (req) => pairController.handleStart(req), { public: true })
     .add('POST', '/api/v1/pair/claim', (req) => pairController.handleClaim(req), { public: true })
 
-  return new HttpServer(router, authResolver)
+  return new HttpServer(router, authResolver, hubVersion)
 }
 
 /**
@@ -116,6 +123,8 @@ export function createHubServer(db: Database, options: HubServerOptions = {}): H
  * バインドし他デバイスからの到達を許可する（FR-06 AC-1）。読み取り API（instances/events）は
  * 有効な device token であれば発行元デバイスを問わず全デバイスの instance/イベントを返す
  * （所有権チェックは行わない、FR-06 AC-2・§0 既知課題 S2）。無効/失効トークンは引き続き 401。
+ * 全応答（401 含む）へ `X-Monomi-Hub-Version` ヘッダを付与し、hub 自身の版を疎通プローブ側へ
+ * 公開する（{@link send} が唯一の応答送出チョークポイントなので 1 箇所の変更で全経路に効く、FR-01）。
  */
 export class HttpServer {
   private readonly server: http.Server
@@ -123,10 +132,13 @@ export class HttpServer {
   /**
    * @param router ルート照合器（登録済み）。
    * @param authResolver 全ルート共通の認証ミドルウェア。
+   * @param hubVersion 全応答へ付与する `X-Monomi-Hub-Version` の値。省略時は {@link MONOMI_VERSION}
+   *   （テストで `new HttpServer(router, authResolver)` の既存呼び出しを壊さないためのデフォルト、FR-01）。
    */
   constructor(
     private readonly router: Router,
-    private readonly authResolver: AuthResolver
+    private readonly authResolver: AuthResolver,
+    private readonly hubVersion: string = MONOMI_VERSION
   ) {
     this.server = http.createServer((req, res) => {
       void this.handle(req, res)
@@ -262,6 +274,10 @@ export class HttpServer {
   /**
    * JSON 応答を書き出す。
    *
+   * hub の全応答（404/405/401/413/400/500/200 の全経路）が通る唯一のチョークポイント。
+   * ここで `X-Monomi-Hub-Version` を常時付与することで、認証済み応答・401 応答の双方に
+   * 1 変更でヘッダを載せる（FR-01 AC-1）。
+   *
    * @param res node のレスポンス。
    * @param status HTTP ステータス。
    * @param body 応答ボディ（JSON へシリアライズ）。
@@ -273,7 +289,11 @@ export class HttpServer {
     body: unknown,
     headers: Record<string, string> = {}
   ): void {
-    res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', ...headers })
+    res.writeHead(status, {
+      'content-type': 'application/json; charset=utf-8',
+      'X-Monomi-Hub-Version': this.hubVersion,
+      ...headers,
+    })
     res.end(JSON.stringify(body))
   }
 }

@@ -43,6 +43,10 @@
 # 未初期化参照だけは早期に気づけるよう、全変数を明示初期化する。
 
 MONOMI_DEFAULT_PORT=47632
+# 版マーカー（release-25-auto-update FR-03）。install-hooks の deployReporterScript が配置時に
+# プレースホルダを実際の MONOMI_VERSION へ書き換える（ビルド時の版同期は不要）。この行自体は
+# ただの bash 変数代入なので、書き換えられなくても reporter の動作には一切影響しない。
+MONOMI_REPORTER_VERSION="__MONOMI_VERSION__"
 TOOL_SUMMARY_MAX=200
 # rejected/（4xx 永久エラーの隔離先）に貯める最大件数。超過分は最古から掃除する。
 # MONOMI_REJECTED_MAX で上書き可（無限蓄積を防ぐ FR-07 の掃除ポリシー）。

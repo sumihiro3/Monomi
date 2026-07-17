@@ -32,7 +32,8 @@ function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     ),
     runHub: vi.fn(async () => {}),
     loadRole: vi.fn(() => 'hub' as const),
-    ensureHubRunning: vi.fn(async () => {}),
+    ensureHubRunning: vi.fn(async () => null),
+    ensureReporterUpToDate: vi.fn(() => null),
     startMemoryWatchdog: vi.fn(),
     loadLocale: vi.fn(() => 'en' as const),
     listDevices: vi.fn(async () => []),
@@ -74,6 +75,7 @@ describe('run (CLI dispatch)', () => {
     const deps = makeDeps({
       ensureHubRunning: vi.fn(async () => {
         calls.push('ensureHubRunning')
+        return null
       }),
       runDashboard: vi.fn(async () => {
         calls.push('runDashboard')
@@ -91,6 +93,7 @@ describe('run (CLI dispatch)', () => {
     const deps = makeDeps({
       ensureHubRunning: vi.fn(async () => {
         calls.push('ensureHubRunning')
+        return null
       }),
       startMemoryWatchdog: vi.fn(() => {
         calls.push('startMemoryWatchdog')
@@ -105,6 +108,65 @@ describe('run (CLI dispatch)', () => {
     // ensureHubRunning(自動起動疎通確認)を終えてからウォッチドッグを起動し、その後ダッシュボードへ
     // 進む(順序保証)。
     expect(calls).toEqual(['ensureHubRunning', 'startMemoryWatchdog', 'runDashboard'])
+  })
+
+  it('collects the ensureHubRunning notice into the startupNotices array passed to runDashboard (release-25-auto-update)', async () => {
+    const deps = makeDeps({
+      ensureHubRunning: vi.fn(async () => 'hub updated: 0.1.0 -> 0.2.0'),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.runDashboard).toHaveBeenCalledWith(['hub updated: 0.1.0 -> 0.2.0'])
+  })
+
+  it('passes an empty startupNotices array to runDashboard when ensureHubRunning has no notice (release-25-auto-update)', async () => {
+    const deps = makeDeps() // 既定の ensureHubRunning は null（notice なし）を返す。
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.runDashboard).toHaveBeenCalledWith([])
+  })
+
+  it('calls ensureReporterUpToDate after maybePromptInstallHooks and before the dashboard (release-25-auto-update FR-03)', async () => {
+    const calls: string[] = []
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => true), // maybePromptInstallHooks を素通りさせる。
+      ensureReporterUpToDate: vi.fn(() => {
+        calls.push('ensureReporterUpToDate')
+        return null
+      }),
+      startMemoryWatchdog: vi.fn(() => {
+        calls.push('startMemoryWatchdog')
+      }),
+      runDashboard: vi.fn(async () => {
+        calls.push('runDashboard')
+      }),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.ensureReporterUpToDate).toHaveBeenCalledTimes(1)
+    expect(calls).toEqual(['ensureReporterUpToDate', 'startMemoryWatchdog', 'runDashboard'])
+  })
+
+  it('collects the ensureReporterUpToDate notice into the startupNotices array passed to runDashboard (release-25-auto-update FR-03)', async () => {
+    const deps = makeDeps({
+      ensureReporterUpToDate: vi.fn(() => 'reporter updated: 0.1.0 -> 0.2.0'),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.runDashboard).toHaveBeenCalledWith(['reporter updated: 0.1.0 -> 0.2.0'])
+  })
+
+  it('collects both the hub and reporter notices, hub notice first (release-25-auto-update)', async () => {
+    const deps = makeDeps({
+      ensureHubRunning: vi.fn(async () => 'hub updated: 0.1.0 -> 0.2.0'),
+      ensureReporterUpToDate: vi.fn(() => 'reporter updated: 0.1.0 -> 0.2.0'),
+    })
+    const code = await run([], deps)
+    expect(code).toBe(0)
+    expect(deps.runDashboard).toHaveBeenCalledWith([
+      'hub updated: 0.1.0 -> 0.2.0',
+      'reporter updated: 0.1.0 -> 0.2.0',
+    ])
   })
 
   it('does not start the memory watchdog when hub autostart fails (release-20-dashboard-heap-guard FR-01 AC-5)', async () => {
@@ -411,6 +473,33 @@ describe('run (CLI dispatch)', () => {
     const message = (deps.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string
     expect(message).toContain('47632')
     expect(message).not.toMatch(/pid \d/)
+  })
+
+  it('includes the hub version in "hub status" output when the probe reported one (FR-01 AC-3)', async () => {
+    const deps = makeDeps({
+      hubStatus: vi.fn(async () => ({
+        state: 'running' as const,
+        pid: 4242,
+        port: 47632,
+        hubVersion: '0.3.0',
+      })),
+    })
+    const code = await run(['hub', 'status'], deps)
+    expect(code).toBe(0)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('0.3.0'))
+  })
+
+  it('falls back to the "unknown version" label when the probe did not report a version (FR-01 AC-3)', async () => {
+    const deps = makeDeps({
+      hubStatus: vi.fn(async () => ({
+        state: 'running' as const,
+        pid: 4242,
+        port: 47632,
+      })),
+    })
+    const code = await run(['hub', 'status'], deps)
+    expect(code).toBe(0)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('unknown'))
   })
 
   it('does not apply the child guard to "hub status" (management command, not a server)', async () => {
