@@ -3,6 +3,7 @@ import { type ReactElement, type ReactNode, useEffect, useMemo, useState } from 
 import type {
   InstanceDetail,
   InstanceStatusRow,
+  PrDto,
   RecentEventDto,
   RunningWorkDto,
 } from '../../hub/dto.js'
@@ -18,6 +19,7 @@ import {
   wrapAwareWindowForTexts,
 } from '../event-scroll.js'
 import type { HubApiClient } from '../hub-api-client.js'
+import { toOsc8Hyperlink } from '../osc8-hyperlink.js'
 import { PollingLoop } from '../polling-loop.js'
 import { sanitizeDisplayText, sanitizeNullableDisplayText } from '../sanitize-display-text.js'
 import {
@@ -337,8 +339,11 @@ export function DetailView({
             ) ?? '-'}
           </Text>
         </Field>
+        {/* release-27 FR-05d: i18n ラベル（pr.*、FR-05c）+ draft 注記 + PR 番号の OSC 8
+            ハイパーリンク化（FR-05b）を formatPr でまとめて組み立てる。number が無い（PR 未検出）
+            場合は番号を付けず、ラベルのみ表示する。 */}
         <Field label="pr">
-          <Text>{source.pr.state}</Text>
+          <Text>{formatPr(source.pr)}</Text>
         </Field>
       </Box>
 
@@ -538,6 +543,55 @@ function formatRunningWork(work: RunningWorkDto | null): string {
   const base = `${sanitizeDisplayText(work.name)} (${runningWorkKindLabel(work.kind)})`
   const age = formatRunningWorkAge(work.started_at)
   return age === null ? base : `${base} ${age}`
+}
+
+/**
+ * `pr.state`（wire は小文字 `none`/`awaiting_review`/`changes_requested`/`approved`/`merged`）
+ * → 翻訳キー（release-27 FR-05d）。
+ *
+ * {@link RUNNING_WORK_KIND_KEYS} と同じ防御的パターン（`Record<string, TranslationKey>` +
+ * 未知値フォールバック）を踏襲する。hub と CLI は別プロセス・別バージョンで動きうるため、
+ * `PrReviewState`（`../../domain/pr-status-mapper.js`）を型として直接 import せず wire の
+ * 生文字列として扱い、将来 hub が未知の state を送ってきてもクラッシュせず生値を表示する。
+ */
+const PR_STATE_LABEL_KEYS: Record<string, TranslationKey> = {
+  none: 'pr.none',
+  awaiting_review: 'pr.awaitingReview',
+  changes_requested: 'pr.changesRequested',
+  approved: 'pr.approved',
+  merged: 'pr.merged',
+}
+
+/**
+ * `pr.state` を、アクティブロケールで解決したラベルへ写す。
+ *
+ * @param state wire の `pr.state`（小文字）。
+ * @returns アクティブロケールのラベル（`t()` 経由）。未知値はサニタイズして返す。
+ */
+function prStateLabel(state: string): string {
+  const key = PR_STATE_LABEL_KEYS[state]
+  return key ? t(key) : sanitizeDisplayText(state)
+}
+
+/**
+ * 概要 BOX の `pr` フィールド表示文字列を組み立てる（release-27 FR-05d AC-1・AC-2・AC-3）。
+ *
+ * i18n ラベル（`pr.*`、FR-05c）を先頭に置き、PR が存在する（`number !== null`）場合のみ
+ * `#<number>` を付記する（AC-1）。番号は {@link toOsc8Hyperlink}（FR-05b）で OSC 8
+ * ハイパーリンク化を試みる——`url` が `https://github.com/` で始まらない（未検証）場合は
+ * 生成側が自動的にプレーンテキストの番号表示へフォールバックするため、ここでは呼ぶだけでよい
+ * （AC-2）。フォールバック時・非TTY端末でも `toOsc8Hyperlink` は素の文字列（または通常の
+ * エスケープ付き文字列）を返すだけで例外を投げないため、描画が壊れることはない（AC-3）。
+ * `is_draft: true` のときは末尾に ` (draft 訳語)` を付けて区別表示する（AC-1）。
+ *
+ * @param pr wire の {@link PrDto}。
+ * @returns 表示用文字列。
+ */
+function formatPr(pr: PrDto): string {
+  const label = prStateLabel(pr.state)
+  const numberSuffix = pr.number === null ? '' : ` ${toOsc8Hyperlink(`#${pr.number}`, pr.url)}`
+  const draftSuffix = pr.is_draft ? ` (${t('pr.draft')})` : ''
+  return `${label}${numberSuffix}${draftSuffix}`
 }
 
 /**
