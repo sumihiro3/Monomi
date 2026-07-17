@@ -6,6 +6,16 @@ A CLI dashboard for running Claude Code across multiple devices and projects in 
 
 Pair a hub running on a Mac mini with children on MacBooks and other machines, and the child-side session status is also shown in the hub's `monomi` dashboard (falls back to Tailscale automatically when the LAN is unreachable; see `docs/releases/release-3-multi-device-pairing/requirements.md` for details).
 
+## Demo
+
+Browsing the list view and an instance's detail view (event history, running workflow):
+
+![Monomi dashboard: list and detail view](docs/assets/demo-list-detail.gif)
+
+Pressing `f` while an instance is selected brings that instance's terminal window to the foreground (see "Terminal Focus" below):
+
+![Monomi terminal focus: pressing f brings the instance's terminal to the foreground](docs/assets/demo-terminal-focus.gif)
+
 ## Requirements
 
 - Verified environment: macOS only

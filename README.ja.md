@@ -6,6 +6,16 @@
 
 Mac mini 上の hub と MacBook 等の child をペアリングし、child 側のセッション状態も hub の `monomi` ダッシュボードに横断表示できる（LAN 断時は Tailscale へ自動フォールバック。詳細は `docs/releases/release-3-multi-device-pairing/requirements.md` を参照）。
 
+## デモ
+
+一覧表示とインスタンス詳細（イベント履歴・実行中ワークフロー）の表示切り替え:
+
+![Monomi ダッシュボード: 一覧表示と詳細表示](docs/assets/demo-list-detail.gif)
+
+インスタンスを選択した状態で `f` を押すと、そのインスタンスのターミナルウィンドウが最前面に来る（詳細は下記「ターミナルフォーカス（`f` キー）」参照）:
+
+![Monomi ターミナルフォーカス: f キーでインスタンスのターミナルを最前面に表示](docs/assets/demo-terminal-focus.gif)
+
 ## 対応環境
 
 - 動作確認環境: macOS のみ
