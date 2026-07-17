@@ -27,6 +27,20 @@ CREATE TABLE sessions (
 );
 `
 
+/** release-27（FR-03）より前の `pr_status` テーブル相当の DDL（`is_draft` 列なし）。 */
+const PRE_RELEASE_27_PR_STATUS_DDL = `
+CREATE TABLE pr_status (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  branch     TEXT NOT NULL,
+  pr_number  INTEGER,
+  state      TEXT NOT NULL,
+  url        TEXT,
+  checked_at INTEGER NOT NULL,
+  UNIQUE(project_id, branch)
+);
+`
+
 const TERMINAL_COLUMNS = [
   'tty',
   'term_program',
@@ -48,6 +62,13 @@ function columnNames(db: Database, table: string): string[] {
 function openPreRelease23Db(): Database {
   const db = new DatabaseSyncCtor(':memory:')
   db.exec(PRE_RELEASE_23_SESSIONS_DDL)
+  return db
+}
+
+/** DDL を経由しない、release-27 より前の `pr_status` テーブルのみを持つ生 DB を用意する。 */
+function openPreRelease27Db(): Database {
+  const db = new DatabaseSyncCtor(':memory:')
+  db.exec(PRE_RELEASE_27_PR_STATUS_DDL)
   return db
 }
 
@@ -90,6 +111,64 @@ describe('applyMigrations (FR-02a AC-3)', () => {
     try {
       freshDb = openDatabase(':memory:')
       const freshCols = columnNames(freshDb, 'sessions')
+      expect(migratedCols).toEqual(freshCols)
+    } finally {
+      freshDb?.close()
+    }
+  })
+})
+
+describe('applyMigrations (release-27 FR-03 AC-2)', () => {
+  let db: Database | undefined
+
+  afterEach(() => {
+    db?.close()
+    db = undefined
+  })
+
+  it('adds the is_draft column to a pre-release-27 pr_status table', () => {
+    db = openPreRelease27Db()
+
+    applyMigrations(db)
+
+    expect(columnNames(db, 'pr_status')).toContain('is_draft')
+  })
+
+  it('is idempotent: re-applying does not throw and does not duplicate the column', () => {
+    const rawDb = openPreRelease27Db()
+    db = rawDb
+
+    applyMigrations(rawDb)
+    expect(() => applyMigrations(rawDb)).not.toThrow()
+
+    const cols = columnNames(rawDb, 'pr_status')
+    expect(new Set(cols).size).toBe(cols.length)
+  })
+
+  it('backfills is_draft as 0 (falsy) for pre-existing rows', () => {
+    db = openPreRelease27Db()
+    db.exec(
+      `INSERT INTO pr_status (project_id, branch, pr_number, state, url, checked_at)
+       VALUES ('proj_01', 'main', 1, 'awaiting_review', NULL, 1000)`
+    )
+
+    applyMigrations(db)
+
+    const row = db.prepare('SELECT is_draft FROM pr_status WHERE branch = ?').get('main') as {
+      is_draft: number
+    }
+    expect(row.is_draft).toBe(0)
+  })
+
+  it('leaves the pr_status column set identical to a fresh DDL-created DB', () => {
+    db = openPreRelease27Db()
+    applyMigrations(db)
+    const migratedCols = columnNames(db, 'pr_status')
+
+    let freshDb: Database | undefined
+    try {
+      freshDb = openDatabase(':memory:')
+      const freshCols = columnNames(freshDb, 'pr_status')
       expect(migratedCols).toEqual(freshCols)
     } finally {
       freshDb?.close()

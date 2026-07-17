@@ -10,7 +10,6 @@
  *
  * release-1 スコープ外の列も DDL 上は用意する（更新経路は設けない）:
  * - `sessions.last_heartbeat_at`: ライブネス検知（§0.4 v1延期）の受け皿。列のみ。
- * - `pr_status`: GitHub poller（§0.4 v1延期）の受け皿。テーブルのみ作成し行は増えない。
  *
  * release-23（FR-02a）からの意図的な差分:
  * - `sessions` テーブルに reporter 捕捉のターミナル特定情報
@@ -18,6 +17,11 @@
  *   を追加。この DDL 自体は `CREATE TABLE IF NOT EXISTS` のため新規 DB にしか効かず、
  *   既存 DB への列追加は `./migrations.js` の `applyMigrations()` が別途担う
  *   （ARCHITECTURE §7.3「マイグレーションフレームワークを持たない」からの初の意図的逸脱）。
+ *
+ * release-27（FR-03）からの意図的な差分:
+ * - `pr_status` テーブルに `is_draft INTEGER NOT NULL DEFAULT 0` を追加。GitHub poller
+ *   が Draft PR かどうかを永続化するため。既存 DB への列追加は release-23 と同様
+ *   `./migrations.js` の `applyMigrations()` が担う。
  */
 export const DDL = `
 -- デバイス（レポート送信元）
@@ -83,13 +87,14 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_instance_time ON events(instance_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_events_session_time  ON events(session_id, occurred_at DESC);
 
--- PR レビュー状態（GitHub poller が書く。release-1 では行は増えない）
+-- PR レビュー状態（release-27 GitHub poller が書く）
 CREATE TABLE IF NOT EXISTS pr_status (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   project_id TEXT NOT NULL REFERENCES projects(id),
   branch     TEXT NOT NULL,
   pr_number  INTEGER,
   state      TEXT NOT NULL,
+  is_draft   INTEGER NOT NULL DEFAULT 0,
   url        TEXT,
   checked_at INTEGER NOT NULL,
   UNIQUE(project_id, branch)
