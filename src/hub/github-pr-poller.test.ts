@@ -783,4 +783,60 @@ describe('GithubPrPoller.start / stop', () => {
 
     expect(logger).not.toHaveBeenCalled()
   })
+
+  it('B15: a synchronous collectTargets() failure (e.g. DB closed mid-shutdown) is caught, not an unhandled rejection', async () => {
+    registerInstance({
+      deviceId: 'dev-1',
+      projectKeyValue: 'github.com/acme/widget',
+      projectKeyKind: 'GIT_REMOTE',
+      path: '/dev-1/widget',
+      branch: 'feature/x',
+    })
+    // 1回目（`start()` 自身の `warnIfAllowedReposUnrestricted()` 経由の同期呼び出し）は正常応答させ、
+    // `pollOnce()`（初回のバックグラウンド起動・timer コールバック）からの2回目以降でのみ、DB が
+    // シャットダウン中に閉じられた状況を模した同期例外を投げる。
+    const realListActive = instances.listActive.bind(instances)
+    let callCount = 0
+    vi.spyOn(instances, 'listActive').mockImplementation(() => {
+      callCount += 1
+      if (callCount === 1) {
+        return realListActive()
+      }
+      throw new Error('the database connection is not open')
+    })
+    const { execFile } = fakeExecFile({ prListResponses: {} })
+    const logger = vi.fn()
+    const { setIntervalFn, clearIntervalFn } = fakeTimer()
+    const poller = new GithubPrPoller(instances, projects, prStatus, {
+      execFile,
+      logger,
+      setIntervalFn,
+      clearIntervalFn,
+    })
+
+    const unhandledRejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandledRejection)
+    try {
+      // start() の初回 pollOnce() はバックグラウンド起動（await しない設計、review-changes 修正）
+      // のため、await start() 直後はまだ settle していない。マイクロタスクを1周させて確定させる。
+      await poller.start()
+      await new Promise((resolve) => setImmediate(resolve))
+
+      // setInterval コールバック経路（AC-4 の全件失敗検知の手前）も同じ catch でガードされていること
+      // を確認する。
+      const handler = setIntervalFn.mock.calls[0]?.[0]
+      handler?.()
+      await new Promise((resolve) => setImmediate(resolve))
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection)
+    }
+
+    expect(unhandledRejections).toHaveLength(0)
+    expect(logger).toHaveBeenCalledWith(
+      expect.stringContaining('the database connection is not open')
+    )
+  })
 })

@@ -267,10 +267,24 @@ export class GithubPrPoller {
     this.warnIfAllowedReposUnrestricted()
 
     this.timer = this.setIntervalFn(() => {
-      void this.pollOnce()
+      void this.pollOnce().catch((err) => this.logUnhandledPollError(err))
     }, this.intervalMs)
     this.timer.unref?.()
-    void this.pollOnce()
+    void this.pollOnce().catch((err) => this.logUnhandledPollError(err))
+  }
+
+  /**
+   * `pollOnce()` の fire-and-forget 呼び出し（`setInterval` コールバック・`start()` 直後の初回実行）
+   * 用の最終防波堤（既知課題 B15）。
+   *
+   * `pollOnce()` 内の `collectTargets()` は個別 branch の try/catch の外側にあるため、DB が
+   * シャットダウン中に閉じられる等で同期例外を投げると、この catch が無ければ未処理の Promise
+   * rejection となり、Node.js のデフォルト挙動（unhandledRejection を uncaught exception 相当に
+   * 扱う）により hub プロセス全体が終了しうる。ログのみ残し、次回 tick に委ねる（AC-3 と同じ
+   * log-and-continue 方針）。
+   */
+  private logUnhandledPollError(err: unknown): void {
+    this.logger(`monomi: GitHub PR ポーリングサイクルが失敗しました: ${errorMessage(err)}`)
   }
 
   /**
