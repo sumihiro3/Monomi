@@ -150,10 +150,7 @@ export interface DeviceToken {
 }
 
 /**
- * PR レビュー状態（§7.3 `pr_status` テーブル）。
- *
- * release-1 は GitHub poller 未実装のためテーブルは作成されるが行は増えない
- * （`InstanceStatusService` が返す `hasPrWaiting` は常に false、§0.4 v1延期）。
+ * PR レビュー状態（§7.3 `pr_status` テーブル。release-27 で GitHub poller が書き込む）。
  */
 export interface PrStatus {
   id: number
@@ -162,6 +159,11 @@ export interface PrStatus {
   prNumber: number | null
   /** `none`/`awaiting_review`/`changes_requested`/`approved`/`merged`。 */
   state: string
+  /**
+   * Draft PR か（release-27 FR-02）。`state` は Draft でも `'awaiting_review'` のまま
+   * （独立した state 列挙値にはしない設計判断。requirements.md スコープ外を参照）。
+   */
+  isDraft: boolean
   url: string | null
   checkedAt: EpochMs
 }

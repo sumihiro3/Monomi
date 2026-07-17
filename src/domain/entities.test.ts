@@ -83,6 +83,7 @@ describe('domain entities', () => {
       branch: 'main',
       prNumber: null,
       state: 'none',
+      isDraft: false,
       url: null,
       checkedAt: toEpochMs(1),
     }
