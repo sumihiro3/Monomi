@@ -131,7 +131,7 @@ monomi hub devices revoke <id>   # Revoke the token for a device (that device ge
 
 ## Automatic updates (hub & reporter)
 
-Every `monomi` launch checks whether the running hub and the deployed reporter script are on the same version as the CLI you just ran, and keeps them in sync so an `npm install -g monomi-cli` / `npx monomi-cli@latest` upgrade doesn't leave stale processes or scripts behind:
+Every no-argument `monomi` launch checks whether the running hub and the deployed reporter script are on the same version as the CLI you just ran, and keeps them in sync so an `npm install -g monomi-cli` / `npx monomi-cli@latest` upgrade doesn't leave stale processes or scripts behind:
 
 - **Hub** (hub role only): the autostart connectivity check also reads the hub's version and compares it to the CLI's. If the hub is older (or doesn't report a version at all — an older hub build, treated as outdated), it's stopped gracefully (SIGTERM, same as `monomi hub stop`) and restarted on the current version; a notice reports the update. If the hub is newer than the CLI, the hub is left running as-is and a notice asks you to update the CLI instead (e.g. `npx monomi-cli@latest`). If the graceful stop doesn't finish in time, the hub is not force-killed — a warning notice is shown and the outdated hub keeps running (the update is retried on the next launch).
 - **Reporter**: the deployed `~/.monomi/monomi-report.sh` carries a version marker. If it's older than the CLI (or has no marker, from before this feature existed), it's redeployed automatically and a notice reports the update. If the marker already matches the current version, the file is left untouched, so manual edits to an up-to-date reporter are preserved.
@@ -249,15 +249,23 @@ hub_endpoints:
 npm update -g monomi-cli
 ```
 
+If you use `npx`, run `npx monomi-cli@latest` instead.
+
+After upgrading, the next time you run `monomi` with no arguments, it automatically checks and keeps the running hub and deployed reporter script in sync with the CLI's new version (see "Automatic updates (hub & reporter)" above). The hub and reporter themselves do not update immediately — they update on the next no-argument `monomi` launch.
+
 ## Uninstalling
 
 Follow this order (remove `~/.monomi`, which includes the DB and token, last, all at once).
 
+If you set this machine up to run the hub persistently via launchd (the `~/Library/LaunchAgents/com.monomi.hub.plist` LaunchAgent described in "Starting the hub and keeping it running" above), manually run `launchctl unload ~/Library/LaunchAgents/com.monomi.hub.plist` before step 3 below. `monomi hub stop` only sends `SIGTERM` to the hub process — it never touches launchd. Since the LaunchAgent's `KeepAlive` is `true`, launchd restarts the hub immediately after that `SIGTERM`, so skipping the manual `launchctl unload` leaves the hub silently running again right after you think you've stopped it, and you may proceed to `npm uninstall -g` / `rm -rf ~/.monomi` while it's still up. Also delete the plist file itself (step 1) — otherwise it stays behind with `RunAtLoad`/`KeepAlive` set to `true` and launchd keeps trying to relaunch the now-deleted `monomi` binary on every login.
+
 ```sh
-monomi uninstall-hooks       # 1. Remove only the Monomi hooks from Claude Code's settings.json
-monomi hub stop              # 2. Stop the running hub (also runs launchctl unload if it was kept running via launchd)
-npm uninstall -g monomi-cli  # 3. Remove the global package (only if you installed it globally)
-rm -rf ~/.monomi             # 4. Delete all data, including config.yml, the SQLite DB, tokens, and the reporter
+launchctl unload ~/Library/LaunchAgents/com.monomi.hub.plist  # 0. Only if launchd-managed: disable auto-restart first
+rm -f ~/Library/LaunchAgents/com.monomi.hub.plist              # 1. Only if launchd-managed: remove the LaunchAgent plist file
+monomi uninstall-hooks       # 2. Remove only the Monomi hooks from Claude Code's settings.json
+monomi hub stop              # 3. Stop the running hub (SIGTERM; removes the pid file after confirming shutdown)
+npm uninstall -g monomi-cli  # 4. Remove the global package (only if you installed it globally)
+rm -rf ~/.monomi             # 5. Delete all data, including config.yml, the SQLite DB, tokens, and the reporter
 ```
 
 Deleting `~/.monomi` also permanently deletes the SQLite DB holding your run history and the tokens of paired devices. If you share this hub with other devices, check the impact before deleting.
