@@ -131,7 +131,7 @@ async function notify(title, message) {
   const r = await trackedAgent(
     'notify',
     'push 通知を bash で送信してください。手順:\n' +
-      '1. ls ~/.claude/hooks/ で名前に bark を含む送信スクリプトを探す\n' +
+      '1. ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/" で名前に bark を含む送信スクリプトを探す(CLAUDE_CONFIG_DIR 未設定なら ~/.claude)\n' +
       '2. あればスクリプト本体を読んで入力仕様(stdin の JSON キー・引数等)を把握し、それに従って呼び出して通知を送る\n' +
       '3. スクリプトが無い・必要な入力を揃えられない・送信に失敗した場合は、osascript -e \'display notification "<本文>" with title "<タイトル>"\' にフォールバックする\n' +
       '4. どの手段も失敗した場合も異常終了せず sent: false で報告する\n' +
@@ -425,6 +425,31 @@ if (violations.length > 0) {
 }
 log('Gate 0 通過: 作業ツリー・ブランチ・要件・config 版数に問題なし')
 
+// Gate 0.5 の照合基準: 実装開始前の HEAD を記録し、リトライ(2 回目の implement-feature)にも同じ
+// 基準を渡す。1 回目の試行中に無断コミットが起きても、リトライの照合が開始時 HEAD 起点差分で
+// それを拾える。merge-base(baseBranch) 起点にしない理由: no-pr 停止後の同一ブランチ再実行
+// (正規の再開手順)で前回実行がコミットした変更まで実差分に混入し、今回触っていないファイルの
+// 捏造報告が検証済み扱いになってしまうため
+const startHeadReport = await trackedAgent(
+  'implement',
+  'カレントリポジトリで `git rev-parse HEAD` を実行し、出力のコミット SHA を head として返してください。出力の加工・省略・推測は禁止。',
+  {
+    label: '開始時HEAD記録',
+    phase: 'Gate0 事前検査',
+    schema: { type: 'object', required: ['head'], properties: { head: { type: 'string' } } },
+    model: 'haiku',
+  }
+)
+const auditBaseRef =
+  startHeadReport &&
+  typeof startHeadReport.head === 'string' &&
+  /^[0-9a-f]{7,40}$/i.test(startHeadReport.head.trim())
+    ? startHeadReport.head.trim()
+    : null
+if (!auditBaseRef) {
+  log('注: 実装開始時 HEAD を記録できませんでした。Gate 0.5 の照合は HEAD 差分と未追跡ファイルのみで行われます')
+}
+
 // ---- 実装 + Gate 0.5(AC-2): 完了性・捏造疑いの照合。問題があれば 1 回リトライ ----
 
 /** implement-feature の消費エージェント数の概算(下限): 探索2 + 設計1 + 照合1 + 実装項目数。 */
@@ -448,7 +473,7 @@ function implementProblems(r) {
   return problems
 }
 
-let impl = await workflow('implement-feature', { release, config, skipVerify: true })
+let impl = await workflow('implement-feature', { release, config, skipVerify: true, auditBaseRef })
 addConsumption('implement', estimateImplementAgents(impl))
 let gate05Problems = implementProblems(impl)
 if (gate05Problems.length > 0) {
@@ -457,6 +482,7 @@ if (gate05Problems.length > 0) {
     release,
     config,
     skipVerify: true,
+    auditBaseRef,
     scope: `前回実行で未解消の問題の解消に限定: ${gate05Problems.join(' / ')}。既に正しく実装済みの部分は変更しないこと`,
   })
   addConsumption('implement', estimateImplementAgents(impl))

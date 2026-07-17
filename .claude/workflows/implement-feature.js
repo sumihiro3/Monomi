@@ -2,7 +2,7 @@ export const meta = {
   name: 'implement-feature',
   description: 'リリース要件を入力に、探索→設計→実装→検証を行う機能実装パイプライン',
   whenToUse:
-    '確定済み要件を実装するとき。args: {release: "release-1"} でリリース指定、または {task: "..."} で単発タスク指定。スコープを絞る場合は {scope: "..."} を併用。{config: {...}} で設定を直接渡せる。{skipVerify: true} で最終検証(release-check のネスト実行)を省略する(run-release からの起動用)',
+    '確定済み要件を実装するとき。args: {release: "release-1"} でリリース指定、または {task: "..."} で単発タスク指定。スコープを絞る場合は {scope: "..."} を併用。{config: {...}} で設定を直接渡せる。{skipVerify: true} で最終検証(release-check のネスト実行)を省略する(run-release からの起動用)。{auditBaseRef: "<コミットSHA>"} で照合フェーズの基準コミットを指定(run-release が Gate 0.5 リトライ間で基準を保持するために渡す。省略時は実行開始時の HEAD を自分で記録する)',
   phases: [
     { title: '準備', detail: 'config 読込と入力検証', model: 'haiku' },
     { title: '探索', detail: '要件と関連コードの並列調査', model: 'haiku/sonnet' },
@@ -93,6 +93,14 @@ if (config.configVersion !== 1) {
 
 const MODELS = config.models || {}
 
+// 照合フェーズの基準コミット。run-release から渡される(Gate 0.5 リトライでも 1 回目開始時の
+// 基準を保持し、1 回目の試行中の無断コミットをリトライの照合が拾えるようにするため)。
+// 単体実行時は探索フェーズで自分の開始時 HEAD を記録する
+let auditBaseRef =
+  typeof input.auditBaseRef === 'string' && /^[0-9a-f]{7,40}$/i.test(input.auditBaseRef.trim())
+    ? input.auditBaseRef.trim()
+    : null
+
 /**
  * 複雑度スコア(1-10)から実装フェーズのモデルを決める。
  *
@@ -114,7 +122,9 @@ const target = reqPath
 
 // エージェントはカレント作業ディレクトリ(=リポジトリルート)前提で動かす。規約文書は config から取得
 const conventionsDoc = config.conventionsDoc || 'CLAUDE.md'
-const RULES = `リポジトリはカレント作業ディレクトリ。CLAUDE.md と ${conventionsDoc} の規約に従うこと。`
+// git 状態変更の禁止は実障害由来: 実装サブエージェントが無断で git commit すると変更が HEAD 差分
+// から消え、照合フェーズ(run-release Gate 0.5 の入力)で捏造疑いの偽陽性になる
+const RULES = `リポジトリはカレント作業ディレクトリ。CLAUDE.md と ${conventionsDoc} の規約に従うこと。git の状態を変更する操作(git add・git commit・git push・git stash 等)は一切禁止 — 変更はファイル編集のみで作業ツリーに残すこと(コミットは後工程が一括で行う)。`
 
 // 実装完了前の format/lint 自走指示に使う検査コマンド一覧。config.checks (プロジェクト固有値) を
 // そのまま文字列展開するだけで、コマンド文字列自体はソースにハードコードしない。
@@ -132,7 +142,8 @@ const selfCheckInstruction =
     : ''
 
 phase('探索')
-const [reqSummary, codeMap] = await parallel([
+const needHeadCapture = !auditBaseRef
+const [reqSummary, codeMap, headReport] = await parallel([
   () =>
     agent(
       `${RULES}\n${target} と CLAUDE.md を読み、実装すべき要件の要点を返してください: 機能要件(受け入れ基準つき)、スコープ外、未解決事項。原文の構造を保ち簡潔に。`,
@@ -143,7 +154,26 @@ const [reqSummary, codeMap] = await parallel([
       `${RULES}\n${target} に関連する既存コードを調査してください。関連ファイルパス、既存パターン、再利用できる実装、変更が必要になりそうな箇所を報告してください。`,
       { label: 'コード調査', phase: '探索', agentType: 'Explore', model: MODELS.explore || 'sonnet' }
     ),
+  () =>
+    needHeadCapture
+      ? agent(
+          'カレントリポジトリで `git rev-parse HEAD` を実行し、出力のコミット SHA を head として返してください。出力の加工・省略・推測は禁止。',
+          {
+            label: '開始時HEAD記録',
+            phase: '探索',
+            schema: { type: 'object', required: ['head'], properties: { head: { type: 'string' } } },
+            model: 'haiku',
+          }
+        )
+      : Promise.resolve(null),
 ])
+if (needHeadCapture) {
+  const h = headReport && typeof headReport.head === 'string' ? headReport.head.trim() : ''
+  auditBaseRef = /^[0-9a-f]{7,40}$/i.test(h) ? h : null
+  if (!auditBaseRef) {
+    log('注: 実行開始時 HEAD を記録できませんでした。照合は HEAD 差分と未追跡ファイルのみで行います')
+  }
+}
 
 phase('設計')
 
@@ -335,22 +365,60 @@ function normalizePath(p) {
 }
 
 // 実装エージェントが報告したファイルと実際の git 差分を機械照合する(run-release Gate 0.5 の入力)。
-// 新規作成ファイルは git diff に現れないため、未追跡ファイル一覧も併せて実差分とみなす
-const reported = [...new Set(results.flatMap((r) => r.changedFiles).map(normalizePath))]
+// 実差分 = HEAD 差分 ∪ 未追跡ファイル ∪ 実行開始時 HEAD(auditBaseRef) 起点差分。
+// 新規作成ファイルは git diff に現れないため未追跡ファイル一覧を含め、指示に反してエージェントが
+// commit してしまった変更は HEAD 差分から消えるため開始時 HEAD 起点差分で拾う。基準を
+// merge-base(baseBranch) にしない理由: no-pr 停止後の同一ブランチ再実行で前回実行のコミットまで
+// 実差分に混入し、今回触っていないファイルの捏造報告が検証済み扱いになってしまうため
+const reportedRaw = results.flatMap((r) => r.changedFiles)
 const diffReport = await agent(
-  'カレントリポジトリで `git diff --name-only HEAD` と `git ls-files --others --exclude-standard` を実行し、両コマンドの出力を結合・重複除去したファイルパスの配列を files として返してください。出力の加工・省略・推測は禁止。',
+  '読み取り専用の差分照合です。リポジトリの状態を変更するコマンドは実行禁止。カレントリポジトリで以下を実行してください:\n' +
+    '1. `git diff --name-only HEAD` と `git ls-files --others --exclude-standard` を実行する\n' +
+    (auditBaseRef
+      ? `2. \`git diff --name-only ${auditBaseRef}\` も実行する(成功したら auditDiffIncluded: true とする。このコマンドが失敗した場合のみスキップし、auditDiffIncluded: false とする)\n`
+      : '') +
+    '3. 実行した全コマンドの出力ファイルパスを結合・重複除去した配列を files として返す。出力の加工・省略・推測は禁止。\n' +
+    '4. `git rev-parse --show-toplevel` の出力(リポジトリルートの絶対パス)を repoRoot として返す。',
   {
     label: '差分照合',
     phase: '照合',
     schema: {
       type: 'object',
       required: ['files'],
-      properties: { files: { type: 'array', items: { type: 'string' } } },
+      properties: {
+        files: { type: 'array', items: { type: 'string' } },
+        auditDiffIncluded: { type: 'boolean' },
+        repoRoot: { type: 'string' },
+      },
     },
     model: 'haiku',
   }
 )
-const actualDiff = Array.isArray(diffReport?.files) ? diffReport.files.map(normalizePath) : []
+if (auditBaseRef && diffReport && diffReport.auditDiffIncluded !== true) {
+  log('注: 開始時 HEAD 起点の差分が取得できなかったため、HEAD 差分と未追跡ファイルのみで照合します')
+}
+
+// 絶対パス報告の吸収: プロンプト・スキーマで相対パスを要求しても絶対パスで報告される事故が実際に
+// 起きたため、差分照合エージェントが返した repoRoot を接頭辞として機械的に剥がす。repoRoot が
+// 取れない場合は従来どおり(絶対パス報告は unverified = 安全側)。正規化は報告側・実差分側の両方へ
+// 対称に適用する(git 出力は相対パスのため実質 no-op)
+const repoRoot =
+  diffReport && typeof diffReport.repoRoot === 'string'
+    ? diffReport.repoRoot.trim().replace(/\/+$/, '')
+    : null
+
+/** repoRoot 接頭辞つきの絶対パスをリポジトリルート相対へ剥がす(それ以外は素通し)。 */
+function stripRepoRoot(p) {
+  return repoRoot && p.startsWith(repoRoot + '/') ? p.slice(repoRoot.length + 1) : p
+}
+
+/** 照合用の最終正規化: 前後空白 → repoRoot 接頭辞剥がし → 先頭 ./ 除去。 */
+function normalizeForAudit(p) {
+  return normalizePath(stripRepoRoot(p.trim()))
+}
+
+const reported = [...new Set(reportedRaw.map(normalizeForAudit))]
+const actualDiff = Array.isArray(diffReport?.files) ? diffReport.files.map(normalizeForAudit) : []
 const actualSet = new Set(actualDiff)
 // 報告されたのに実差分に現れないファイル = 捏造疑い。差分取得自体に失敗した場合は
 // 検証できないため、安全側に倒して報告された全ファイルを unverified とする
