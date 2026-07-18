@@ -123,6 +123,7 @@ describe('parseConfig overrides', () => {
         nextWait: 12 * H,
         prWait: 48 * H,
       },
+      githubPrPoll: { enabled: true, intervalMs: 5 * 60_000 },
     })
   })
 
@@ -221,6 +222,69 @@ describe('parseConfig auto_update (FR-05)', () => {
     expect(() => parseConfig({ auto_update: 'true' })).toThrow(ZodError)
     expect(() => parseConfig({ auto_update: 1 })).toThrow(ZodError)
     expect(() => parseConfig({ auto_update: null })).toThrow(ZodError)
+  })
+})
+
+describe('parseConfig github_pr_poll (release-27 FR-01 AC-5)', () => {
+  it('defaults to enabled: true and interval: 5m (300000ms) when omitted', () => {
+    const c = parseConfig({})
+    expect(c.githubPrPoll).toEqual({ enabled: true, intervalMs: 5 * 60_000 })
+  })
+
+  it('allows overriding the interval', () => {
+    const c = parseConfig({ github_pr_poll: { interval: '10m' } })
+    expect(c.githubPrPoll).toEqual({ enabled: true, intervalMs: 10 * 60_000 })
+  })
+
+  it('allows disabling via enabled: false', () => {
+    const c = parseConfig({ github_pr_poll: { enabled: false } })
+    expect(c.githubPrPoll).toEqual({ enabled: false, intervalMs: 5 * 60_000 })
+  })
+
+  it('rejects a malformed interval', () => {
+    expect(() => parseConfig({ github_pr_poll: { interval: 'soon' } })).toThrow(ZodError)
+  })
+
+  it('rejects a non-boolean enabled', () => {
+    expect(() => parseConfig({ github_pr_poll: { enabled: 'yes' } })).toThrow(ZodError)
+  })
+
+  // review-changes 修正: 下限を設けないと `0s`/`1ms` 等が素通りし、setInterval のタイトループで
+  // CPU・GitHub API レート制限を消費する（高 severity 所見）。
+  it('rejects an interval of exactly 0s (tight-loop risk)', () => {
+    expect(() => parseConfig({ github_pr_poll: { interval: '0s' } })).toThrow(ZodError)
+  })
+
+  it('rejects a sub-minute interval (e.g. 1ms)', () => {
+    expect(() => parseConfig({ github_pr_poll: { interval: '1ms' } })).toThrow(ZodError)
+  })
+
+  it('rejects a sub-minute interval (e.g. 30s)', () => {
+    expect(() => parseConfig({ github_pr_poll: { interval: '30s' } })).toThrow(ZodError)
+  })
+
+  it('rejects an interval above the 60m upper bound (e.g. 2h)', () => {
+    expect(() => parseConfig({ github_pr_poll: { interval: '2h' } })).toThrow(ZodError)
+  })
+
+  it('accepts the boundary values 1m and 60m', () => {
+    expect(parseConfig({ github_pr_poll: { interval: '1m' } }).githubPrPoll.intervalMs).toBe(60_000)
+    expect(parseConfig({ github_pr_poll: { interval: '60m' } }).githubPrPoll.intervalMs).toBe(
+      60 * 60_000
+    )
+  })
+
+  // review-changes 修正: confused-deputy 対応（reporter が申告した任意の owner/repo を hub 自身の
+  // gh 認証情報で問い合わせてしまう高 severity 所見）の allowlist 設定。
+  it('defaults allowedRepos to undefined (no restriction) when omitted', () => {
+    expect(parseConfig({}).githubPrPoll.allowedRepos).toBeUndefined()
+  })
+
+  it('parses allowed_repos into allowedRepos', () => {
+    const c = parseConfig({
+      github_pr_poll: { allowed_repos: ['acme/widget', 'acme/other'] },
+    })
+    expect(c.githubPrPoll.allowedRepos).toEqual(['acme/widget', 'acme/other'])
   })
 })
 

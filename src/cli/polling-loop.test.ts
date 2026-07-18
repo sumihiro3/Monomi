@@ -43,7 +43,7 @@ function makeRow(id: string): InstanceStatusRow {
       is_stale: false,
       priority: 1,
     },
-    pr: { state: 'none' },
+    pr: { state: 'none', number: null, url: null, is_draft: false },
     session: { id: `sess-${id}`, last_heartbeat_at: null, terminal: null },
     running_work: null,
   }

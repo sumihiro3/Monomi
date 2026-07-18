@@ -32,7 +32,7 @@ function makeRow(over: {
       is_stale: display === 'stale',
       priority: 4,
     },
-    pr: { state: 'none' },
+    pr: { state: 'none', number: null, url: null, is_draft: false },
     session: {
       id: 'sess-1',
       last_heartbeat_at: null,

@@ -22,6 +22,15 @@ export const JA = {
   'status.stale': '放置',
   'status.closed': '終了',
 
+  // pr.*（PR 状態表示ラベル。FR-05c で追加、FR-05d detail-view で使用）
+  'pr.none': 'PR なし',
+  'pr.awaitingReview': 'レビュー待ち',
+  'pr.changesRequested': '修正を要求',
+  'pr.approved': '承認済み',
+  'pr.merged': 'マージ済み',
+  // release-27 FR-05d: draft PR の区別表示（detail-view のみで使用）
+  'pr.draft': 'ドラフト',
+
   // detail.*
   'detail.overview': '概要',
   'detail.eventHistory': 'イベント履歴',

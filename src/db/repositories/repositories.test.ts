@@ -463,6 +463,7 @@ describe('PrStatusRepository', () => {
       branch: 'main',
       prNumber: 1,
       state: 'awaiting_review',
+      isDraft: true,
       url: 'https://example/pr/1',
       checkedAt: toEpochMs(1000),
     })
@@ -471,13 +472,32 @@ describe('PrStatusRepository', () => {
       branch: 'main',
       prNumber: 1,
       state: 'approved',
+      isDraft: false,
       url: 'https://example/pr/1',
       checkedAt: toEpochMs(2000),
     })
 
     expect(updated.state).toBe('approved')
+    expect(updated.isDraft).toBe(false)
     expect(repo.findByProjectBranch(project.id, 'main')?.state).toBe('approved')
     const count = db.prepare('SELECT COUNT(*) c FROM pr_status').get() as { c: number }
     expect(count.c).toBe(1)
+  })
+
+  it('round-trips isDraft: true through upsert and findByProjectBranch (FR-03 AC-3)', () => {
+    const { project } = seedInstance()
+    const repo = new PrStatusRepository(db)
+    repo.upsert({
+      projectId: project.id,
+      branch: 'feature/draft',
+      prNumber: 2,
+      state: 'awaiting_review',
+      isDraft: true,
+      url: 'https://example/pr/2',
+      checkedAt: toEpochMs(1000),
+    })
+
+    const found = repo.findByProjectBranch(project.id, 'feature/draft')
+    expect(found?.isDraft).toBe(true)
   })
 })

@@ -25,6 +25,15 @@ export const EN = {
   'status.stale': 'Stale',
   'status.closed': 'Closed',
 
+  // pr.*（PR 状態表示ラベル。FR-05c で追加、FR-05d detail-view で使用）
+  'pr.none': 'No PR',
+  'pr.awaitingReview': 'Awaiting review',
+  'pr.changesRequested': 'Changes requested',
+  'pr.approved': 'Approved',
+  'pr.merged': 'Merged',
+  // release-27 FR-05d: draft PR の区別表示（detail-view のみで使用）
+  'pr.draft': 'draft',
+
   // detail.*（Agent View Lv.1 詳細ビュー）
   'detail.overview': 'Overview',
   'detail.eventHistory': 'Event History',

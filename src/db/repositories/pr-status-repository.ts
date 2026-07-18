@@ -14,6 +14,7 @@ interface PrStatusRow {
   branch: string
   pr_number: number | null
   state: string
+  is_draft: number
   url: string | null
   checked_at: number
 }
@@ -26,6 +27,7 @@ function toPrStatus(row: PrStatusRow): PrStatus {
     branch: row.branch,
     prNumber: row.pr_number,
     state: row.state,
+    isDraft: Boolean(row.is_draft),
     url: row.url,
     checkedAt: toEpochMs(row.checked_at),
   }
@@ -34,8 +36,7 @@ function toPrStatus(row: PrStatusRow): PrStatus {
 /**
  * `pr_status` テーブルのアクセサ（§7.3）。
  *
- * release-1 は GitHub poller 未実装（§0.4 v1延期）のためテーブルは作成されるが行は増えない。
- * 将来 poller を足したときに使えるよう `(project_id, branch)` UNIQUE の upsert を用意しておく。
+ * release-27 の GitHub poller（FR-01）が `(project_id, branch)` UNIQUE の upsert で書き込む。
  */
 export class PrStatusRepository {
   /** {@link findByProjectBranch} 用の SELECT（FR-08 AC-2: 呼び出しごとの prepare() を避ける）。 */
@@ -48,11 +49,12 @@ export class PrStatusRepository {
       'SELECT * FROM pr_status WHERE project_id = ? AND branch = ?'
     )
     this.upsertStmt = db.prepare(
-      `INSERT INTO pr_status (project_id, branch, pr_number, state, url, checked_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO pr_status (project_id, branch, pr_number, state, is_draft, url, checked_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(project_id, branch) DO UPDATE SET
          pr_number = excluded.pr_number,
          state = excluded.state,
+         is_draft = excluded.is_draft,
          url = excluded.url,
          checked_at = excluded.checked_at`
     )
@@ -82,6 +84,8 @@ export class PrStatusRepository {
       status.branch,
       status.prNumber,
       status.state,
+      // node:sqlite は boolean を直接バインドできないため 0/1 の INTEGER に変換する。
+      status.isDraft ? 1 : 0,
       status.url,
       status.checkedAt
     )

@@ -18,7 +18,7 @@ function row(instanceId: string, display: string, projectId = instanceId): Insta
       is_stale: display === 'stale',
       priority: 0,
     },
-    pr: { state: 'none' },
+    pr: { state: 'none', number: null, url: null, is_draft: false },
     session: { id: `sess-${instanceId}`, last_heartbeat_at: null, terminal: null },
     running_work: null,
   }

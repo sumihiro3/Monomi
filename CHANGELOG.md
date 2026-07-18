@@ -6,8 +6,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- 詳細ビュー（Agent View）の `pr` フィールドが、実際の GitHub PR レビュー状態（レビュー待ち／修正要求／承認済み／マージ済み／なし）を表示するようになった。draft PR には「(ドラフト)」の注記が付く
+- OSC 8 対応端末（Ghostty・iTerm2 等）では、詳細ビューの PR 番号がクリック可能なハイパーリンクになり、クリックするとブラウザで該当 PR が開く
+- `~/.monomi/config.yml` に新設定ブロック `github_pr_poll`（`enabled`／`interval`／`allowed_repos`）を追加。未設定の場合は既定値（有効・5分間隔・allowlist なし）で後方互換動作する
+- `gh` CLI が未導入・未認証の環境では、起動時に警告ログが1回出るのみで既存のダッシュボード動作は変わらない（`pr` は従来どおり `none` に縮退）
+
 ### Fixed
 
+- ダッシュボードの状態集計で `PR_WAIT`（PR レビュー待ち）が実際には一度も発火しなかった不具合を修正。実際の GitHub PR レビュー状態が反映され、対象セッションが正しく「PR レビュー待ち」として表示されるようになった（既知課題 U7 解消）
 - README／README.ja.md の Uninstalling 節にあった事実誤認（`monomi hub stop` が launchd 常駐時に `launchctl unload` も行うという、実装に存在しない挙動の記述）を削除。launchd で hub を常駐化している場合は `monomi hub stop` の前に手動で `launchctl unload ~/Library/LaunchAgents/com.monomi.hub.plist` を実行し、plist ファイルも削除する必要がある旨と、省略すると `KeepAlive: true` により launchd が hub を自動再起動し「止まった」と誤認したままアンインストールが進んでしまう理由を追記（手順は4ステップ→6ステップに変更）
 - README／README.ja.md の Updating 節に、`npx monomi-cli@latest` での更新手段と、`npm update -g` 後も稼働中の hub・配置済み reporter は次回の引数なし `monomi` 起動時まで自動更新されない旨（「Automatic updates (hub & reporter)」節への相互参照）を追記
 - README／README.ja.md の Automatic updates 節冒頭の文言を、毎回の `monomi` 起動で版照合されるかのように読めた表現から、引数なし起動時に限定されることが伝わる表現に修正

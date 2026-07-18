@@ -22,6 +22,7 @@ Pressing `f` while an instance is selected brings that instance's terminal windo
 - The reporter (a bash script that reports status from Claude Code hooks to the hub) assumes bash and runs on macOS / Linux / WSL2
 - Required Node.js version: `>=22.5.0` (matches `engines.node` in `package.json`. Both `npx` and `monomi` check this version at startup and exit with an error if it is not satisfied)
 - Note: with older npm releases such as npm 10.8.2, `npm install -g monomi-cli` can fail with `Exit handler never called!` (a known npm bug). If this happens, update npm to the latest version and retry.
+- Optional: the [`gh` CLI](https://cli.github.com/), authenticated via `gh auth login`, enables GitHub PR review status polling (the `PR_WAIT` status). Without it, the hub logs a one-time warning and falls back to its previous behavior — see "GitHub PR review status" below.
 
 ## Quick start
 
@@ -223,6 +224,15 @@ After adding the setting, restart your Claude Code session.
 - **WSL2**: Windows Terminal window foreground is supported on a best-effort basis. Tab-level focus is not available.
 - **tmux on any platform**: Supported. If tmux is detached, a message will indicate that the session is unreachable.
 
+## GitHub PR review status
+
+The hub polls GitHub for the review status of each active instance's branch, so the dashboard's "waiting for PR review" (`PR_WAIT`) status now actually fires. On every `github_pr_poll.interval` tick (default 5 minutes), it collects the unique `(project, branch)` pairs from active instances whose remote is `github.com`, calls `gh pr list` once per pair, and stores the result.
+
+- Requires the `gh` CLI to be installed and authenticated (`gh auth login`) on the hub machine (see "Requirements" above). If `gh` is missing or not authenticated — at startup or if authentication is later lost — the hub logs a warning once, disables polling, and falls back to its previous behavior (`pr` always shows as none); nothing else is affected.
+- The detail view's `pr` field shows the real state — `Awaiting review` / `Changes requested` / `Approved` / `Merged` / `No PR` — with a `(draft)` suffix for draft PRs. The PR number is shown as a clickable OSC 8 hyperlink on supporting terminals (e.g. Ghostty, iTerm2) that opens the PR in your browser; on other terminals it's shown as plain text.
+- Only PRs with no review decision yet (including drafts) count as `PR_WAIT`; changes-requested, approved, and merged PRs fall back to the dashboard's other statuses instead.
+- Only `github.com` remotes are polled (GitLab, Bitbucket, etc. are out of scope). Use `github_pr_poll` in the configuration table below to change the polling interval, disable polling, or restrict it to an allowlist of repos.
+
 ## Configuration (`~/.monomi/config.yml`)
 
 The CLI's display language defaults to English. To display in Japanese, either explicitly set `locale: ja`, or let it be auto-detected from the OS language setting (on macOS, the system language setting (`AppleLocale`) is preferred, falling back to the `LANG` environment variable only if that can't be obtained; on non-macOS, only `LANG` is used. Existing users upgrading from an older version need to add this setting to keep the Japanese display).
@@ -236,6 +246,9 @@ The CLI's display language defaults to English. To display in Japanese, either e
 | `hub_endpoints`                       | (none)                   | Candidate hub endpoints to try when `role: child` (a priority-ordered block sequence; see example below)                                                                                                                                                 |
 | `device_id`                           | (auto-generated)         | Auto-generated from the hostname at hub startup / pairing time if not specified                                                                                                                                                                          |
 | `auto_update`                         | `true`                   | Whether to automatically keep the hub and the deployed reporter script in sync with the running CLI's version on each `monomi` launch. Set to `false` to only show update notices without applying them (see "Automatic updates (hub & reporter)" above) |
+| `github_pr_poll.enabled`              | `true`                   | Whether the hub polls GitHub for PR review status (see "GitHub PR review status" above). Set to `false` to disable polling entirely                                                                                                                      |
+| `github_pr_poll.interval`             | `5m`                     | Polling interval, between `1m` and `60m`                                                                                                                                                                                                                 |
+| `github_pr_poll.allowed_repos`        | (none — all repos)       | Optional allowlist of `owner/repo` strings restricting which repos are polled (guards against a paired child device causing the hub to query a repo it shouldn't). If unset, every `github.com` remote branch reported by active instances is polled     |
 | `watch_interval`                      | `3s`                     | The dashboard's watch-mode polling interval                                                                                                                                                                                                              |
 | `escalation_thresholds.active`        | `2h`                     | Time until an active session is promoted to idle (stale)                                                                                                                                                                                                 |
 | `escalation_thresholds.approval_wait` | `6h`                     | Time until waiting-for-permission is promoted to idle                                                                                                                                                                                                    |

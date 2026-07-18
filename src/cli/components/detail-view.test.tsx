@@ -23,7 +23,7 @@ function makeRow(): InstanceStatusRow {
       is_stale: false,
       priority: 4,
     },
-    pr: { state: 'none' },
+    pr: { state: 'none', number: null, url: null, is_draft: false },
     session: { id: 'sess-1', last_heartbeat_at: null, terminal: null },
     running_work: null,
   }
@@ -1589,5 +1589,209 @@ describe('DetailView — running フィールドの経過時間表示（release-
     await vi.waitFor(() => {
       expect(findRunningLine(lastFrame() ?? '')).toBe('Running     run-release (workflow)')
     })
+  })
+})
+
+describe('DetailView — pr フィールド（release-27 FR-05d）', () => {
+  it('AC-1: PR 番号・状態ラベル・draft 注記が表示される', async () => {
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'awaiting_review',
+        number: 42,
+        url: 'https://github.com/sumihiro3/Monomi/pull/42',
+        is_draft: true,
+      },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('Awaiting review')
+      expect(frame).toContain('#42')
+      expect(frame).toContain('draft')
+    })
+  })
+
+  it('PR が無い（state: none, number: null）場合はラベルのみで番号を付けない', async () => {
+    // makeRow() の既定値: pr: { state: 'none', number: null, url: null, is_draft: false }
+    const row = makeRow()
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('No PR')
+    })
+    expect(lastFrame() ?? '').not.toContain('#')
+  })
+
+  it('AC-2: url が https://github.com/ で始まらない場合は OSC 8 を生成せずプレーンテキストへフォールバックする', async () => {
+    const esc = String.fromCharCode(27)
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'approved',
+        number: 7,
+        url: 'https://evil.example.com/pull/7',
+        is_draft: false,
+      },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('Approved')
+      expect(frame).toContain('#7')
+    })
+    expect(lastFrame() ?? '').not.toContain(`${esc}]8;;`)
+  })
+
+  it('AC-2: url が null の場合も OSC 8 を生成せずプレーンテキストで番号のみ表示する', async () => {
+    const esc = String.fromCharCode(27)
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      pr: { state: 'merged', number: 99, url: null, is_draft: false },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('Merged')
+      expect(frame).toContain('#99')
+    })
+    expect(lastFrame() ?? '').not.toContain(`${esc}]8;;`)
+  })
+
+  it('AC-3: 非TTY（rows 未取得）でも pr フィールドが壊れず PR 番号・状態が表示される', async () => {
+    // release-6 の非TTY検証（DetailView — 非TTY（rows 未取得）の固定行フォールバック）と同じ
+    // MinimalNonTtyStdout/TtyStdin/NullStderr のパターンを再利用する。
+    class MinimalNonTtyStdout extends EventEmitter {
+      columns: number | undefined = undefined
+      rows: number | undefined = undefined
+      isTTY: boolean | undefined = undefined
+      frames: string[] = []
+      write(frame: string): void {
+        this.frames.push(frame)
+      }
+    }
+    class TtyStdin extends EventEmitter {
+      isTTY = true
+      setEncoding(): void {}
+      setRawMode(): void {}
+      resume(): void {}
+      pause(): void {}
+      ref(): void {}
+      unref(): void {}
+      read(): null {
+        return null
+      }
+    }
+    class NullStderr extends EventEmitter {
+      write(): void {}
+    }
+
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'changes_requested',
+        number: 5,
+        url: 'https://github.com/sumihiro3/Monomi/pull/5',
+        is_draft: false,
+      },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const stdout = new MinimalNonTtyStdout()
+    const { unmount } = inkRender(
+      <DetailView client={asClient(fake)} row={row} pollIntervalMs={30} />,
+      {
+        stdout: stdout as unknown as NodeJS.WriteStream,
+        stderr: new NullStderr() as unknown as NodeJS.WriteStream,
+        stdin: new TtyStdin() as unknown as NodeJS.ReadStream,
+        exitOnCtrlC: false,
+        patchConsole: false,
+      }
+    )
+    await new Promise((resolve) => setTimeout(resolve, 120))
+    unmount()
+    const frame = stdout.frames[stdout.frames.length - 1] ?? ''
+
+    expect(frame).toContain('Changes requested')
+    expect(frame).toContain('#5')
+    // ヘッダー・イベント履歴 BOX も通常どおり描画され、pr フィールドの追加が他の表示を壊さない。
+    expect(frame).toContain('Overview')
+    expect(frame).toContain('Event History')
+  })
+
+  it('locale: ja では PR ラベル・draft 注記が日本語で描画される', async () => {
+    setActiveLocale('ja')
+    const row: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'awaiting_review',
+        number: 10,
+        url: 'https://github.com/sumihiro3/Monomi/pull/10',
+        is_draft: true,
+      },
+    }
+    const fake = new FakeDetailClient(() => makeDetail(row, []))
+    const { lastFrame } = renderDetail(fake, row)
+
+    await vi.waitFor(() => {
+      const frame = lastFrame() ?? ''
+      expect(frame).toContain('レビュー待ち')
+      expect(frame).toContain('#10')
+      expect(frame).toContain('ドラフト')
+    })
+  })
+
+  it('実際にリンク化される（isLinkableGithubUrl）場合のみ PR 番号に cyan + underline を付ける（ユーザー実機検証: OSC 8 だけでは端末上でリンクだと分からない所見への対応）', async () => {
+    const esc = String.fromCharCode(27)
+    const linkableRow: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'awaiting_review',
+        number: 30,
+        url: 'https://github.com/sumihiro3/Monomi/pull/30',
+        is_draft: true,
+      },
+    }
+    const { lastFrame: linkableFrame } = renderDetail(
+      new FakeDetailClient(() => makeDetail(linkableRow, [])),
+      linkableRow
+    )
+
+    await vi.waitFor(() => {
+      const frame = linkableFrame() ?? ''
+      expect(frame).toContain('#30')
+      // chalk の cyan 前景色（SGR 36）と underline（SGR 4）が付与されていること。
+      expect(frame).toContain(`${esc}[36m`)
+      expect(frame).toContain(`${esc}[4m`)
+    })
+
+    const nonLinkableRow: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'approved',
+        number: 7,
+        url: 'https://evil.example.com/pull/7',
+        is_draft: false,
+      },
+    }
+    const { lastFrame: nonLinkableFrame } = renderDetail(
+      new FakeDetailClient(() => makeDetail(nonLinkableRow, [])),
+      nonLinkableRow
+    )
+
+    await vi.waitFor(() => {
+      const frame = nonLinkableFrame() ?? ''
+      expect(frame).toContain('#7')
+    })
+    // リンク化されない（プレーンテキストへフォールバックする）番号には、リンクに見せる装飾を
+    // 付けない（実際にはクリックできないものをクリックできるように見せないため）。
+    expect(nonLinkableFrame() ?? '').not.toContain(`${esc}[36m`)
   })
 })
