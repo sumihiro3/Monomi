@@ -3,7 +3,6 @@ import { type ReactElement, type ReactNode, useEffect, useMemo, useState } from 
 import type {
   InstanceDetail,
   InstanceStatusRow,
-  PrDto,
   RecentEventDto,
   RunningWorkDto,
 } from '../../hub/dto.js'
@@ -19,7 +18,7 @@ import {
   wrapAwareWindowForTexts,
 } from '../event-scroll.js'
 import type { HubApiClient } from '../hub-api-client.js'
-import { toOsc8Hyperlink } from '../osc8-hyperlink.js'
+import { isLinkableGithubUrl, toOsc8Hyperlink } from '../osc8-hyperlink.js'
 import { PollingLoop } from '../polling-loop.js'
 import { sanitizeDisplayText, sanitizeNullableDisplayText } from '../sanitize-display-text.js'
 import {
@@ -340,10 +339,25 @@ export function DetailView({
           </Text>
         </Field>
         {/* release-27 FR-05d: i18n ラベル（pr.*、FR-05c）+ draft 注記 + PR 番号の OSC 8
-            ハイパーリンク化（FR-05b）を formatPr でまとめて組み立てる。number が無い（PR 未検出）
-            場合は番号を付けず、ラベルのみ表示する。 */}
+            ハイパーリンク化（FR-05b）を組み立てる。number が無い（PR 未検出）場合は番号を付けず、
+            ラベルのみ表示する。OSC 8 は多くの端末でクリック可能にするだけで見た目を変えないため
+            （ユーザー実機検証で「リンクだと分からない」ことが判明）、実際にリンク化される場合
+            （{@link isLinkableGithubUrl} が真）のみ cyan + underline を重ねてクリック可能だと
+            分かるようにする。プレーンテキストへフォールバックする場合は装飾も付けない
+            （リンクでないものをリンクに見せないため）。 */}
         <Field label="pr">
-          <Text>{formatPr(source.pr)}</Text>
+          <Text>
+            {prStateLabel(source.pr.state)}
+            {source.pr.number !== null ? (
+              <Text
+                color={isLinkableGithubUrl(source.pr.url) ? 'cyan' : undefined}
+                underline={isLinkableGithubUrl(source.pr.url)}
+              >
+                {` ${toOsc8Hyperlink(`#${source.pr.number}`, source.pr.url)}`}
+              </Text>
+            ) : null}
+            {source.pr.is_draft ? ` (${t('pr.draft')})` : ''}
+          </Text>
         </Field>
       </Box>
 
@@ -571,27 +585,6 @@ const PR_STATE_LABEL_KEYS: Record<string, TranslationKey> = {
 function prStateLabel(state: string): string {
   const key = PR_STATE_LABEL_KEYS[state]
   return key ? t(key) : sanitizeDisplayText(state)
-}
-
-/**
- * 概要 BOX の `pr` フィールド表示文字列を組み立てる（release-27 FR-05d AC-1・AC-2・AC-3）。
- *
- * i18n ラベル（`pr.*`、FR-05c）を先頭に置き、PR が存在する（`number !== null`）場合のみ
- * `#<number>` を付記する（AC-1）。番号は {@link toOsc8Hyperlink}（FR-05b）で OSC 8
- * ハイパーリンク化を試みる——`url` が `https://github.com/` で始まらない（未検証）場合は
- * 生成側が自動的にプレーンテキストの番号表示へフォールバックするため、ここでは呼ぶだけでよい
- * （AC-2）。フォールバック時・非TTY端末でも `toOsc8Hyperlink` は素の文字列（または通常の
- * エスケープ付き文字列）を返すだけで例外を投げないため、描画が壊れることはない（AC-3）。
- * `is_draft: true` のときは末尾に ` (draft 訳語)` を付けて区別表示する（AC-1）。
- *
- * @param pr wire の {@link PrDto}。
- * @returns 表示用文字列。
- */
-function formatPr(pr: PrDto): string {
-  const label = prStateLabel(pr.state)
-  const numberSuffix = pr.number === null ? '' : ` ${toOsc8Hyperlink(`#${pr.number}`, pr.url)}`
-  const draftSuffix = pr.is_draft ? ` (${t('pr.draft')})` : ''
-  return `${label}${numberSuffix}${draftSuffix}`
 }
 
 /**

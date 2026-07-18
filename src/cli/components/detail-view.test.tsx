@@ -1747,4 +1747,51 @@ describe('DetailView — pr フィールド（release-27 FR-05d）', () => {
       expect(frame).toContain('ドラフト')
     })
   })
+
+  it('実際にリンク化される（isLinkableGithubUrl）場合のみ PR 番号に cyan + underline を付ける（ユーザー実機検証: OSC 8 だけでは端末上でリンクだと分からない所見への対応）', async () => {
+    const esc = String.fromCharCode(27)
+    const linkableRow: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'awaiting_review',
+        number: 30,
+        url: 'https://github.com/sumihiro3/Monomi/pull/30',
+        is_draft: true,
+      },
+    }
+    const { lastFrame: linkableFrame } = renderDetail(
+      new FakeDetailClient(() => makeDetail(linkableRow, [])),
+      linkableRow
+    )
+
+    await vi.waitFor(() => {
+      const frame = linkableFrame() ?? ''
+      expect(frame).toContain('#30')
+      // chalk の cyan 前景色（SGR 36）と underline（SGR 4）が付与されていること。
+      expect(frame).toContain(`${esc}[36m`)
+      expect(frame).toContain(`${esc}[4m`)
+    })
+
+    const nonLinkableRow: InstanceStatusRow = {
+      ...makeRow(),
+      pr: {
+        state: 'approved',
+        number: 7,
+        url: 'https://evil.example.com/pull/7',
+        is_draft: false,
+      },
+    }
+    const { lastFrame: nonLinkableFrame } = renderDetail(
+      new FakeDetailClient(() => makeDetail(nonLinkableRow, [])),
+      nonLinkableRow
+    )
+
+    await vi.waitFor(() => {
+      const frame = nonLinkableFrame() ?? ''
+      expect(frame).toContain('#7')
+    })
+    // リンク化されない（プレーンテキストへフォールバックする）番号には、リンクに見せる装飾を
+    // 付けない（実際にはクリックできないものをクリックできるように見せないため）。
+    expect(nonLinkableFrame() ?? '').not.toContain(`${esc}[36m`)
+  })
 })
