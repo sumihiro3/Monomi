@@ -9,6 +9,7 @@ import { FocusService } from './cli/focus/focus-service.js'
 import { GhosttyStrategy } from './cli/focus/ghostty-strategy.js'
 import { TerminalAppStrategy } from './cli/focus/terminal-app-strategy.js'
 import { TmuxFocusStrategy } from './cli/focus/tmux-strategy.js'
+import { WeztermFocusStrategy } from './cli/focus/wezterm-strategy.js'
 import { WslFocusStrategy } from './cli/focus/wsl-strategy.js'
 import { createHubApiClient, createHubConnection } from './cli/hub-api-client.js'
 import { ensureHubRunning as ensureHubRunningImpl } from './cli/hub-autostart.js'
@@ -169,14 +170,27 @@ function resolveLocalDeviceId(): string {
 
 /**
  * 実ターミナルへフォーカスを移す既定の {@link FocusService} を組み立てる（release-23-terminal-focus
- * FR-04d）。darwin 総当たり対象は Terminal.app・Ghostty、tmux/WSL2 はそれぞれ専用 strategy。
- * 各 strategy は `exec` 省略時に実 `execFile` ベースの既定実装を使う（テストでのみ差し替える）。
+ * FR-04d、release-28-wezterm-focus FR-04 で WezTerm 対応を追加）。darwin 総当たり対象は
+ * Terminal.app・Ghostty・WezTerm、tmux/WSL2 はそれぞれ専用 strategy。WSL2 interop 経由
+ * （`wezterm.exe`）とネイティブ Linux（`wezterm`）は呼び出すバイナリが異なるため、`WeztermFocusStrategy`
+ * を command 違いで別インスタンス配線する。各 strategy は `exec`/`execFile` 省略時に実 `execFile`
+ * ベースの既定実装を使う（テストでのみ差し替える）。
  */
 function createDefaultFocusService(): FocusService {
   return new FocusService({
-    darwinStrategies: [new TerminalAppStrategy(), new GhosttyStrategy()],
+    darwinStrategies: [
+      new TerminalAppStrategy(),
+      new GhosttyStrategy(),
+      new WeztermFocusStrategy('wezterm'),
+    ],
     tmuxStrategy: new TmuxFocusStrategy(),
     wslStrategy: new WslFocusStrategy(),
+    // verifyActivation: true — WSL interop 経由の呼び出しは exit 0 でもサイレント失敗しうる
+    // （upstream wezterm/wezterm discussions #6964、requirements.md 未解決事項）ため、
+    // activate-pane 後に `cli list` で対象 pane の実在を確認し、確認できなければ既存の
+    // Windows Terminal フォールバックへ進める（review-changes 修正）。
+    weztermWslStrategy: new WeztermFocusStrategy('wezterm.exe', { verifyActivation: true }),
+    weztermStrategy: new WeztermFocusStrategy('wezterm'),
   })
 }
 

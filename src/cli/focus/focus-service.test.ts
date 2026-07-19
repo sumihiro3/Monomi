@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { defaultIsWsl, FocusService } from './focus-service.js'
 import type { FocusResult, FocusTarget, Strategy, TmuxStrategy, WslStrategy } from './types.js'
+import { WeztermFocusStrategy } from './wezterm-strategy.js'
 
 /** テスト用に {@link FocusTarget} を組み立てる（未指定フィールドは既定で null）。 */
 function makeTarget(overrides: Partial<FocusTarget> = {}): FocusTarget {
@@ -11,6 +12,7 @@ function makeTarget(overrides: Partial<FocusTarget> = {}): FocusTarget {
     tmuxSocket: null,
     wslDistro: null,
     wtSession: null,
+    weztermPane: null,
     ...overrides,
   }
 }
@@ -31,7 +33,7 @@ function mockStrategy(
 ): Strategy & { focus: ReturnType<typeof vi.fn>; matchesHint: ReturnType<typeof vi.fn> } {
   return {
     matchesHint: vi.fn(() => matchesHint),
-    focus: vi.fn(async (_tty: string) => {
+    focus: vi.fn(async (_target: FocusTarget) => {
       calls.push(name)
       if (outcome instanceof Error) {
         throw outcome
@@ -147,7 +149,11 @@ describe('FocusService.focus (FR-04d AC-6)', () => {
     )
 
     expect(result).toBe('ok')
-    expect(darwinStrategy.focus).toHaveBeenCalledWith('/dev/ttys777')
+    // strategy 側は target.tty を参照するため、tmux 切替後の外側クライアント TTY へ差し替えた
+    // target が渡ることを確認する（release-28-wezterm-focus FR-04-pre）。
+    expect(darwinStrategy.focus).toHaveBeenCalledWith(
+      makeTarget({ tmuxPane: '%3', tty: '/dev/ttys777' })
+    )
   })
 
   it('treats a tmux switch success without a resolvable tty as no_terminal', async () => {
@@ -341,6 +347,215 @@ describe('FocusService.focus (FR-04d AC-6)', () => {
 
     expect(result).toBe('unsupported_platform')
     expect(wsl.focus).not.toHaveBeenCalled()
+  })
+})
+
+describe('FocusService.focus - WezTerm dispatch (release-28-wezterm-focus FR-04)', () => {
+  it('tries weztermWslStrategy first on WSL2 when weztermPane is present, and skips the Windows Terminal fallback on success', async () => {
+    const weztermWsl = mockStrategy('weztermWsl', false, 'ok')
+    const wsl = mockWslStrategy('ok')
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: wsl,
+      weztermWslStrategy: weztermWsl,
+      platform: 'linux',
+      isWsl: () => true,
+    })
+
+    const result = await service.focus(makeTarget({ tty: '/dev/pts/3', weztermPane: '3' }))
+
+    expect(result).toBe('ok')
+    expect(weztermWsl.focus).toHaveBeenCalledWith(
+      makeTarget({ tty: '/dev/pts/3', weztermPane: '3' })
+    )
+    expect(wsl.focus).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the Windows Terminal wslStrategy when weztermWslStrategy fails on WSL2', async () => {
+    const weztermWsl = mockStrategy('weztermWsl', false, 'not_found')
+    const wsl = mockWslStrategy('ok')
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: wsl,
+      weztermWslStrategy: weztermWsl,
+      platform: 'linux',
+      isWsl: () => true,
+    })
+
+    const result = await service.focus(makeTarget({ tty: '/dev/pts/3', weztermPane: '3' }))
+
+    expect(result).toBe('ok')
+    expect(weztermWsl.focus).toHaveBeenCalledTimes(1)
+    expect(wsl.focus).toHaveBeenCalledWith('/dev/pts/3')
+  })
+
+  it('goes straight to the wslStrategy fallback on WSL2 when weztermPane is absent, even with weztermWslStrategy configured', async () => {
+    const weztermWsl = mockStrategy('weztermWsl', false, 'ok')
+    const wsl = mockWslStrategy('ok')
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: wsl,
+      weztermWslStrategy: weztermWsl,
+      platform: 'linux',
+      isWsl: () => true,
+    })
+
+    const result = await service.focus(makeTarget({ tty: '/dev/pts/3' }))
+
+    expect(result).toBe('ok')
+    expect(weztermWsl.focus).not.toHaveBeenCalled()
+    expect(wsl.focus).toHaveBeenCalledWith('/dev/pts/3')
+  })
+
+  it('focuses via weztermStrategy on native Linux when weztermPane is present', async () => {
+    const wezterm = mockStrategy('wezterm', false, 'ok')
+    const wsl = mockWslStrategy('error')
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: wsl,
+      weztermStrategy: wezterm,
+      platform: 'linux',
+      isWsl: () => false,
+    })
+
+    const result = await service.focus(makeTarget({ tty: '/dev/pts/3', weztermPane: '3' }))
+
+    expect(result).toBe('ok')
+    expect(wezterm.focus).toHaveBeenCalledWith(makeTarget({ tty: '/dev/pts/3', weztermPane: '3' }))
+    expect(wsl.focus).not.toHaveBeenCalled()
+  })
+
+  it('returns unsupported_platform on native Linux when weztermPane is absent, even with weztermStrategy configured', async () => {
+    const wezterm = mockStrategy('wezterm', false, 'ok')
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: mockWslStrategy('error'),
+      weztermStrategy: wezterm,
+      platform: 'linux',
+      isWsl: () => false,
+    })
+
+    const result = await service.focus(makeTarget({ tty: '/dev/pts/3' }))
+
+    expect(result).toBe('unsupported_platform')
+    expect(wezterm.focus).not.toHaveBeenCalled()
+  })
+
+  it('rounds an unexpected weztermStrategy exception to error on native Linux', async () => {
+    const wezterm = mockStrategy('wezterm', false, new Error('wezterm cli exploded'))
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: mockWslStrategy('error'),
+      weztermStrategy: wezterm,
+      platform: 'linux',
+      isWsl: () => false,
+    })
+
+    const result = await service.focus(makeTarget({ tty: '/dev/pts/3', weztermPane: '3' }))
+
+    expect(result).toBe('error')
+  })
+
+  it('prefers the WezTerm strategy on darwin when term_program hints WezTerm', async () => {
+    const calls: string[] = []
+    const terminalApp = mockStrategy('terminalApp', false, 'ok', calls)
+    const wezterm = mockStrategy('wezterm', true, 'ok', calls)
+    const service = makeDarwinService({ darwinStrategies: [terminalApp, wezterm] })
+
+    const result = await service.focus(
+      makeTarget({ tty: '/dev/ttys003', termProgram: 'WezTerm', weztermPane: '3' })
+    )
+
+    expect(result).toBe('ok')
+    expect(calls).toEqual(['wezterm'])
+    expect(terminalApp.focus).not.toHaveBeenCalled()
+  })
+
+  it('does not short-circuit to no_terminal when tty is null but weztermPane is present (review-changes fix)', async () => {
+    const wezterm = mockStrategy('wezterm', false, 'ok')
+    const service = makeDarwinService({ darwinStrategies: [wezterm] })
+
+    const result = await service.focus(makeTarget({ tty: null, weztermPane: '3' }))
+
+    expect(result).toBe('ok')
+    expect(wezterm.focus).toHaveBeenCalledWith(makeTarget({ tty: null, weztermPane: '3' }))
+  })
+
+  it('goes straight to the weztermStrategy on native Linux when tty is null but weztermPane is present', async () => {
+    const wezterm = mockStrategy('wezterm', false, 'ok')
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: mockWslStrategy('error'),
+      weztermStrategy: wezterm,
+      platform: 'linux',
+      isWsl: () => false,
+    })
+
+    const result = await service.focus(makeTarget({ tty: null, weztermPane: '3' }))
+
+    expect(result).toBe('ok')
+    expect(wezterm.focus).toHaveBeenCalledWith(makeTarget({ tty: null, weztermPane: '3' }))
+  })
+
+  it('nulls out weztermPane after a tmux switch so WezTerm pane-level focus is not attempted on the (possibly stale) pre-switch pane id (review-changes fix)', async () => {
+    const tmux = mockTmuxStrategy({ result: 'ok', tty: '/dev/ttys777' })
+    const calls: string[] = []
+    const terminalApp = mockStrategy('terminalApp', false, 'ok', calls)
+    const wezterm = mockStrategy('wezterm', false, 'ok', calls)
+    const service = makeDarwinService({
+      darwinStrategies: [terminalApp, wezterm],
+      tmuxStrategy: tmux,
+    })
+
+    const result = await service.focus(
+      makeTarget({ tmuxPane: '%3', tty: '/dev/ttys001-inner-pts', weztermPane: '5' })
+    )
+
+    expect(result).toBe('ok')
+    // 配列先頭の terminalApp が呼ばれ、weztermPane は null に縮退した target を受け取る
+    // （元の '5' のまま渡ると tmux 内側で捕捉した値を外側判定へ誤って使い回すことになる）。
+    expect(calls).toEqual(['terminalApp'])
+    expect(terminalApp.focus).toHaveBeenCalledWith(
+      makeTarget({ tmuxPane: '%3', tty: '/dev/ttys777', weztermPane: null })
+    )
+    expect(wezterm.focus).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the Windows Terminal wslStrategy on WSL2 when the real WeztermFocusStrategy execFile hangs past its timeout', async () => {
+    // wezterm-strategy.ts の in-flight/timeout 対応（review-changes 修正）が focus-service の
+    // 既存フォールバックと組み合わさって実際に機能することを確認する統合テスト。
+    const timeoutError = Object.assign(new Error('command timed out'), {
+      killed: true,
+      signal: 'SIGTERM',
+    })
+    const execFile = vi.fn(async () => {
+      throw timeoutError
+    })
+    const weztermWsl = new WeztermFocusStrategy('wezterm.exe', {
+      execFile,
+      verifyActivation: true,
+    })
+    const wsl = mockWslStrategy('ok')
+    const service = new FocusService({
+      darwinStrategies: [],
+      tmuxStrategy: mockTmuxStrategy(new Error('unused')),
+      wslStrategy: wsl,
+      weztermWslStrategy: weztermWsl,
+      platform: 'linux',
+      isWsl: () => true,
+    })
+
+    const result = await service.focus(makeTarget({ tty: '/dev/pts/3', weztermPane: '3' }))
+
+    expect(result).toBe('ok')
+    expect(wsl.focus).toHaveBeenCalledWith('/dev/pts/3')
   })
 })
 

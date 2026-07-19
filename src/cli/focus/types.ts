@@ -45,6 +45,8 @@ export interface FocusTarget {
   wslDistro: string | null
   /** `$WT_SESSION`。データ保持のみ（タブ単位フォーカスはスコープ外）。 */
   wtSession: string | null
+  /** 検証済み WezTerm pane id（`wezterm cli activate-pane --pane-id` 用）。不明・検証不合格は `null`。 */
+  weztermPane: string | null
 }
 
 /**
@@ -67,12 +69,20 @@ export interface Strategy {
   matchesHint(target: FocusTarget): boolean
 
   /**
-   * 検証済み TTY へフォーカスを試みる。
+   * 検証済みフォーカス対象へフォーカスを試みる（release-28-wezterm-focus FR-04-pre）。
    *
-   * @param tty 検証済み TTY（例 `/dev/ttys003`）。
+   * `WeztermFocusStrategy`（release-28 FR-03/FR-04 以降）は tty ではなく `target.weztermPane`
+   * を必要とするため、`tty` 単独ではなく検証済み {@link FocusTarget} 全体を受け取る形に統一する。
+   * `tty` のみを使う実装（`TerminalAppStrategy`・`GhosttyStrategy`）は `target.tty` が `null`
+   * （reporter が TTY を解決できなかった場合。`weztermPane` のみ有効なケースを含む）なら自身で
+   * `not_found` を返す（`focus-service.ts` は tty 単独では総当たりを止めないため、`tty !== null`
+   * の保証はしない。各 strategy がフィールドごとに自身の前提を検証する、release-28-wezterm-focus
+   * 所見対応）。
+   *
+   * @param target 検証済みフォーカス対象。
    * @returns フォーカス結果。
    */
-  focus(tty: string): Promise<FocusResult>
+  focus(target: FocusTarget): Promise<FocusResult>
 }
 
 /**
