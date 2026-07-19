@@ -674,7 +674,7 @@ main() {
   # --- ターミナル特定情報の捕捉（FR-01） -----------------------------------
   # 毎フックで捕捉する（--resume で同一 session_id が別 TTY で再開しうるため
   # SessionStart 限定は不可）。コストは ps 最大数回 + 環境変数参照のみ（AC-4）。
-  local term_tty term_program tmux_pane tmux_socket wsl_distro wt_session
+  local term_tty term_program tmux_pane tmux_socket wsl_distro wt_session wezterm_pane
   term_tty=$(resolve_tty)
   term_program="${TERM_PROGRAM:-}"
   tmux_pane=''
@@ -685,6 +685,7 @@ main() {
   fi
   wsl_distro="${WSL_DISTRO_NAME:-}"
   wt_session="${WT_SESSION:-}"
+  wezterm_pane="${WEZTERM_PANE:-}"
 
   # --- occurred_at（ISO8601 Z、§0.5） -------------------------------------
   local occurred_at
@@ -714,6 +715,7 @@ main() {
       --arg tmux_socket "$tmux_socket" \
       --arg wsl_distro "$wsl_distro" \
       --arg wt_session "$wt_session" \
+      --arg wezterm_pane "$wezterm_pane" \
       '{
         device_id: $device_id,
         session_id: $session_id,
@@ -735,13 +737,14 @@ main() {
           tmux_pane: (if $tmux_pane == "" then null else $tmux_pane end),
           tmux_socket: (if $tmux_socket == "" then null else $tmux_socket end),
           wsl_distro: (if $wsl_distro == "" then null else $wsl_distro end),
-          wt_session: (if $wt_session == "" then null else $wt_session end)
+          wt_session: (if $wt_session == "" then null else $wt_session end),
+          wezterm_pane: (if $wezterm_pane == "" then null else $wezterm_pane end)
         }
       }' >"$body_file" 2>/dev/null
   else
     # bash フォールバックで JSON を手組み（null は無引用、文字列はエスケープ）。
     local j_remote j_branch j_common j_subtype j_toolname j_toolsummary
-    local j_term_tty j_term_program j_tmux_pane j_tmux_socket j_wsl_distro j_wt_session
+    local j_term_tty j_term_program j_tmux_pane j_tmux_socket j_wsl_distro j_wt_session j_wezterm_pane
     if [ -n "$remote_url" ]; then j_remote="\"$(json_escape "$remote_url")\""; else j_remote='null'; fi
     if [ -n "$branch" ]; then j_branch="\"$(json_escape "$branch")\""; else j_branch='null'; fi
     if [ -n "$common_dir" ]; then j_common="\"$(json_escape "$common_dir")\""; else j_common='null'; fi
@@ -754,6 +757,7 @@ main() {
     if [ -n "$tmux_socket" ]; then j_tmux_socket="\"$(json_escape "$tmux_socket")\""; else j_tmux_socket='null'; fi
     if [ -n "$wsl_distro" ]; then j_wsl_distro="\"$(json_escape "$wsl_distro")\""; else j_wsl_distro='null'; fi
     if [ -n "$wt_session" ]; then j_wt_session="\"$(json_escape "$wt_session")\""; else j_wt_session='null'; fi
+    if [ -n "$wezterm_pane" ]; then j_wezterm_pane="\"$(json_escape "$wezterm_pane")\""; else j_wezterm_pane='null'; fi
     {
       printf '{'
       printf '"device_id":"%s",' "$(json_escape "$device_id")"
@@ -776,7 +780,8 @@ main() {
       printf '"tmux_pane":%s,' "$j_tmux_pane"
       printf '"tmux_socket":%s,' "$j_tmux_socket"
       printf '"wsl_distro":%s,' "$j_wsl_distro"
-      printf '"wt_session":%s' "$j_wt_session"
+      printf '"wt_session":%s,' "$j_wt_session"
+      printf '"wezterm_pane":%s' "$j_wezterm_pane"
       printf '}'
       printf '}'
     } >"$body_file"
