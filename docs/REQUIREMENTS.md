@@ -32,8 +32,9 @@ Claude Code のフック発火時に、bash レポーターが instance／sessio
 - 状態が閾値（既定: active は 2 時間、config で上書き可）を超えて継続すると「放置（stale）」へ昇格する。
 - instance 配下に複数セッションがある場合、優先度が最も高いセッションの状態を instance の代表ステータスとして返す（ロールアップ）。
 - セッションが稼働中（`active`）の間、`tool_name`/`tool_summary` から「実行中の作業名（`running_work`）」（Workflow／Agent／Skill 名。Workflow を優先）を導出し、一覧・詳細の両 API に返す。稼働中でなくなったら消える。
+- hub が `github.com` 上の instance のブランチを対象に GitHub の PR レビュー状態を定期ポーリング（既定 5 分間隔、`gh` CLI 経由）し、レビュー未着手であれば「PR レビュー待ち（`PR_WAIT`）」へ昇格させる。詳細ビューには PR 番号・状態・draft 注記を表示し、対応端末では PR 番号がクリック可能なリンクになる。
 
-詳細: [release-1-single-machine-wedge](releases/release-1-single-machine-wedge/requirements.md) / [release-3-multi-device-pairing](releases/release-3-multi-device-pairing/requirements.md) / [release-16-running-work-display](releases/release-16-running-work-display/requirements.md)
+詳細: [release-1-single-machine-wedge](releases/release-1-single-machine-wedge/requirements.md) / [release-3-multi-device-pairing](releases/release-3-multi-device-pairing/requirements.md) / [release-16-running-work-display](releases/release-16-running-work-display/requirements.md) / [release-27-github-pr-poller](releases/release-27-github-pr-poller/requirements.md)
 
 ## マルチデバイスペアリング・認証
 
