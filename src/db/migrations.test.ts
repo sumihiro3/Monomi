@@ -48,6 +48,7 @@ const TERMINAL_COLUMNS = [
   'tmux_socket',
   'wsl_distro',
   'wt_session',
+  'wezterm_pane',
   'terminal_seen_at',
 ]
 

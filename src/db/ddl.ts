@@ -22,6 +22,11 @@
  * - `pr_status` テーブルに `is_draft INTEGER NOT NULL DEFAULT 0` を追加。GitHub poller
  *   が Draft PR かどうかを永続化するため。既存 DB への列追加は release-23 と同様
  *   `./migrations.js` の `applyMigrations()` が担う。
+ *
+ * release-28（FR-02）からの意図的な差分:
+ * - `sessions` テーブルに `wezterm_pane TEXT` を追加。reporter が捕捉した
+ *   `$WEZTERM_PANE`（WezTerm ペイン単位フォーカス用）を保持するため。既存 DB への
+ *   列追加は release-23/27 と同様 `./migrations.js` の `applyMigrations()` が担う。
  */
 export const DDL = `
 -- デバイス（レポート送信元）
@@ -69,6 +74,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   tmux_socket       TEXT,
   wsl_distro        TEXT,
   wt_session        TEXT,
+  wezterm_pane      TEXT,
   terminal_seen_at  INTEGER
 );
 

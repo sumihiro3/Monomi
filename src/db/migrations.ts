@@ -36,7 +36,8 @@ interface TableMigration {
  */
 const TABLE_MIGRATIONS: readonly TableMigration[] = [
   {
-    // release-23（FR-02a）で追加された reporter 捕捉のターミナル特定情報。
+    // release-23（FR-02a）で追加された reporter 捕捉のターミナル特定情報
+    // （`wezterm_pane` のみ release-28 FR-02 で追加）。
     table: 'sessions',
     columns: [
       { name: 'tty', type: 'TEXT' },
@@ -45,6 +46,7 @@ const TABLE_MIGRATIONS: readonly TableMigration[] = [
       { name: 'tmux_socket', type: 'TEXT' },
       { name: 'wsl_distro', type: 'TEXT' },
       { name: 'wt_session', type: 'TEXT' },
+      { name: 'wezterm_pane', type: 'TEXT' },
       { name: 'terminal_seen_at', type: 'INTEGER' },
     ],
   },

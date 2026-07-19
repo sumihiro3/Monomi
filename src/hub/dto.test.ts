@@ -12,6 +12,7 @@ describe('toTerminalDto (release-23 FR-03)', () => {
       tmuxSocket: 'default',
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
       seenAt: toEpochMs(1_000),
     }
 
@@ -22,6 +23,7 @@ describe('toTerminalDto (release-23 FR-03)', () => {
       tmux_socket: 'default',
       wsl_distro: null,
       wt_session: null,
+      wezterm_pane: null,
     })
   })
 
@@ -37,6 +39,7 @@ describe('toTerminalDto (release-23 FR-03)', () => {
       tmuxSocket: null,
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
       seenAt: toEpochMs(1_000),
     }
 
@@ -47,6 +50,7 @@ describe('toTerminalDto (release-23 FR-03)', () => {
       tmux_socket: null,
       wsl_distro: null,
       wt_session: null,
+      wezterm_pane: null,
     })
   })
 })

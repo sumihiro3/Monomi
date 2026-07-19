@@ -57,6 +57,7 @@ function validTerminal(over: Partial<TerminalDto> = {}): TerminalDto {
     tmux_socket: null,
     wsl_distro: null,
     wt_session: null,
+    wezterm_pane: null,
     ...over,
   }
 }

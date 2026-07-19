@@ -53,6 +53,7 @@ function makeTerminal(
     tmux_socket: over.tmux_socket ?? null,
     wsl_distro: over.wsl_distro ?? null,
     wt_session: over.wt_session ?? null,
+    wezterm_pane: over.wezterm_pane ?? null,
   }
 }
 

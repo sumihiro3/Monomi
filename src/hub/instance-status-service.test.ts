@@ -297,6 +297,7 @@ describe('InstanceStatusService.listInstances — session.terminal (release-23 F
         tmux_socket: null,
         wsl_distro: null,
         wt_session: null,
+        wezterm_pane: null,
       },
     })
 
@@ -309,6 +310,7 @@ describe('InstanceStatusService.listInstances — session.terminal (release-23 F
       tmux_socket: null,
       wsl_distro: null,
       wt_session: null,
+      wezterm_pane: null,
     })
   })
 
