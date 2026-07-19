@@ -6,6 +6,12 @@
 
 ## [Unreleased]
 
+### Added
+
+- 新キー `f` によるターミナルフォーカスが WezTerm に対応（対応ターミナルは Terminal.app・Ghostty・tmux・WezTerm の4つに拡大）。macOS・ネイティブ Linux では追加設定なしで WezTerm 公式 CLI によるペイン単位フォーカスが動作する（ネイティブ Linux は WezTerm 利用時に限り今回初めてサポート対象になった）
+- WSL2 では `$WEZTERM_PANE` を捕捉できた場合に WezTerm のペイン単位フォーカスを先に試行し、できない場合は従来の Windows Terminal 前面化（best-effort）にフォールバックするようになった。WSL2 で WezTerm フォーカスを使うには、利用者側で Windows 側の `.wezterm.lua` に `WSLENV = 'WEZTERM_PANE'` を追記する設定が必要（自動設定はしない設計判断）。tmux と WezTerm を併用している場合（WezTerm のペイン内で動く tmux）は引き続きスコープ外で、tmux 優先ロジックにより外側ウィンドウの前面化のみが行われる
+- README／README.ja.md に「WezTerm: ペイン単位フォーカス」節を新設。有効化に必要な設定手順（WSL2 の `WSLENV` 追記を含む）と、macOS・ネイティブ Linux・WSL2 それぞれの対応範囲を明記
+
 ## [0.4.0] - 2026-07-19
 
 ### Added
