@@ -107,6 +107,8 @@ export interface SessionTerminal {
   wslDistro: string | null
   /** `$WT_SESSION`（Windows Terminal）。将来のタブ単位フォーカス用に温存。未設定は null。 */
   wtSession: string | null
+  /** `$WEZTERM_PANE`（WezTerm ペイン id）。ペイン単位フォーカスに使う（release-28 FR-02）。未設定は null。 */
+  weztermPane: string | null
   /** このスナップショットを hub が受信した時刻。 */
   seenAt: EpochMs
 }

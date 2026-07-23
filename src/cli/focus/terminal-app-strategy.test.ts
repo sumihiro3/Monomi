@@ -16,6 +16,7 @@ function makeTarget(overrides: Partial<FocusTarget> = {}): FocusTarget {
     tmuxSocket: null,
     wslDistro: null,
     wtSession: null,
+    weztermPane: null,
     ...overrides,
   }
 }
@@ -98,7 +99,7 @@ describe('TerminalAppStrategy.focus（AC-3）', () => {
     const exec = mockExec('true')
     const strategy = new TerminalAppStrategy({ exec })
 
-    await strategy.focus('/dev/ttys003')
+    await strategy.focus(makeTarget({ tty: '/dev/ttys003' }))
 
     expect(exec.calls).toHaveLength(1)
     expect(exec.calls[0]?.command).toBe('osascript')
@@ -109,19 +110,19 @@ describe('TerminalAppStrategy.focus（AC-3）', () => {
   it('stdout が "true" なら ok を返す', async () => {
     const strategy = new TerminalAppStrategy({ exec: mockExec('true') })
 
-    await expect(strategy.focus('/dev/ttys003')).resolves.toBe('ok')
+    await expect(strategy.focus(makeTarget({ tty: '/dev/ttys003' }))).resolves.toBe('ok')
   })
 
   it('stdout が "false"（対象タブなし）なら not_found を返す', async () => {
     const strategy = new TerminalAppStrategy({ exec: mockExec('false') })
 
-    await expect(strategy.focus('/dev/ttys003')).resolves.toBe('not_found')
+    await expect(strategy.focus(makeTarget({ tty: '/dev/ttys003' }))).resolves.toBe('not_found')
   })
 
   it('stdout の前後空白は無視して判定する（osascript.ts の trim 済み結果を前提）', async () => {
     const strategy = new TerminalAppStrategy({ exec: mockExec('true\n') })
 
-    await expect(strategy.focus('/dev/ttys003')).resolves.toBe('ok')
+    await expect(strategy.focus(makeTarget({ tty: '/dev/ttys003' }))).resolves.toBe('ok')
   })
 
   it('osascript 実行自体が失敗（権限不足等）したら error を返す', async () => {
@@ -129,7 +130,7 @@ describe('TerminalAppStrategy.focus（AC-3）', () => {
       exec: mockExec(new Error('Application isn’t running')),
     })
 
-    await expect(strategy.focus('/dev/ttys003')).resolves.toBe('error')
+    await expect(strategy.focus(makeTarget({ tty: '/dev/ttys003' }))).resolves.toBe('error')
   })
 
   it('Terminal.app 未起動（System Events ガードで "false" を返す）なら not_found を返し、自動起動させない（FR-06a）', async () => {
@@ -138,11 +139,21 @@ describe('TerminalAppStrategy.focus（AC-3）', () => {
     const exec = mockExec('false')
     const strategy = new TerminalAppStrategy({ exec })
 
-    const result = await strategy.focus('/dev/ttys003')
+    const result = await strategy.focus(makeTarget({ tty: '/dev/ttys003' }))
 
     expect(result).toBe('not_found')
     // ガードにより tell application "Terminal" 節が Apple Events を発行する前に return するため、
     // strategy 側は osascript を 1 回呼ぶのみで Terminal.app を自動起動させない。
     expect(exec.calls).toHaveLength(1)
+  })
+
+  it('tty が null（reporter が TTY を解決できなかった場合）なら osascript を呼ばず not_found を返す（release-28-wezterm-focus 所見対応）', async () => {
+    const exec = mockExec('true')
+    const strategy = new TerminalAppStrategy({ exec })
+
+    const result = await strategy.focus(makeTarget({ tty: null, weztermPane: '3' }))
+
+    expect(result).toBe('not_found')
+    expect(exec.calls).toHaveLength(0)
   })
 })

@@ -126,6 +126,8 @@ export const JA = {
     'デバイス "{deviceId}" のトークンを {revoked} 件失効しました。再接続するにはそのデバイスは再度ペアリングが必要です。',
   'cli.installHooks.success':
     'Monomi のフックをインストールしました: {settingsPath} に {added} 件追加（陳腐化した {removed} 件を置き換え）',
+  'cli.installHooks.weztermWslHint':
+    "ヒント: Windows で WezTerm を使っていますか? Windows 側の .wezterm.lua に `WSLENV = 'WEZTERM_PANE'` を追記すると `f` キーでのペイン単位フォーカスが使えます（README の「WezTerm: pane-level focus」節を参照）。",
   'cli.uninstallHooks.success':
     'Monomi のフックを削除しました: {settingsPath} から {removed} 件除去',
   'cli.setupPrompt.confirm': 'install-hooks を実行しますか? [Y/n] ',

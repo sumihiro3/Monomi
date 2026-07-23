@@ -12,6 +12,7 @@ function validDto(overrides: Partial<TerminalDto> = {}): TerminalDto {
     tmux_socket: null,
     wsl_distro: null,
     wt_session: null,
+    wezterm_pane: null,
     ...overrides,
   }
 }
@@ -35,7 +36,11 @@ describe('toFocusTarget（FR-04 AC-1）', () => {
   })
 
   it('全フィールド妥当な dto はそのまま camelCase へ写す', () => {
-    const dto = validDto({ tmux_pane: '%3', tmux_socket: '/tmp/tmux-501/default' })
+    const dto = validDto({
+      tmux_pane: '%3',
+      tmux_socket: '/tmp/tmux-501/default',
+      wezterm_pane: '3',
+    })
     expect(toFocusTarget(dto)).toEqual({
       tty: '/dev/ttys003',
       termProgram: 'Apple_Terminal',
@@ -43,6 +48,7 @@ describe('toFocusTarget（FR-04 AC-1）', () => {
       tmuxSocket: '/tmp/tmux-501/default',
       wslDistro: null,
       wtSession: null,
+      weztermPane: '3',
     })
   })
 
@@ -103,6 +109,44 @@ describe('toFocusTarget（FR-04 AC-1）', () => {
 
     it('空文字列は情報なしへ縮退する', () => {
       expect(targetOf(validDto({ tmux_pane: '' })).tmuxPane).toBeNull()
+    })
+  })
+
+  describe('wezterm_pane 検証', () => {
+    it('null はそのまま null', () => {
+      expect(targetOf(validDto({ wezterm_pane: null })).weztermPane).toBeNull()
+    })
+
+    it('数字のみの pane id はそのまま通す', () => {
+      expect(targetOf(validDto({ wezterm_pane: '3' })).weztermPane).toBe('3')
+    })
+
+    it('複数桁の pane id もそのまま通す', () => {
+      expect(targetOf(validDto({ wezterm_pane: '123' })).weztermPane).toBe('123')
+    })
+
+    it('空文字列は情報なしへ縮退する', () => {
+      expect(targetOf(validDto({ wezterm_pane: '' })).weztermPane).toBeNull()
+    })
+
+    it('空白を含む値は情報なしへ縮退する', () => {
+      expect(targetOf(validDto({ wezterm_pane: '1 2' })).weztermPane).toBeNull()
+    })
+
+    it('非数字を含む値（コマンド注入）は情報なしへ縮退する', () => {
+      expect(targetOf(validDto({ wezterm_pane: '3; rm -rf /' })).weztermPane).toBeNull()
+    })
+
+    it('シェルメタ文字を含む値は情報なしへ縮退する', () => {
+      expect(targetOf(validDto({ wezterm_pane: '$(whoami)' })).weztermPane).toBeNull()
+    })
+
+    it('負値は情報なしへ縮退する', () => {
+      expect(targetOf(validDto({ wezterm_pane: '-1' })).weztermPane).toBeNull()
+    })
+
+    it('先頭ゼロ付きでも数字のみなら通す', () => {
+      expect(targetOf(validDto({ wezterm_pane: '007' })).weztermPane).toBe('007')
     })
   })
 
@@ -169,6 +213,7 @@ describe('toFocusTarget（FR-04 AC-1）', () => {
       tmuxSocket: '/tmp/tmux-501/default',
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
     })
   })
 })

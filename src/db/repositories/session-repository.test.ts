@@ -51,6 +51,7 @@ const FULL_TERMINAL: SessionTerminalInput = {
   tmuxSocket: null,
   wslDistro: null,
   wtSession: null,
+  weztermPane: null,
 }
 
 describe('SessionRepository.updateTerminal / toSession terminal mapping (release-23 FR-02b)', () => {
@@ -78,6 +79,7 @@ describe('SessionRepository.updateTerminal / toSession terminal mapping (release
       tmuxSocket: null,
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
       seenAt: toEpochMs(2000),
     })
   })
@@ -94,6 +96,7 @@ describe('SessionRepository.updateTerminal / toSession terminal mapping (release
       tmuxSocket: '/tmp/tmux-501/default',
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
     }
     repo.updateTerminal('sess1', tmuxOnly, toEpochMs(3000))
 
@@ -114,6 +117,7 @@ describe('SessionRepository.updateTerminal / toSession terminal mapping (release
       tmuxSocket: null,
       wslDistro: 'Ubuntu',
       wtSession: 'abc-123',
+      weztermPane: null,
     }
     repo.updateTerminal('sess1', wsl, toEpochMs(4000))
 

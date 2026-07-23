@@ -57,6 +57,9 @@ function makeDeps(overrides: Partial<CliDeps> = {}): CliDeps {
     promptConfirm: vi.fn(async () => true),
     log: vi.fn(),
     error: vi.fn(),
+    // 既定は非 WSL2（既存の install-hooks テストが意図せず WezTerm ヒントに巻き込まれないように
+    // する。release-28-wezterm-focus 実機検証対応の専用 describe で個別に上書きする）。
+    isWsl: vi.fn(() => false),
     ...overrides,
   }
 }
@@ -358,6 +361,18 @@ describe('run (CLI dispatch)', () => {
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('/fake/settings.json'))
   })
 
+  it('does not log the WezTerm WSL hint on non-WSL2 (release-28-wezterm-focus)', async () => {
+    const deps = makeDeps({ isWsl: vi.fn(() => false) })
+    await run(['install-hooks'], deps)
+    expect(deps.log).not.toHaveBeenCalledWith(expect.stringContaining('WSLENV'))
+  })
+
+  it('logs the WezTerm WSL hint after "install-hooks" on WSL2 (release-28-wezterm-focus)', async () => {
+    const deps = makeDeps({ isWsl: vi.fn(() => true) })
+    await run(['install-hooks'], deps)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('WSLENV'))
+  })
+
   it('routes "uninstall-hooks" to uninstallHooks and logs a summary (FR-01 AC-4)', async () => {
     const deps = makeDeps()
     const code = await run(['uninstall-hooks'], deps)
@@ -560,6 +575,18 @@ describe('run — first-run install-hooks setup prompt (release-18-npx-quickstar
     expect(deps.markSetupPromptDeclined).not.toHaveBeenCalled()
     expect(deps.runDashboard).toHaveBeenCalledTimes(1)
     expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('/fake/settings.json'))
+  })
+
+  it('logs the WezTerm WSL hint after an accepted auto-prompt install on WSL2 (release-28-wezterm-focus)', async () => {
+    const deps = makeDeps({
+      isHooksInstalled: vi.fn(() => false),
+      isSetupPromptDeclined: vi.fn(() => false),
+      isInteractive: vi.fn(() => true),
+      promptConfirm: vi.fn(async () => true),
+      isWsl: vi.fn(() => true),
+    })
+    await run([], deps)
+    expect(deps.log).toHaveBeenCalledWith(expect.stringContaining('WSLENV'))
   })
 
   it('persists a decline so the next run does not reprompt, and shows guidance instead (AC-2)', async () => {

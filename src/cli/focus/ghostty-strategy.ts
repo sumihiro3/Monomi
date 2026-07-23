@@ -180,11 +180,23 @@ export class GhosttyStrategy implements Strategy {
    * 逆に、Ghostty プロセスが一度も見つからずタグを書き込んでいなければ、タグ消去も省略する
    * （存在しない tty への無駄な書き込みを避ける）。
    *
-   * @param tty 検証済み TTY。
+   * `target.tty` が `null`（reporter が TTY を解決できなかった場合。WSL2 等で `weztermPane` のみ
+   * 有効なケースを含む、release-28-wezterm-focus 所見対応）なら TTY 書き込みも System Events 操作
+   * も一切行わず `not_found` を返す。以前は「呼び出し側が非 null を保証する」前提で無条件に
+   * `as string` キャストしていたが、`focus-service.ts` 側が tty 単独では総当たりを止めないよう
+   * 変更されたため、本 strategy 自身が前提を検証する（ARCHITECTURE.md §14.3: フィールドごとに
+   * 独立して機能可否を判定する規約。release-28-wezterm-focus FR-04-pre で引数を `tty` 単独から
+   * `target: FocusTarget` へ移行）。
+   *
+   * @param target 検証済みフォーカス対象（`tty` を使う）。
    * @returns フォーカス結果（`ok` / `not_found` / `error`。`ghostty-strategy` は
    *   `tmux_detached`/`unsupported_platform` を返すことはない）。
    */
-  async focus(tty: string): Promise<FocusResult> {
+  async focus(target: FocusTarget): Promise<FocusResult> {
+    if (target.tty === null) {
+      return 'not_found'
+    }
+    const tty = target.tty
     const tag = buildGhosttyTag(tty)
     const attemptState: AttemptState = { wroteTag: false }
     try {

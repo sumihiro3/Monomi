@@ -181,6 +181,7 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
           tmux_socket: null,
           wsl_distro: null,
           wt_session: null,
+          wezterm_pane: null,
         },
       })
     )
@@ -193,6 +194,7 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
       tmuxSocket: null,
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
       seenAt: 3_000_000,
     })
   })
@@ -208,6 +210,7 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
           tmux_socket: null,
           wsl_distro: null,
           wt_session: null,
+          wezterm_pane: null,
         },
       })
     )
@@ -225,6 +228,7 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
       tmuxSocket: null,
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
       seenAt: 3_000_000,
     })
   })
@@ -240,6 +244,7 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
           tmux_socket: null,
           wsl_distro: null,
           wt_session: null,
+          wezterm_pane: null,
         },
       })
     )
@@ -255,6 +260,7 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
           tmux_socket: null,
           wsl_distro: null,
           wt_session: null,
+          wezterm_pane: null,
         },
       })
     )
@@ -267,6 +273,7 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
       tmuxSocket: null,
       wslDistro: null,
       wtSession: null,
+      weztermPane: null,
       seenAt: 4_000_000,
     })
   })
@@ -275,6 +282,35 @@ describe('EventIngestionService.ingest — terminal capture (release-23 FR-02c /
     ingestion.ingest(payload())
     const s = sessions.findById('sess-1')
     expect(s?.terminal).toBeNull()
+  })
+
+  it('captures a non-null wezterm_pane snapshot (release-28 FR-02)', () => {
+    nowMs = 3_000_000
+    ingestion.ingest(
+      payload({
+        terminal: {
+          tty: '/dev/ttys003',
+          term_program: 'WezTerm',
+          tmux_pane: null,
+          tmux_socket: null,
+          wsl_distro: null,
+          wt_session: null,
+          wezterm_pane: '3',
+        },
+      })
+    )
+
+    const s = sessions.findById('sess-1')
+    expect(s?.terminal).toEqual({
+      tty: '/dev/ttys003',
+      termProgram: 'WezTerm',
+      tmuxPane: null,
+      tmuxSocket: null,
+      wslDistro: null,
+      wtSession: null,
+      weztermPane: '3',
+      seenAt: 3_000_000,
+    })
   })
 })
 

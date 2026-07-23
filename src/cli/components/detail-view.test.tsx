@@ -287,6 +287,7 @@ describe('DetailView — terminal 行（release-24 FR-02、U16）', () => {
           tmux_socket: null,
           wsl_distro: null,
           wt_session: null,
+          wezterm_pane: null,
         },
       },
     }
@@ -331,6 +332,7 @@ describe('DetailView — terminal 行（release-24 FR-02、U16）', () => {
           tmux_socket: 'default',
           wsl_distro: null,
           wt_session: null,
+          wezterm_pane: null,
         },
       },
     }

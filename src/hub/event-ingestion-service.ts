@@ -120,6 +120,7 @@ export class EventIngestionService {
           tmuxSocket: payload.terminal.tmux_socket ?? null,
           wslDistro: payload.terminal.wsl_distro ?? null,
           wtSession: payload.terminal.wt_session ?? null,
+          weztermPane: payload.terminal.wezterm_pane ?? null,
         },
         receivedAt
       )

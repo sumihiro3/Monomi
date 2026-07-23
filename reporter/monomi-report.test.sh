@@ -1700,13 +1700,13 @@ test_terminal_env_capture() {
       hook_json 'PreToolUse' "$repo" '' |
         MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" MONOMI_DISABLE_JQ=1 \
           TERM_PROGRAM='iTerm.app' TMUX='/tmp/tmux-501/default,4242,0' TMUX_PANE='%7' \
-          WSL_DISTRO_NAME='Ubuntu' WT_SESSION='abc-def' \
+          WSL_DISTRO_NAME='Ubuntu' WT_SESSION='abc-def' WEZTERM_PANE='3' \
           "$SCRIPT" >/dev/null 2>&1
     else
       hook_json 'PreToolUse' "$repo" '' |
         MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
           TERM_PROGRAM='iTerm.app' TMUX='/tmp/tmux-501/default,4242,0' TMUX_PANE='%7' \
-          WSL_DISTRO_NAME='Ubuntu' WT_SESSION='abc-def' \
+          WSL_DISTRO_NAME='Ubuntu' WT_SESSION='abc-def' WEZTERM_PANE='3' \
           "$SCRIPT" >/dev/null 2>&1
     fi
     if ! wait_for_file "$caplog" 50; then
@@ -1723,6 +1723,8 @@ test_terminal_env_capture() {
       "$(jq -r '.terminal.wsl_distro' "$caplog" | head -n 1)"
     assert_eq "$name ($mode wt_session)" 'abc-def' \
       "$(jq -r '.terminal.wt_session' "$caplog" | head -n 1)"
+    assert_eq "$name ($mode wezterm_pane)" '3' \
+      "$(jq -r '.terminal.wezterm_pane' "$caplog" | head -n 1)"
   done
 
   kill "$cappid" >/dev/null 2>&1
@@ -1768,6 +1770,57 @@ test_terminal_tmux_fields_gated_by_TMUX() {
   else
     fail "$name" 'no request captured'
   fi
+
+  kill "$cappid" >/dev/null 2>&1
+}
+
+# =========================================================================
+# Test 25b (release-28 FR-01): $WEZTERM_PANE が未設定なら terminal.wezterm_pane は
+# null に縮退する(WSL2 で WezTerm 未使用の場合も含め、エラーにならないこと)
+# =========================================================================
+test_terminal_wezterm_pane_null_when_unset() {
+  local name='release-28 FR-01: terminal.wezterm_pane is null when $WEZTERM_PANE is unset'
+  local home="$WORK/t25b-home"
+  local repo="$WORK/t25b-repo"
+  mkdir -p "$home"
+  printf 'tok' >"$home/token"
+  make_git_repo "$repo" 'https://github.com/sumihiro/ProjectLens.git'
+
+  local caplog="$WORK/t25b-cap.log"
+  local capport="$WORK/t25b-cap.port"
+  : >"$caplog"
+  CAP_LOG="$caplog" CAP_PORTFILE="$capport" node "$CAP_SERVER_JS" &
+  local cappid=$!
+  BG_PIDS="$BG_PIDS $cappid"
+  if ! wait_for_file "$capport" 100; then
+    fail "$name" 'capture server did not start'
+    return
+  fi
+  local port
+  port=$(cat "$capport")
+
+  # $WEZTERM_PANE は env -u で環境から確実に除去する(テスト実行者が WezTerm 内にいても
+  # 影響を受けない)。set -u 下でも "${WEZTERM_PANE:-}" により未設定エラーにならないこと
+  # (jq 経路・no-jq フォールバック経路の両方)を確認する。
+  local mode
+  for mode in jq nojq; do
+    : >"$caplog"
+    if [ "$mode" = nojq ]; then
+      hook_json 'PreToolUse' "$repo" '' |
+        env -u WEZTERM_PANE MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
+          MONOMI_DISABLE_JQ=1 "$SCRIPT" >/dev/null 2>&1
+    else
+      hook_json 'PreToolUse' "$repo" '' |
+        env -u WEZTERM_PANE MONOMI_HOME="$home" MONOMI_HUB_URL="http://127.0.0.1:$port" \
+          "$SCRIPT" >/dev/null 2>&1
+    fi
+    if wait_for_file "$caplog" 50; then
+      assert_eq "$name ($mode)" 'null' \
+        "$(jq -r '.terminal.wezterm_pane' "$caplog" | head -n 1)"
+    else
+      fail "$name ($mode)" 'no request captured'
+    fi
+  done
 
   kill "$cappid" >/dev/null 2>&1
 }
@@ -1853,6 +1906,7 @@ test_resolve_tty_finds_ancestor_tty
 test_resolve_tty_gives_up_after_max_depth
 test_terminal_env_capture
 test_terminal_tmux_fields_gated_by_TMUX
+test_terminal_wezterm_pane_null_when_unset
 test_legacy_outbox_payload_without_terminal_still_resent
 
 echo '----------------------------------------'

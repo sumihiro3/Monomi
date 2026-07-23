@@ -53,6 +53,8 @@ export const rawEventPayloadSchema = z.object({
       wsl_distro: z.string().max(128).nullable().optional(),
       /** `$WT_SESSION`（Windows Terminal）。未設定は null。 */
       wt_session: z.string().max(128).nullable().optional(),
+      /** `$WEZTERM_PANE`（WezTerm ペイン id、release-28 FR-01/FR-02）。未設定は null。 */
+      wezterm_pane: z.string().max(128).nullable().optional(),
     })
     .nullable()
     .optional(),
@@ -131,6 +133,8 @@ export interface TerminalDto {
   wsl_distro: string | null
   /** `$WT_SESSION`（Windows Terminal）。未設定は null。 */
   wt_session: string | null
+  /** `$WEZTERM_PANE`（WezTerm ペイン id、release-28 FR-01/FR-02）。未設定は null。 */
+  wezterm_pane: string | null
 }
 
 /** 代表 session の要約（§8.2 の `session`）。 */
@@ -227,6 +231,7 @@ export function toTerminalDto(terminal: SessionTerminal | null): TerminalDto | n
     tmux_socket: terminal.tmuxSocket,
     wsl_distro: terminal.wslDistro,
     wt_session: terminal.wtSession,
+    wezterm_pane: terminal.weztermPane,
   }
 }
 

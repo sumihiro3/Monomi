@@ -104,17 +104,27 @@ export class TerminalAppStrategy implements Strategy {
   }
 
   /**
-   * `tty` の一致するタブへフォーカスする（AC-3）。
+   * `target.tty` の一致するタブへフォーカスする（AC-3、release-28-wezterm-focus FR-04-pre で
+   * 引数を `tty` 単独から `target: FocusTarget` へ移行）。
    *
-   * @param tty 検証済み TTY。
-   * @returns `osascript` の stdout が `"true"` なら `ok`、`"false"`（対象タブなし、または
-   *   {@link buildTerminalAppFocusScript} の System Events ガードにより Terminal.app が未起動と判定
-   *   された場合。FR-06a）なら `not_found`。`osascript` 実行自体が失敗（権限不足等）した場合は
-   *   `error` に丸める（`focus-service.ts` 側でも strategy 例外は `error` へ丸めるが、ここでも
-   *   自己完結して `FocusResult` を返せるようにしておく）。
+   * `target.tty` が `null`（reporter が TTY を解決できなかった場合。WSL2 等で `weztermPane` のみ
+   * 有効なケースを含む、release-28-wezterm-focus 所見対応）なら `execFile` を呼ばず `not_found` を
+   * 返す。以前は「呼び出し側が非 null を保証する」前提で無条件に `as string` キャストしていたが、
+   * `focus-service.ts` 側が tty 単独では総当たりを止めないよう変更されたため、本 strategy 自身が
+   * 前提を検証する（ARCHITECTURE.md §14.3: フィールドごとに独立して機能可否を判定する規約）。
+   *
+   * @param target 検証済みフォーカス対象（`tty` を使う）。
+   * @returns `tty` が `null` なら `not_found`。それ以外は `osascript` の stdout が `"true"` なら
+   *   `ok`、`"false"`（対象タブなし、または {@link buildTerminalAppFocusScript} の System Events
+   *   ガードにより Terminal.app が未起動と判定された場合。FR-06a）なら `not_found`。`osascript`
+   *   実行自体が失敗（権限不足等）した場合は `error` に丸める（`focus-service.ts` 側でも strategy
+   *   例外は `error` へ丸めるが、ここでも自己完結して `FocusResult` を返せるようにしておく）。
    */
-  async focus(tty: string): Promise<FocusResult> {
-    const script = buildTerminalAppFocusScript(tty)
+  async focus(target: FocusTarget): Promise<FocusResult> {
+    if (target.tty === null) {
+      return 'not_found'
+    }
+    const script = buildTerminalAppFocusScript(target.tty)
     let stdout: string
     try {
       stdout = await runOsascript(script, { exec: this.exec })

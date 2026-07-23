@@ -15,6 +15,7 @@ function makeTarget(overrides: Partial<FocusTarget> = {}): FocusTarget {
     tmuxSocket: null,
     wslDistro: null,
     wtSession: null,
+    weztermPane: null,
     ...overrides,
   }
 }

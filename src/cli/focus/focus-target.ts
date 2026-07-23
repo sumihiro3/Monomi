@@ -24,6 +24,9 @@ const TTY_PATTERN = /^\/dev\/[A-Za-z0-9._/-]+$/
 /** 検証済み tmux pane 識別子のパターン（例 %3。FR-04 AC-1）。 */
 const TMUX_PANE_PATTERN = /^%\d+$/
 
+/** 検証済み WezTerm pane id のパターン（数字のみ。release-28 FR-03a）。 */
+const WEZTERM_PANE_PATTERN = /^\d+$/
+
 /**
  * 文字コード 0x20 未満（C0 制御文字）・0x7f（DEL）、または引用符（シングル/ダブル）を含むか判定する。
  *
@@ -71,6 +74,23 @@ function sanitizeTmuxPane(value: string | null | undefined): string | null {
     return null
   }
   return TMUX_PANE_PATTERN.test(value) ? value : null
+}
+
+/**
+ * WezTerm pane id を検証する。不合格は「情報なし」へ縮退させ null を返す（release-28 FR-03a）。
+ *
+ * `wezterm cli activate-pane --pane-id` の引数は配列要素として渡す（`wezterm-strategy.ts`、
+ * `execFile` 非 shell 実行）ため、ここでの数字正規表現検証は shell 注入対策としては必須ではないが、
+ * tmux_pane と同様に「認証済みだが信頼しない」値の二段防御の第一段として課す。
+ *
+ * @param value wire の wezterm_pane（未捕捉なら null/undefined）。
+ * @returns 検証済み pane id、または不合格/未捕捉時 null。
+ */
+function sanitizeWeztermPane(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) {
+    return null
+  }
+  return WEZTERM_PANE_PATTERN.test(value) ? value : null
 }
 
 /**
@@ -127,5 +147,6 @@ export function toFocusTarget(dto: TerminalDto | null | undefined): FocusTarget 
     tmuxSocket: sanitizeTmuxSocket(dto.tmux_socket),
     wslDistro: normalizeHint(dto.wsl_distro),
     wtSession: normalizeHint(dto.wt_session),
+    weztermPane: sanitizeWeztermPane(dto.wezterm_pane),
   }
 }

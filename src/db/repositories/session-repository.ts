@@ -25,6 +25,7 @@ interface SessionRow {
   tmux_socket: string | null
   wsl_distro: string | null
   wt_session: string | null
+  wezterm_pane: string | null
   terminal_seen_at: number | null
 }
 
@@ -49,6 +50,7 @@ function toSession(row: SessionRow): Session {
             tmuxSocket: row.tmux_socket,
             wslDistro: row.wsl_distro,
             wtSession: row.wt_session,
+            weztermPane: row.wezterm_pane,
             seenAt: toEpochMs(row.terminal_seen_at),
           },
   }
@@ -83,7 +85,7 @@ export class SessionRepository {
     this.updateTerminalStmt = db.prepare(
       `UPDATE sessions
        SET tty = ?, term_program = ?, tmux_pane = ?, tmux_socket = ?, wsl_distro = ?, wt_session = ?,
-           terminal_seen_at = ?
+           wezterm_pane = ?, terminal_seen_at = ?
        WHERE id = ?`
     )
     this.findByIdStmt = db.prepare('SELECT * FROM sessions WHERE id = ?')
@@ -141,6 +143,7 @@ export class SessionRepository {
       info.tmuxSocket,
       info.wslDistro,
       info.wtSession,
+      info.weztermPane,
       at,
       sessionId
     )

@@ -129,6 +129,8 @@ Usage:
     'Revoked {revoked} token(s) for device "{deviceId}". That device must pair again to reconnect.',
   'cli.installHooks.success':
     'Monomi hooks installed: {added} entry(ies) in {settingsPath} ({removed} stale entry(ies) replaced)',
+  'cli.installHooks.weztermWslHint':
+    "Tip: using WezTerm on Windows? Add `WSLENV = 'WEZTERM_PANE'` to your Windows-side .wezterm.lua for pane-level `f`-key focus (see README's \"WezTerm: pane-level focus\" section).",
   'cli.uninstallHooks.success': 'Monomi hooks removed: {removed} entry(ies) from {settingsPath}',
   'cli.setupPrompt.confirm': 'Run install-hooks now? [Y/n] ',
   'cli.setupPrompt.notice':

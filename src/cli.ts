@@ -5,10 +5,15 @@ import { fileURLToPath } from 'node:url'
 import { render } from 'ink'
 import { createElement } from 'react'
 import { AppView } from './cli/components/app-view.js'
-import { FocusService } from './cli/focus/focus-service.js'
+import { defaultIsWsl, FocusService } from './cli/focus/focus-service.js'
 import { GhosttyStrategy } from './cli/focus/ghostty-strategy.js'
 import { TerminalAppStrategy } from './cli/focus/terminal-app-strategy.js'
 import { TmuxFocusStrategy } from './cli/focus/tmux-strategy.js'
+import {
+  raiseWeztermWindowDarwin,
+  raiseWeztermWindowWsl,
+  WeztermFocusStrategy,
+} from './cli/focus/wezterm-strategy.js'
 import { WslFocusStrategy } from './cli/focus/wsl-strategy.js'
 import { createHubApiClient, createHubConnection } from './cli/hub-api-client.js'
 import { ensureHubRunning as ensureHubRunningImpl } from './cli/hub-autostart.js'
@@ -156,6 +161,12 @@ export interface CliDeps {
   log: (message: string) => void
   /** エラー出力。 */
   error: (message: string) => void
+  /**
+   * WSL2 環境かどうか（`install-hooks` 完了後の WezTerm ヒント表示判定 / release-28-wezterm-focus）。
+   * 既定実装は `focus-service.ts` の `defaultIsWsl()`。テストで固定値に差し替え可能にするため
+   * `CliDeps` へ切り出す。
+   */
+  isWsl: () => boolean
 }
 
 /**
@@ -169,15 +180,68 @@ function resolveLocalDeviceId(): string {
 
 /**
  * 実ターミナルへフォーカスを移す既定の {@link FocusService} を組み立てる（release-23-terminal-focus
- * FR-04d）。darwin 総当たり対象は Terminal.app・Ghostty、tmux/WSL2 はそれぞれ専用 strategy。
- * 各 strategy は `exec` 省略時に実 `execFile` ベースの既定実装を使う（テストでのみ差し替える）。
+ * FR-04d、release-28-wezterm-focus FR-04 で WezTerm 対応を追加）。darwin 総当たり対象は
+ * Terminal.app・Ghostty・WezTerm、tmux/WSL2 はそれぞれ専用 strategy。各 strategy は `exec`/`execFile`
+ * 省略時に実 `execFile` ベースの既定実装を使う（テストでのみ差し替える）。
+ *
+ * **`raiseWindow`（実機検証で判明した所見への対応）**: `wezterm cli activate-pane` は mux 内部の
+ * ペイン選択のみを変え OS レベルのウィンドウ前面化を行わないため（macOS 実機で確認済み）、darwin
+ * インスタンスには {@link raiseWeztermWindowDarwin}（AppleScript `activate`）、WSL2 インスタンスには
+ * {@link raiseWeztermWindowWsl}（`SetForegroundWindow`、WezTerm 経由で起動した WSL2 シェルに限り
+ * 実機で動作確認済み。既知課題 U20 参照）を注入する。
+ *
+ * **darwin の `command` 候補配列（実機検証で判明した所見への対応）**: WezTerm.org 配布の macOS
+ * アプリを Homebrew Cask 経由でなく直接インストールした場合、`wezterm` バイナリが PATH に追加され
+ * ない構成が一般的である（実機で確認済み）。bare コマンド `'wezterm'`（カスタム PATH 設定済みの
+ * ユーザー・Homebrew Cask 経由のユーザーに対応）を先に試し、見つからなければ既知のインストール先
+ * `/Applications/WezTerm.app/Contents/MacOS/wezterm` にフォールバックする。
+ *
+ * **ネイティブ Linux 用 `weztermStrategy` は意図的に未配線（release-28-wezterm-focus スコープ縮小）**:
+ * `FocusServiceOptions.weztermStrategy` は darwin と同型の `WeztermFocusStrategy` を渡せば動く
+ * 構造のまま残しているが、macOS で `activate-pane` 単体では OS レベルの前面化が起きないことが実機
+ * 検証で判明し、ネイティブ Linux 向けには X11/Wayland 依存を避ける設計判断から `raiseWindow` 相当を
+ * 用意していない。ペイン内部状態だけ切り替わりウィンドウは前面化されない不完全な体験になる懸念が
+ * 拭えないため、実機未検証のまま「対応」と謳うのを避け、今回のリリースではスコープから外す
+ * （壁打ちでの決定）。将来、X11/Wayland 非依存（または依存を許容する）前面化手段が見つかり実機検証
+ * できた時点で `weztermStrategy` を配線し直せば再対応できる。
  */
 function createDefaultFocusService(): FocusService {
   return new FocusService({
-    darwinStrategies: [new TerminalAppStrategy(), new GhosttyStrategy()],
+    darwinStrategies: [
+      new TerminalAppStrategy(),
+      new GhosttyStrategy(),
+      new WeztermFocusStrategy(['wezterm', '/Applications/WezTerm.app/Contents/MacOS/wezterm'], {
+        raiseWindow: raiseWeztermWindowDarwin,
+      }),
+    ],
     tmuxStrategy: new TmuxFocusStrategy(),
     wslStrategy: new WslFocusStrategy(),
+    // verifyActivation: true — WSL interop 経由の呼び出しは exit 0 でもサイレント失敗しうる
+    // （upstream wezterm/wezterm discussions #6964、既知課題 U20）ため、
+    // activate-pane 後に `cli list` で対象 pane の実在を確認し、確認できなければ既存の
+    // Windows Terminal フォールバックへ進める（review-changes 修正）。
+    weztermWslStrategy: new WeztermFocusStrategy('wezterm.exe', {
+      verifyActivation: true,
+      raiseWindow: raiseWeztermWindowWsl,
+    }),
+    // weztermStrategy（ネイティブ Linux 用）は意図的に未配線。上記 JSDoc 参照。
   })
+}
+
+/**
+ * `install-hooks` 完了後、WSL2 環境なら WezTerm ペイン単位フォーカスの前提設定（Windows 側
+ * `.wezterm.lua` への `WSLENV=WEZTERM_PANE` 追記）をヒント表示する。
+ *
+ * install-hooks はユーザーのターミナルアプリ設定ファイル（`.wezterm.lua`）を自動編集しない
+ * 設計判断（§14.5、既知課題 U12/U14 と同種の慎重姿勢）のため、代わりに気づけるよう案内するのみ。
+ * WSL2 かどうかしか判定できず「実際に WezTerm を使っているか」までは分からない（reporter が
+ * まだ一度もイベントを送っていない install-hooks 実行時点ではセッション情報が無いため）ため、
+ * WSL2 環境では WezTerm を使っていないユーザーにも表示される（許容する誤表示）。
+ */
+function logWeztermWslHintIfApplicable(deps: Pick<CliDeps, 'log' | 'isWsl'>): void {
+  if (deps.isWsl()) {
+    deps.log(t('cli.installHooks.weztermWslHint'))
+  }
 }
 
 /**
@@ -268,6 +332,7 @@ export const defaultCliDeps: CliDeps = {
   promptConfirm: promptConfirmDefault,
   log: (message: string) => console.log(message),
   error: (message: string) => console.error(message),
+  isWsl: () => defaultIsWsl(),
 }
 
 /**
@@ -373,6 +438,7 @@ async function maybePromptInstallHooks(deps: CliDeps): Promise<void> {
       removed: result.removed,
     })
   )
+  logWeztermWslHintIfApplicable(deps)
 }
 
 /**
@@ -443,6 +509,7 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
             removed: result.removed,
           })
         )
+        logWeztermWslHintIfApplicable(deps)
       })
 
     case 'uninstall-hooks':
