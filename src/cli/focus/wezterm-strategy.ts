@@ -1,4 +1,6 @@
 import { execFile as nodeExecFile } from 'node:child_process'
+import { escapeAppleScriptString } from './applescript.js'
+import { type RunOsascriptOptions, runOsascript } from './osascript.js'
 import type { FocusResult, FocusTarget, Strategy } from './types.js'
 
 /**
@@ -80,6 +82,25 @@ export interface WeztermFocusStrategyOptions {
    * にし、`cli.ts` の WSL 用インスタンス（`command: 'wezterm.exe'`）でのみ `true` を渡す。
    */
   verifyActivation?: boolean
+  /**
+   * `activate-pane`（と有効な場合は {@link verifyActivation}）成功後に OS レベルでウィンドウを
+   * 前面化する追加ステップ（release-28-wezterm-focus 実機検証で判明した所見への対応）。
+   *
+   * `wezterm cli activate-pane` は mux サーバー内部の「アクティブなペイン」状態を変えるだけで、
+   * OS のウィンドウマネージャへ前面化を要求しない（`wezterm cli --help` にも `activate-window`
+   * 相当のサブコマンドは存在しない）。そのため exit 0 で解決しても、他アプリが前面にある間は
+   * WezTerm ウィンドウ自体は前に出てこない（macOS 実機で確認済み。`osascript -e 'tell application
+   * "WezTerm" to activate'` を別途実行することで解決することも確認済み）。
+   *
+   * プラットフォームごとに前面化手段が異なる（macOS: AppleScript の `activate`、Windows:
+   * `SetForegroundWindow`）ため、`command` と同様に呼び出し側（`cli.ts`）が platform 別の実装を
+   * 注入する。未指定（ネイティブ Linux 想定。X11/Wayland のウィンドウ操作 API へ依存しない設計を
+   * 維持するため専用の前面化手段を持たない）ならペイン切替のみで完了とする（best-effort）。
+   *
+   * 例外を投げた場合、`focus()` は `activate-pane` 自体が成功していても `ok` を返さず `error` に
+   * 丸める（前面化が確認できない終了を無条件の成功にしない設計。{@link verifyActivation} と同じ方針）。
+   */
+  raiseWindow?: () => Promise<void>
 }
 
 /** {@link WeztermFocusStrategy.verifyPaneExists} が期待する `cli list --format json` の1要素分。 */
@@ -108,18 +129,20 @@ function isEnoent(error: unknown): boolean {
  * WezTerm 公式 CLI（`wezterm cli activate-pane`）でペイン単位フォーカスを行う strategy
  * （release-28-wezterm-focus FR-03b、`types.ts` の {@link Strategy} 実装）。
  *
- * `command` はコンストラクタ引数で受け取る。呼び出し側（`focus-service.ts`、FR-04）が
- * darwin/ネイティブ Linux では `'wezterm'`、WSL2 interop 経由では `'wezterm.exe'` を注入することで、
- * 同一の strategy 実装を両環境で使い回せるようにする。
+ * `command` はコンストラクタ引数で受け取る（単一文字列、または候補を先頭から順に試す配列）。
+ * 呼び出し側（`focus-service.ts`、FR-04）が darwin/ネイティブ Linux では `'wezterm'`（またはこれと
+ * 既知のインストール先パスの配列）、WSL2 interop 経由では `'wezterm.exe'` を注入することで、
+ * 同一の strategy 実装を各環境で使い回せるようにする。
  *
  * `target.weztermPane` は `focus-target.ts` の `sanitizeWeztermPane`（`/^\d+$/`）で既に検証済みだが、
  * ここでも `execFile`（非 shell）に pane id を引数配列の要素として渡すことで二段目の防御とする
  * （shell を経由しないため、たとえ検証をすり抜けた値が来てもシェルメタ文字が展開されることはない）。
  */
 export class WeztermFocusStrategy implements Strategy {
-  private readonly command: string
+  private readonly commands: readonly string[]
   private readonly execFile: ExecFileFn
   private readonly verifyActivation: boolean
+  private readonly raiseWindow: (() => Promise<void>) | undefined
   /**
    * 実行中の `focus()` 呼び出し（review-changes 修正: in-flight ガード）。`null` でなければ
    * 前回呼び出しが未完了であることを表し、新規の `execFile` は起動せずこの Promise を共有する。
@@ -128,14 +151,20 @@ export class WeztermFocusStrategy implements Strategy {
   private inFlight: Promise<FocusResult> | null = null
 
   /**
-   * @param command 実行する `wezterm` バイナリ名/パス（例 `'wezterm'` / `'wezterm.exe'`）。
+   * @param command 実行する `wezterm` バイナリ名/パス（例 `'wezterm'` / `'wezterm.exe'`）。配列を
+   *   渡すと候補を先頭から順に試す（実機検証で判明した所見への対応: WezTerm.org 配布の macOS
+   *   アプリを Homebrew 経由でなく直接インストールした場合、`wezterm` バイナリが PATH に追加され
+   *   ない構成が一般的なため、`cli.ts` の darwin 用インスタンスは `['wezterm', '/Applications/
+   *   WezTerm.app/Contents/MacOS/wezterm']` のように bare コマンドと既知のインストール先パスの
+   *   両方を渡す）。ENOENT（バイナリ不在）のときのみ次候補へ進み、それ以外の失敗は即座に確定する。
    * @param options `execFile` の差し替え・{@link WeztermFocusStrategyOptions.verifyActivation}
    *   の指定（{@link WeztermFocusStrategyOptions}、省略可）。
    */
-  constructor(command: string, options: WeztermFocusStrategyOptions = {}) {
-    this.command = command
+  constructor(command: string | readonly string[], options: WeztermFocusStrategyOptions = {}) {
+    this.commands = typeof command === 'string' ? [command] : command
     this.execFile = options.execFile ?? defaultExecFile
     this.verifyActivation = options.verifyActivation ?? false
+    this.raiseWindow = options.raiseWindow
   }
 
   /**
@@ -158,10 +187,10 @@ export class WeztermFocusStrategy implements Strategy {
    * in-flight ガード）。
    *
    * @param target 検証済みフォーカス対象（`weztermPane` を使う）。
-   * @returns 例外なく終了（exit 0）し、かつ {@link verifyActivation} が無効/検証成功なら `ok`。
-   *   `error.code === 'ENOENT'`（PATH 上に `command` が見つからない）なら `not_found`。それ以外の
-   *   例外（タイムアウト含む、{@link WEZTERM_EXEC_TIMEOUT_MS}）や `verifyActivation` の検証失敗は
-   *   `error` に丸める。
+   * @returns 例外なく終了（exit 0）し、{@link verifyActivation} が無効/検証成功、かつ
+   *   {@link raiseWindow}（指定されていれば）も成功したら `ok`。`error.code === 'ENOENT'`
+   *   （PATH 上に `command` が見つからない）なら `not_found`。それ以外の例外（タイムアウト含む、
+   *   {@link WEZTERM_EXEC_TIMEOUT_MS}）や `verifyActivation`／`raiseWindow` の失敗は `error` に丸める。
    */
   async focus(target: FocusTarget): Promise<FocusResult> {
     if (target.weztermPane === null) {
@@ -179,20 +208,53 @@ export class WeztermFocusStrategy implements Strategy {
     return run
   }
 
-  /** {@link focus} の実処理（in-flight ガードで包む対象、review-changes 修正）。 */
+  /**
+   * {@link focus} の実処理（in-flight ガードで包む対象、review-changes 修正）。
+   *
+   * {@link commands} を先頭から順に試す（実機検証で判明した所見への対応）。ENOENT（バイナリ不在）
+   * のときのみ次候補へ進み、それ以外の失敗（pane 未検出・タイムアウト等）は即座に `error` として
+   * 確定する（誤って別候補へフォールバックし二重実行しないため）。全候補が ENOENT なら `not_found`。
+   * 成功した候補は {@link verifyPaneExists} にもそのまま渡し、既に PATH 解決済みのコマンドで
+   * 一貫させる（`cli list` を候補探索からやり直さない）。
+   */
   private async runFocus(paneId: string): Promise<FocusResult> {
-    try {
-      await this.execFile(this.command, ['cli', 'activate-pane', '--pane-id', paneId], {
-        timeout: WEZTERM_EXEC_TIMEOUT_MS,
-      })
-    } catch (error) {
-      return isEnoent(error) ? 'not_found' : 'error'
+    let resolvedCommand: string | undefined
+    for (const [index, command] of this.commands.entries()) {
+      try {
+        await this.execFile(command, ['cli', 'activate-pane', '--pane-id', paneId], {
+          timeout: WEZTERM_EXEC_TIMEOUT_MS,
+        })
+        resolvedCommand = command
+        break
+      } catch (error) {
+        if (!isEnoent(error)) {
+          return 'error'
+        }
+        if (index === this.commands.length - 1) {
+          return 'not_found'
+        }
+      }
+    }
+    if (resolvedCommand === undefined) {
+      return 'not_found'
     }
 
-    if (!this.verifyActivation) {
-      return 'ok'
+    if (this.verifyActivation) {
+      const verifyResult = await this.verifyPaneExists(resolvedCommand, paneId)
+      if (verifyResult !== 'ok') {
+        return verifyResult
+      }
     }
-    return this.verifyPaneExists(paneId)
+
+    if (this.raiseWindow !== undefined) {
+      try {
+        await this.raiseWindow()
+      } catch {
+        return 'error'
+      }
+    }
+
+    return 'ok'
   }
 
   /**
@@ -202,12 +264,14 @@ export class WeztermFocusStrategy implements Strategy {
    * 一覧取得自体の失敗・JSON 解析失敗・対象 pane 不在のいずれも「検証できない/失敗」とみなし
    * `error` を返す（検証手段が信頼できない場合に exit 0 を無条件の最終成功にしない設計）。
    *
+   * @param command 直前の `activate-pane` が成功した（PATH 解決済みの）コマンド。候補探索は
+   *   やり直さず、この値をそのまま使う。
    * @param paneId 直前に `activate-pane` を実行した pane id。
    * @returns 一覧中に `pane_id === paneId`（文字列比較）の要素が見つかれば `ok`、それ以外は `error`。
    */
-  private async verifyPaneExists(paneId: string): Promise<FocusResult> {
+  private async verifyPaneExists(command: string, paneId: string): Promise<FocusResult> {
     try {
-      const { stdout } = await this.execFile(this.command, ['cli', 'list', '--format', 'json'], {
+      const { stdout } = await this.execFile(command, ['cli', 'list', '--format', 'json'], {
         timeout: WEZTERM_EXEC_TIMEOUT_MS,
       })
       const panes: unknown = JSON.parse(stdout)
@@ -221,5 +285,103 @@ export class WeztermFocusStrategy implements Strategy {
     } catch {
       return 'error'
     }
+  }
+}
+
+/** System Events から見た WezTerm のプロセス名（`exists process "WezTerm"` に使う）。 */
+const WEZTERM_PROCESS_NAME = 'WezTerm'
+
+/**
+ * macOS で WezTerm アプリケーションを前面化する AppleScript を組み立てる（{@link raiseWeztermWindowDarwin}）。
+ *
+ * `terminal-app-strategy.ts` の `buildTerminalAppFocusScript` と同じ System Events ガード
+ * （`tell application "WezTerm" to activate` は対象アプリが未起動だと Apple Events 経由で自動起動
+ * させてしまうため、`exists process "WezTerm"` で先に確認する。B12 と同種の防御）を踏む。
+ * 純粋関数として公開し、`osascript` を経由せず AppleScript の形を直接テストできるようにする。
+ *
+ * @returns 実行可能な AppleScript ソース全体。
+ */
+export function buildWeztermRaiseScript(): string {
+  const escapedProcess = escapeAppleScriptString(WEZTERM_PROCESS_NAME)
+  return [
+    'tell application "System Events"',
+    `  if not (exists process "${escapedProcess}") then return "false"`,
+    'end tell',
+    'tell application "WezTerm"',
+    '  activate',
+    'end tell',
+    'return "true"',
+  ].join('\n')
+}
+
+/**
+ * macOS 向け {@link WeztermFocusStrategyOptions.raiseWindow} 既定実装（release-28-wezterm-focus
+ * 実機検証で判明した所見への対応）。
+ *
+ * `wezterm cli activate-pane` は mux 内部のペイン選択を変えるのみで OS レベルのウィンドウ前面化を
+ * 行わないため、`osascript`（`osascript.ts` の {@link runOsascript}、`execFile` 非 shell 実行）で
+ * WezTerm アプリケーション自体を `activate` する。System Events ガードにより WezTerm が（`activate-pane`
+ * 成功後にもかかわらず）見つからない場合は例外を投げ、呼び出し元の `focus()` は `error` に丸める。
+ *
+ * @param options `osascript` 実行の差し替え（{@link RunOsascriptOptions}、省略可、テスト用）。
+ * @throws {Error} System Events から WezTerm プロセスが見つからない場合、または `osascript` 実行
+ *   自体が失敗した場合（後者は素通しで reject される）。
+ */
+export async function raiseWeztermWindowDarwin(options: RunOsascriptOptions = {}): Promise<void> {
+  const stdout = await runOsascript(buildWeztermRaiseScript(), options)
+  if (stdout !== 'true') {
+    throw new Error('WezTerm process not found via System Events (darwin raise)')
+  }
+}
+
+/** Windows 側 `Get-Process` から見た WezTerm GUI プロセス名（`.exe` 拡張子は含まない）。 */
+const WEZTERM_GUI_PROCESS_NAME = 'wezterm-gui'
+
+/**
+ * 指定プロセス名のメインウィンドウを `SetForegroundWindow` で前面化する PowerShell スクリプトを
+ * 組み立てる（`wsl-strategy.ts` の `FOREGROUND_SCRIPT`〈`WindowsTerminal` 固定〉と同型。対象プロセス
+ * が見つからなければ `NOT_FOUND`、成功したら `OK` を stdout へ出力する）。
+ *
+ * `processName` は呼び出し元がハードコードされた定数のみを渡す想定（reporter/hub 由来の値を
+ * 埋め込むことはない）ため、`escapeAppleScriptString` 相当のエスケープは不要。
+ *
+ * @param processName `Get-Process -Name` に渡すプロセス名。
+ * @returns 実行可能な PowerShell スクリプト全体（`;` 区切りの単一行）。
+ */
+function buildWindowsForegroundScript(processName: string): string {
+  return [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    `$p = Get-Process -Name "${processName}" | Select-Object -First 1`,
+    'if ($null -eq $p) { Write-Output "NOT_FOUND"; exit 0 }',
+    '$sig = \'[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);\'',
+    'Add-Type -Name Win32Foreground -Namespace MonomiFocus -MemberDefinition $sig',
+    '[MonomiFocus.Win32Foreground]::SetForegroundWindow($p.MainWindowHandle) | Out-Null',
+    'Write-Output "OK"',
+  ].join('; ')
+}
+
+/**
+ * WSL2 interop 経由で Windows 側の `wezterm-gui.exe` ウィンドウを前面化する
+ * {@link WeztermFocusStrategyOptions.raiseWindow} 実装（release-28-wezterm-focus 実機検証で判明した
+ * 所見への対応。macOS の {@link raiseWeztermWindowDarwin} と同じ動機だが、Windows には AppleScript
+ * が無いため `wsl-strategy.ts` の `SetForegroundWindow` 方式を `wezterm-gui` プロセス向けに転用する）。
+ *
+ * **未検証**: 実 Windows/WSL2 環境での動作確認は本リリースの手動検証（requirements.md FR-05 AC-5）で
+ * 行う。`wezterm.exe cli activate-pane` 自体が WSL interop 経由でサイレント失敗し得る（upstream
+ * wezterm/wezterm discussions #6964）のと同様、この前面化ステップも実機でのみ確証が得られる。
+ *
+ * @param execFile `execFile` の差し替え（省略時は {@link WeztermFocusStrategy} と同じ既定実装）。
+ * @throws {Error} `wezterm-gui` プロセスが見つからない場合、または `powershell.exe` 実行自体が
+ *   失敗した場合（後者は素通しで reject される）。
+ */
+export async function raiseWeztermWindowWsl(execFile: ExecFileFn = defaultExecFile): Promise<void> {
+  const { stdout } = await execFile('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    buildWindowsForegroundScript(WEZTERM_GUI_PROCESS_NAME),
+  ])
+  if (!stdout.includes('OK')) {
+    throw new Error('wezterm-gui process not found for foreground (WSL raise)')
   }
 }

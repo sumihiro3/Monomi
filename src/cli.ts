@@ -9,7 +9,11 @@ import { FocusService } from './cli/focus/focus-service.js'
 import { GhosttyStrategy } from './cli/focus/ghostty-strategy.js'
 import { TerminalAppStrategy } from './cli/focus/terminal-app-strategy.js'
 import { TmuxFocusStrategy } from './cli/focus/tmux-strategy.js'
-import { WeztermFocusStrategy } from './cli/focus/wezterm-strategy.js'
+import {
+  raiseWeztermWindowDarwin,
+  raiseWeztermWindowWsl,
+  WeztermFocusStrategy,
+} from './cli/focus/wezterm-strategy.js'
 import { WslFocusStrategy } from './cli/focus/wsl-strategy.js'
 import { createHubApiClient, createHubConnection } from './cli/hub-api-client.js'
 import { ensureHubRunning as ensureHubRunningImpl } from './cli/hub-autostart.js'
@@ -175,13 +179,28 @@ function resolveLocalDeviceId(): string {
  * （`wezterm.exe`）とネイティブ Linux（`wezterm`）は呼び出すバイナリが異なるため、`WeztermFocusStrategy`
  * を command 違いで別インスタンス配線する。各 strategy は `exec`/`execFile` 省略時に実 `execFile`
  * ベースの既定実装を使う（テストでのみ差し替える）。
+ *
+ * **`raiseWindow`（実機検証で判明した所見への対応）**: `wezterm cli activate-pane` は mux 内部の
+ * ペイン選択のみを変え OS レベルのウィンドウ前面化を行わないため（macOS 実機で確認済み）、darwin
+ * インスタンスには {@link raiseWeztermWindowDarwin}（AppleScript `activate`）、WSL2 インスタンスには
+ * {@link raiseWeztermWindowWsl}（`SetForegroundWindow`、実 Windows/WSL2 環境では未検証）を注入する。
+ * ネイティブ Linux 用インスタンスには注入しない: X11/Wayland のウィンドウ操作 API へ依存しない設計
+ * を維持するため、前面化は best-effort でペイン切替のみに留める（既知の制限、known-limitations.md 参照）。
+ *
+ * **darwin の `command` 候補配列（実機検証で判明した所見への対応）**: WezTerm.org 配布の macOS
+ * アプリを Homebrew Cask 経由でなく直接インストールした場合、`wezterm` バイナリが PATH に追加され
+ * ない構成が一般的である（実機で確認済み）。bare コマンド `'wezterm'`（カスタム PATH 設定済みの
+ * ユーザー・Homebrew Cask 経由のユーザーに対応）を先に試し、見つからなければ既知のインストール先
+ * `/Applications/WezTerm.app/Contents/MacOS/wezterm` にフォールバックする。
  */
 function createDefaultFocusService(): FocusService {
   return new FocusService({
     darwinStrategies: [
       new TerminalAppStrategy(),
       new GhosttyStrategy(),
-      new WeztermFocusStrategy('wezterm'),
+      new WeztermFocusStrategy(['wezterm', '/Applications/WezTerm.app/Contents/MacOS/wezterm'], {
+        raiseWindow: raiseWeztermWindowDarwin,
+      }),
     ],
     tmuxStrategy: new TmuxFocusStrategy(),
     wslStrategy: new WslFocusStrategy(),
@@ -189,7 +208,10 @@ function createDefaultFocusService(): FocusService {
     // （upstream wezterm/wezterm discussions #6964、requirements.md 未解決事項）ため、
     // activate-pane 後に `cli list` で対象 pane の実在を確認し、確認できなければ既存の
     // Windows Terminal フォールバックへ進める（review-changes 修正）。
-    weztermWslStrategy: new WeztermFocusStrategy('wezterm.exe', { verifyActivation: true }),
+    weztermWslStrategy: new WeztermFocusStrategy('wezterm.exe', {
+      verifyActivation: true,
+      raiseWindow: raiseWeztermWindowWsl,
+    }),
     weztermStrategy: new WeztermFocusStrategy('wezterm'),
   })
 }
