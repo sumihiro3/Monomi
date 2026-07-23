@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { render } from 'ink'
 import { createElement } from 'react'
 import { AppView } from './cli/components/app-view.js'
-import { FocusService } from './cli/focus/focus-service.js'
+import { defaultIsWsl, FocusService } from './cli/focus/focus-service.js'
 import { GhosttyStrategy } from './cli/focus/ghostty-strategy.js'
 import { TerminalAppStrategy } from './cli/focus/terminal-app-strategy.js'
 import { TmuxFocusStrategy } from './cli/focus/tmux-strategy.js'
@@ -161,6 +161,12 @@ export interface CliDeps {
   log: (message: string) => void
   /** エラー出力。 */
   error: (message: string) => void
+  /**
+   * WSL2 環境かどうか（`install-hooks` 完了後の WezTerm ヒント表示判定 / release-28-wezterm-focus）。
+   * 既定実装は `focus-service.ts` の `defaultIsWsl()`。テストで固定値に差し替え可能にするため
+   * `CliDeps` へ切り出す。
+   */
+  isWsl: () => boolean
 }
 
 /**
@@ -214,6 +220,22 @@ function createDefaultFocusService(): FocusService {
     }),
     weztermStrategy: new WeztermFocusStrategy('wezterm'),
   })
+}
+
+/**
+ * `install-hooks` 完了後、WSL2 環境なら WezTerm ペイン単位フォーカスの前提設定（Windows 側
+ * `.wezterm.lua` への `WSLENV=WEZTERM_PANE` 追記）をヒント表示する。
+ *
+ * install-hooks はユーザーのターミナルアプリ設定ファイル（`.wezterm.lua`）を自動編集しない
+ * 設計判断（§14.5、既知課題 U12/U14 と同種の慎重姿勢）のため、代わりに気づけるよう案内するのみ。
+ * WSL2 かどうかしか判定できず「実際に WezTerm を使っているか」までは分からない（reporter が
+ * まだ一度もイベントを送っていない install-hooks 実行時点ではセッション情報が無いため）ため、
+ * WSL2 環境では WezTerm を使っていないユーザーにも表示される（許容する誤表示）。
+ */
+function logWeztermWslHintIfApplicable(deps: Pick<CliDeps, 'log' | 'isWsl'>): void {
+  if (deps.isWsl()) {
+    deps.log(t('cli.installHooks.weztermWslHint'))
+  }
 }
 
 /**
@@ -304,6 +326,7 @@ export const defaultCliDeps: CliDeps = {
   promptConfirm: promptConfirmDefault,
   log: (message: string) => console.log(message),
   error: (message: string) => console.error(message),
+  isWsl: () => defaultIsWsl(),
 }
 
 /**
@@ -409,6 +432,7 @@ async function maybePromptInstallHooks(deps: CliDeps): Promise<void> {
       removed: result.removed,
     })
   )
+  logWeztermWslHintIfApplicable(deps)
 }
 
 /**
@@ -479,6 +503,7 @@ export async function run(argv: string[], deps: CliDeps = defaultCliDeps): Promi
             removed: result.removed,
           })
         )
+        logWeztermWslHintIfApplicable(deps)
       })
 
     case 'uninstall-hooks':
