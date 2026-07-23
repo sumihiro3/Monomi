@@ -428,10 +428,16 @@ export function AppView({
         return
       }
 
-      // ④terminal 情報なし/検証不合格 → 実行せず理由 notice（AC-3）。tty も tmuxPane も無ければ
-      // どの strategy にも到達できないため、focusRunner を呼ばずここで縮退させる。
+      // ④terminal 情報なし/検証不合格 → 実行せず理由 notice（AC-3）。tty・tmuxPane・weztermPane の
+      // いずれも無ければどの strategy にも到達できないため、focusRunner を呼ばずここで縮退させる。
+      // release-28-wezterm-focus 実機検証で判明した所見への対応: WSL2 の resolve_tty() が不正な値
+      // （例 `/dev/?`）を返し tty 検証が null に落ちても weztermPane が有効なら WezTerm 経路が
+      // 機能しうるため、focus-service.ts の no_terminal 判定（AC-7）と同じ条件に揃える。
       const target = toFocusTarget(selectedRow.session.terminal)
-      if (target === null || (target.tty === null && target.tmuxPane === null)) {
+      if (
+        target === null ||
+        (target.tty === null && target.tmuxPane === null && target.weztermPane === null)
+      ) {
         showNotice(t('focus.noTerminalInfo'))
         return
       }
