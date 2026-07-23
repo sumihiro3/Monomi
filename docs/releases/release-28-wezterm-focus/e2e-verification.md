@@ -2,13 +2,13 @@
 
 release-28-wezterm-focus の受け入れ基準（requirements.md FR-05 AC-4/AC-5）のうち、実機でしか検証できない項目のチェックリスト。既知課題 **U17**（WSL2 のフォーカス対応を Windows Terminal 前面化から WezTerm へ切り替え）に対応する。
 
-成功基準: **WezTerm を使っている環境（macOS・WSL2・ネイティブ Linux）で、セッションを選択し `f` キーを押したとき、そのセッションが稼働している WezTerm ペインが前面化される**こと。WSL2 で `$WEZTERM_PANE` を捕捉できない場合は既存の Windows Terminal 前面化へ正しくフォールバックすること。
+成功基準: **WezTerm を使っている環境（macOS・WSL2）で、セッションを選択し `f` キーを押したとき、そのセッションが稼働している WezTerm ペインが前面化される**こと。WSL2 で `$WEZTERM_PANE` を捕捉できない場合は既存の Windows Terminal 前面化へ正しくフォールバックすること。ネイティブ Linux（X11/Wayland）は実機検証を受けてスコープから外した（既知課題 U21、4節参照）。
 
 ## 何を見て・何を見ないか
 
 - 単体テストで検証済みの項目（`focus-target.ts` の `wezterm_pane` 検証・インジェクション拒否 / `WeztermFocusStrategy` のコマンド組み立て・`ENOENT` 判定 / DB マイグレーション冪等性 / API 露出）は再確認不要。ここでは実 WezTerm・実 OS・実 WSL2 interop での動作と UI フィードバックだけを見る
 - Terminal.app・Ghostty・tmux・別デバイス行・旧 reporter 互換性など、release-23-terminal-focus で検証済みの既存フォーカス経路の再検証は本ファイルの対象外（回帰確認は `pnpm test` の既存テストスイート — FR-04 AC-6 — で担保する）。`docs/releases/release-23-terminal-focus/e2e-verification.md` を参照
-- 本ファイルが対象とするのは release-28 で新規に追加された WezTerm 経路（macOS/WSL2/ネイティブ Linux）と、WSL2 での WezTerm→Windows Terminal フォールバックの切り替わりのみ
+- 本ファイルが対象とするのは release-28 で新規に追加された WezTerm 経路（macOS/WSL2）と、WSL2 での WezTerm→Windows Terminal フォールバックの切り替わりのみ
 
 ## 前提
 
@@ -192,35 +192,9 @@ Claude Code セッションを開始し reporter 登録（未実施なら上記 
 のため、リリースブロッカーとはしない。
 ```
 
-## 4. ネイティブ Linux + WezTerm 検証（X11/Wayland、環境あれば）
+## 4. ネイティブ Linux + WezTerm（スコープ外へ変更、実施不要）
 
-WSL を介さないネイティブ Linux 上で WezTerm を使っている場合のペイン単位フォーカス。
-
-### 4.1 準備
-
-```sh
-cd /opt/dev/Monomi
-pnpm build
-mkdir -p ~/.monomi && cp reporter/monomi-report.sh ~/.monomi/monomi-report.sh
-node dist/cli.js install-hooks
-# WezTerm で複数ペイン/タブを開き、それぞれで Claude Code セッションを開始
-```
-
-### 4.2 フォーカス検証
-
-- [ ] ダッシュボードに WezTerm 上のセッションが表示され `Terminal` 欄に `WezTerm` と表示される
-- [ ] `f` キー押下で対象ペインが前面化される（追加設定不要であることの確認）
-- [ ] WezTerm を使っていない別プロセスの通常シェルには影響しない
-
-失敗ケース:
-
-- [ ] WezTerm CLI（`wezterm`）が PATH 上にない場合、notice に `not_found` 相当のメッセージが表示される
-
-メモ欄:
-
-```
-（実施日・結果・気づいた点をここに記録）
-```
+**この節は実機検証の結果を受けてスコープから外されました（既知課題 U21）。** macOS の実機検証で `wezterm cli activate-pane` 単体では OS レベルの前面化が行われないことが判明し、macOS では AppleScript による追加ステップで解決したが、ネイティブ Linux 向けの X11/Wayland 非依存な前面化手段は未検証のまま残った。ペイン内部状態だけ切り替わりウィンドウは前面化されない不完全な体験になる懸念が拭えないため、`cli.ts` はネイティブ Linux 向け `weztermStrategy` を意図的に配線しないことにし（`focus-service.ts` のディスパッチ構造自体は汎用のまま維持）、ネイティブ Linux では従来どおり `unsupported_platform` になる。この節のチェックリストは実施不要。前面化手段が見つかり実機検証できた時点で本節を再度有効化する。
 
 ## 5. tmux + WezTerm 併用時のスコープ外動作確認
 
@@ -263,9 +237,9 @@ pnpm test -- --testNamePattern="focus"
 
 ## 結果記録
 
-| 日付       | 実施者   | 環境                                                                 | macOS+WezTerm | WSL2+WezTerm    | WSL2フォールバック  | ネイティブLinux+WezTerm | tmux併用スコープ外 | メモ                                                                                      |
-| ---------- | -------- | -------------------------------------------------------------------- | ------------- | --------------- | ------------------- | ----------------------- | ------------------ | ----------------------------------------------------------------------------------------- |
-| 2026-07-23 | sumihiro | macOS 実機 / 実 Windows 11 Home + WSL2 + WezTerm（Parallels 非搭載） | [x]           | [x]（条件つき） | [x]（別経路で確認） | [ ]（未実施）           | [ ]（未実施）      | 2件のバグを発見・修正（1・2節メモ参照）。WSL2 は「両側 WezTerm 経由起動」限定で動作を確認 |
+| 日付       | 実施者   | 環境                                                                 | macOS+WezTerm | WSL2+WezTerm    | WSL2フォールバック  | ネイティブLinux+WezTerm | tmux併用スコープ外 | メモ                                                                                                                                              |
+| ---------- | -------- | -------------------------------------------------------------------- | ------------- | --------------- | ------------------- | ----------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-07-23 | sumihiro | macOS 実機 / 実 Windows 11 Home + WSL2 + WezTerm（Parallels 非搭載） | [x]           | [x]（条件つき） | [x]（別経路で確認） | N/A（スコープ外へ変更） | [ ]（未実施）      | 2件のバグを発見・修正（1・2節メモ参照）。WSL2 は「両側 WezTerm 経由起動」限定で動作を確認。ネイティブ Linux は既知課題 U21 によりスコープ外へ変更 |
 
 ---
 
@@ -276,10 +250,10 @@ pnpm test -- --testNamePattern="focus"
 - [x] **(a) WSL2 + WezTerm（`WSLENV` 設定込み）で `wezterm.exe cli activate-pane` が実際に対象ペインを前面化できること**（2節。ただし Monomi CLI・対象セッション両方が WezTerm 経由で起動された WSL2 シェルの場合に限る）
 - [x] **(b) macOS + WezTerm での前面化**（1節。2件のバグを発見・修正済み）
 - [x] **(c) WSL2 で既存 Windows Terminal 前面化へ正しくフォールバックすること**（3節。`wezterm_pane` が最初から null の経路ではなく、WSL interop 接続失敗をトリガーとする経路で確認。フォールバック機構自体の動作は確認済み）
-- [ ] ネイティブ Linux + WezTerm での前面化（4節、環境が無く未実施。将来の検証課題として残す）
+- [x] ネイティブ Linux + WezTerm（4節。実機検証を受けてスコープから外したため実施不要。既知課題 U21）
 - [ ] tmux + WezTerm 併用時に意図どおりスコープ外（既存 tmux フォールバック）に落ちること（5節、未実施。ユニットテストでカバー済みのためブロッカーにはしない）
 - [x] `pnpm test` と `pnpm run lint` が通る
 
-(a)(b)(c) は release-28-wezterm-focus のリリースブロッカーとなる必須確認項目。ネイティブ Linux・tmux 併用は環境がある場合に確認する任意項目。
+(a)(b)(c) は release-28-wezterm-focus のリリースブロッカーとなる必須確認項目。tmux 併用は環境がある場合に確認する任意項目。
 
 (a) は upstream の未解決事項（wezterm/wezterm discussions #6964 のサイレント失敗報告）に対する実機確認であるため、結果は 2節のメモ欄に具体的に記録すること。動作しない場合はブロッカーにせず、notice のヒント文言 + Windows Terminal フォールバックへの委譲で対応する（requirements.md「未解決事項」参照）。

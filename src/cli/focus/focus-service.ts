@@ -58,6 +58,13 @@ export interface FocusServiceOptions {
    * ネイティブ Linux（darwin でも WSL でもない）上で `wezterm cli activate-pane` を試みる strategy
    * （release-28-wezterm-focus FR-04）。`target.weztermPane` があるときにのみ使う。省略時、または
    * `weztermPane` が無い場合は従来どおり `unsupported_platform` になる。
+   *
+   * **`cli.ts` の既定実装では意図的に未配線（release-28-wezterm-focus スコープ縮小、実機検証後の
+   * 決定）**: macOS で `activate-pane` 単体では OS レベルのウィンドウ前面化が起きないことが実機で
+   * 判明したが、ネイティブ Linux 向けの前面化手段（X11/Wayland 非依存で書ける方法）が未検証のため、
+   * ペイン内部状態だけ切り替わりウィンドウは前面化されない不完全な体験になる懸念が拭えない。
+   * ディスパッチ構造自体は汎用のまま残しているため、前面化手段が実機検証できた時点で
+   * `cli.ts` から再配線すれば足りる。
    */
   weztermStrategy?: Strategy
   /** 実行環境の platform（省略時 `process.platform`。テストで `'darwin'`/`'linux'` 等に固定する）。 */

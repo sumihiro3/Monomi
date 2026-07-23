@@ -220,7 +220,9 @@ After adding the setting, restart your Claude Code session.
 
 ### WezTerm: pane-level focus
 
-On **macOS and native Linux**, WezTerm focus works out of the box — no additional configuration is required. Monomi runs WezTerm's official CLI (`wezterm cli activate-pane --pane-id <id>`) to bring the exact pane running your session to the foreground.
+On **macOS**, WezTerm focus works out of the box — no additional configuration is required. Monomi runs WezTerm's official CLI (`wezterm cli activate-pane --pane-id <id>`) and then brings the WezTerm application to the foreground to focus the exact pane running your session.
+
+> **Native Linux (X11/Wayland) is not currently supported for WezTerm focus.** Bringing a WezTerm window to the foreground on macOS turned out to require an extra step beyond running the WezTerm CLI (see above), and Monomi doesn't have a verified, X11/Wayland-independent way to do the equivalent on native Linux yet. Rather than ship an unverified "supported" claim, this is deferred until that's figured out — see [known issue U21](docs/known-issues.md).
 
 On **WSL2**, WezTerm sets the `$WEZTERM_PANE` environment variable on the Windows side, but WSL's interop layer only forwards environment variables into the Linux session that are listed in `WSLENV`. Add this to your Windows-side `.wezterm.lua` so `$WEZTERM_PANE` reaches WSL2:
 
@@ -243,7 +245,7 @@ After adding this, restart WezTerm and start a new WSL2 shell/pane so it inherit
 
 ### Linux / WSL2
 
-- **Native Linux (X11/Wayland)**: Only WezTerm is supported (pane-level focus via the WezTerm CLI, no extra setup needed — see "WezTerm: pane-level focus" above). Other terminal apps are not currently supported.
+- **Native Linux (X11/Wayland)**: Not currently supported (see the WezTerm note above).
 - **WSL2**: WezTerm pane-level focus is tried first when `$WEZTERM_PANE` is captured (see "WezTerm: pane-level focus" above, including the reliability note about launching WSL2 from inside WezTerm). Otherwise, Monomi falls back to bringing the Windows Terminal window to the foreground on a best-effort basis (tab-level focus is not available in that fallback).
 - **tmux on any platform**: Supported. If tmux is detached, a message will indicate that the session is unreachable. Running WezTerm and tmux together (a tmux pane running inside a WezTerm pane) is not supported for pane-level identification — the tmux client takes priority and only the outer terminal window is brought to the foreground.
 
