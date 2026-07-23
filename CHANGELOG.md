@@ -11,6 +11,13 @@
 - 新キー `f` によるターミナルフォーカスが WezTerm に対応（対応ターミナルは Terminal.app・Ghostty・tmux・WezTerm の4つに拡大）。macOS・ネイティブ Linux では追加設定なしで WezTerm 公式 CLI によるペイン単位フォーカスが動作する（ネイティブ Linux は WezTerm 利用時に限り今回初めてサポート対象になった）
 - WSL2 では `$WEZTERM_PANE` を捕捉できた場合に WezTerm のペイン単位フォーカスを先に試行し、できない場合は従来の Windows Terminal 前面化（best-effort）にフォールバックするようになった。WSL2 で WezTerm フォーカスを使うには、利用者側で Windows 側の `.wezterm.lua` に `WSLENV = 'WEZTERM_PANE'` を追記する設定が必要（自動設定はしない設計判断）。tmux と WezTerm を併用している場合（WezTerm のペイン内で動く tmux）は引き続きスコープ外で、tmux 優先ロジックにより外側ウィンドウの前面化のみが行われる
 - README／README.ja.md に「WezTerm: ペイン単位フォーカス」節を新設。有効化に必要な設定手順（WSL2 の `WSLENV` 追記を含む）と、macOS・ネイティブ Linux・WSL2 それぞれの対応範囲を明記
+- `monomi install-hooks` 完了後（初回セットアッププロンプト経由の場合も含む）、WSL2 環境では Windows 側 `.wezterm.lua` への `WSLENV` 追記手順を案内するヒントメッセージを表示するようになった（README を読みに行かなくても気づけるようにするため）
+
+### Fixed
+
+- macOS で WezTerm フォーカス実行時、`wezterm cli activate-pane` がペイン切替のみでウィンドウを前面化しない不具合を修正。成功後に AppleScript でウィンドウを `activate` するよう変更し、実際にフォーカスが移るようにした
+- WezTerm を Homebrew Cask 経由でなく直接インストールした macOS 環境で、`wezterm` バイナリが PATH に無いためフォーカスが機能しない不具合を修正。既知のインストール先（`/Applications/WezTerm.app/Contents/MacOS/wezterm`）へ自動的にフォールバックするようにした
+- `tty` の取得に失敗した WezTerm セッション（WSL2 で `resolve_tty()` が不正な値を返すケース等）で、`wezterm_pane` が有効な値を持っていても `f` キーが常に「ターミナル情報なし」に縮退してしまう不具合を修正
 
 ## [0.4.0] - 2026-07-19
 

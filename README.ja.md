@@ -239,10 +239,12 @@ return config
 
 追記後は WezTerm を再起動し、新しい WSL2 シェル/ペインを開いて `$WEZTERM_PANE` を引き継がせる。Monomi が `$WEZTERM_PANE` を検出できない場合（この設定が未対応、または WezTerm を使っていない場合）は、下記の Windows Terminal の best-effort な前面化にフォールバックする。
 
+> **WSL2 の信頼性についての注記(実機で確認済み):** WSL2 での WezTerm ペイン単位フォーカスは、Monomi の CLI(ダッシュボード)と対象の Claude Code セッションが動作している WSL2 シェルの**両方**が WezTerm のペイン内から開かれている場合(例: WezTerm のタブ内で `wsl` と入力する)にのみ確実に動作する。どちらか一方でも別の Windows ターミナルアプリ(PowerShell・Windows Terminal・cmd.exe 等)経由で WSL2 シェルを開いた場合、WSL interop 経由で実行する `wezterm.exe cli activate-pane` が WezTerm の mux ソケットへの接続に失敗することがある — これは upstream の既知の制約である([wezterm/wezterm discussions #6964](https://github.com/wezterm/wezterm/discussions/6964))。Monomi はこの失敗を検知して Windows Terminal の best-effort な前面化へフォールバックするが、実際には Windows Terminal を使っていない場合、その場合はどのウィンドウも前面化されない。
+
 ### Linux / WSL2
 
 - **ネイティブ Linux（X11/Wayland）**: WezTerm のみサポートしている（WezTerm CLI によるペイン単位フォーカス、追加設定不要。前述「WezTerm: ペイン単位フォーカス」参照）。それ以外のターミナルアプリは現在サポートしていない。
-- **WSL2**: `$WEZTERM_PANE` を捕捉できた場合は WezTerm のペイン単位フォーカスを先に試行する（前述「WezTerm: ペイン単位フォーカス」参照）。捕捉できない場合は、Windows Terminal ウィンドウの前面化に best-effort でフォールバックする（そのフォールバックではタブ単位のフォーカスはサポート対象外）。
+- **WSL2**: `$WEZTERM_PANE` を捕捉できた場合は WezTerm のペイン単位フォーカスを先に試行する（前述「WezTerm: ペイン単位フォーカス」の信頼性についての注記も参照）。捕捉できない場合は、Windows Terminal ウィンドウの前面化に best-effort でフォールバックする（そのフォールバックではタブ単位のフォーカスはサポート対象外）。
 - **tmux（全プラットフォーム）**: 対応している。tmux が detach 状態の場合は、セッションに到達不可能であることを示すメッセージが表示される。WezTerm と tmux の併用（WezTerm のペイン内で動く tmux ペイン）はペイン単位の特定に対応していない — tmux クライアントが優先され、外側のターミナルウィンドウの前面化のみが行われる。
 
 ## GitHub PR レビュー状態
