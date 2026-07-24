@@ -50,10 +50,13 @@
       {
         "path": "CHANGELOG.md",
         "instruction": "利用者に見える変更のみを Keep a Changelog 形式で Unreleased セクションへ追記する。乖離がなければ変更しない。"
+      },
+      {
+        "path": "docs/REQUIREMENTS.md",
+        "instruction": "docs/REQUIREMENTS.md（機能軸の要約）を同期してください。これは release ごとの差分ログではなく「Monomi が今何をできるか」を機能軸でまとめたものです。今回のリリースが利用者から見て意味のある新機能・仕様変更を含む場合のみ、該当する機能軸セクション（無ければ新設）へ簡潔に追記し、末尾のリンク行に当該 release を追加してください。内部実装のみの変更（リファクタ・テスト整備・ワークフローエンジン変更・既知課題整理・ドキュメント整備のみのリリース等）では変更しないこと。乖離がなければ変更しないこと。"
       }
     ],
-    "frozen": ["docs/monomi-handoff.md"],
-    "excluded": ["docs/REQUIREMENTS.md"]
+    "frozen": ["docs/monomi-handoff.md"]
   },
   "knownIssues": {
     "path": "docs/known-issues.md",
